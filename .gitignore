@@ -1,0 +1,57 @@
+# Secrets
+.env
+.env.*
+!.env.example
+data/.secrets/
+data/test_whatsapp_session.json
+
+# SQLite files
+data/*.sqlite
+data/*.sqlite-*
+data/*.db
+data/*.db-*
+
+# Dependencies
+node_modules/ls -la YouPI-PG-main
+# Local database files
+YouPI-PG-main/data/*.sqlite
+YouPI-PG-main/data/*.sqlite-*
+YouPI-PG-main/data/*.db
+YouPI-PG-main/data/*.db-*
+
+# Ignore nested local data and dependencies
+/YouPI-PG-main/data/
+/node_modules/
+# Ignore dependencies
+/node_modules/
+
+# Ignore local databases and SQLite files
+**/*.sqlite
+**/*.sqlite-*
+**/*.db
+**/*.db-*
+**/*.sqlite3
+**/*.sqlite3-*
+
+# Ignore local secrets and sessions
+/data/.secrets/
+**/data/.secrets/
+**/data/test_whatsapp_session.json
+
+# Ignore generated APK files
+*.apk
+# Local secrets and session files
+**/data/.secrets/
+**/data/test_whatsapp_session.json
+
+# Local SQLite databases and temporary files
+**/*.sqlite
+**/*.sqlite-*
+**/*.db
+**/*.db-*
+**/*.sqlite3
+**/*.sqlite3-*
+
+# Dependencies and generated APKs
+/node_modules/
+*.apk
