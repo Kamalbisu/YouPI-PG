@@ -66,7 +66,7 @@ export function registerPollerRoutes(server, ctx) {
       return;
     }
     const sixtySecsAgo = new Date(Date.now() - 60000).toISOString();
-    const activeSessions = ctx.db.query(`
+    const activeSessions = await ctx.db.query(`
       SELECT id, order_id, receiving_account_id, amount_paise, status, verification_level, expires_at, processing_expires_at, completed_at
       FROM payment_sessions
       WHERE status IN ('ACTIVE', 'PROCESSING')
@@ -123,7 +123,7 @@ export function registerPollerRoutes(server, ctx) {
       return;
     }
 
-    const pipeResult = ctx.pipeline.process({
+    const pipeResult = await ctx.pipeline.process({
       source: body.source,
       rawText,
       sender,
@@ -172,10 +172,10 @@ export function registerPollerRoutes(server, ctx) {
       pipeResult.failingCondition === 'NO_ACTIVE_SESSION' &&
       ctx.sessionRepo && ctx.attributionEngine
     ) {
-      const liveSession = ctx.sessionRepo.findCurrentActiveOrProcessing(body.receivingAccountId);
+      const liveSession = await ctx.sessionRepo.findCurrentActiveOrProcessing(body.receivingAccountId);
       if (!liveSession) {
         try {
-          const lateResult = ctx.attributionEngine.processObservation({
+          const lateResult = await ctx.attributionEngine.processObservation({
             source: body.source,
             receivingAccountId: body.receivingAccountId,
             amountPaise: pipeResult.amountPaise,
@@ -244,13 +244,13 @@ export function registerPollerRoutes(server, ctx) {
     const nowIso = new Date().toISOString();
 
     try {
-      ctx.db.execute(`
+      await ctx.db.execute(`
         INSERT INTO android_devices (id, merchant_id, device_name, device_model, signing_key_hash, is_active, last_heartbeat_at, created_at)
-        VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+        VALUES (?, ?, ?, ?, ?, true, ?, ?)
       `, [deviceId, merchantId, deviceName, deviceModel, encryptAtRest(signingKey), nowIso, nowIso]);
 
       if (ctx.auditRepo) {
-        ctx.auditRepo.log({
+        await ctx.auditRepo.log({
           merchantId,
           entityType: 'ANDROID_DEVICE',
           entityId: deviceId,
@@ -315,7 +315,7 @@ export function registerPollerRoutes(server, ctx) {
       return;
     }
 
-    const device = ctx.db.queryOne('SELECT * FROM android_devices WHERE id = ? AND is_active = 1', [deviceId]);
+    const device = await ctx.db.queryOne('SELECT * FROM android_devices WHERE id = ? AND is_active = true', [deviceId]);
     if (!device) {
       HttpServer.json(res, 403, { error: 'Device not authorized or inactive.' });
       return;
@@ -352,7 +352,7 @@ export function registerPollerRoutes(server, ctx) {
 
     let receivingAccountId = body.receivingAccountId;
     if (receivingAccountId) {
-      const owned = ctx.db.queryOne(
+      const owned = await ctx.db.queryOne(
         'SELECT id FROM payment_receiving_accounts WHERE id = ? AND merchant_id = ?',
         [String(receivingAccountId), device.merchant_id]
       );
@@ -362,8 +362,8 @@ export function registerPollerRoutes(server, ctx) {
       }
     } else {
       const activeAccount = ctx.accountRepo
-        ? ctx.accountRepo.findActiveForMerchant(device.merchant_id)
-        : ctx.db.queryOne('SELECT id FROM payment_receiving_accounts WHERE merchant_id = ? AND is_active = 1 LIMIT 1', [device.merchant_id]);
+        ? await ctx.accountRepo.findActiveForMerchant(device.merchant_id)
+        : await ctx.db.queryOne('SELECT id FROM payment_receiving_accounts WHERE merchant_id = ? AND is_active = true LIMIT 1', [device.merchant_id]);
       receivingAccountId = activeAccount?.id || '00000000-0000-0000-0000-000000000002';
     }
 
@@ -442,7 +442,7 @@ export function registerPollerRoutes(server, ctx) {
       return;
     }
 
-    const pipeResult = ctx.pipeline.process({
+    const pipeResult = await ctx.pipeline.process({
       source: 'SMS',
       rawText,
       sender: body.sender || req.headers['x-sender'] || body.rawNotification?.package,
@@ -466,7 +466,7 @@ export function registerPollerRoutes(server, ctx) {
     }
 
     if (pipeResult.status === 'VERIFIED') {
-      ctx.db.execute("UPDATE android_devices SET last_observation_at = datetime('now') WHERE id = ?", [deviceId]);
+      await ctx.db.execute("UPDATE android_devices SET last_observation_at = now() WHERE id = ?", [deviceId]);
       HttpServer.json(res, 200, {
         accepted: true,
         observationId: pipeResult.messageId || pipeResult.stages?.stage6?.details?.observationId,
@@ -477,7 +477,7 @@ export function registerPollerRoutes(server, ctx) {
     }
 
     if (pipeResult.status === 'REJECTED') {
-      ctx.db.execute("UPDATE android_devices SET last_observation_at = datetime('now') WHERE id = ?", [deviceId]);
+      await ctx.db.execute("UPDATE android_devices SET last_observation_at = now() WHERE id = ?", [deviceId]);
       HttpServer.json(res, 400, {
         accepted: false,
         status: 'REJECTED',
@@ -489,7 +489,7 @@ export function registerPollerRoutes(server, ctx) {
     }
 
     if (!amountPaise && pipeResult.status === 'UNRESOLVED') {
-      ctx.db.execute("UPDATE android_devices SET last_observation_at = datetime('now') WHERE id = ?", [deviceId]);
+      await ctx.db.execute("UPDATE android_devices SET last_observation_at = now() WHERE id = ?", [deviceId]);
       HttpServer.json(res, 200, {
         accepted: true,
         status: 'PROCESSED_NON_BANK',
@@ -499,7 +499,7 @@ export function registerPollerRoutes(server, ctx) {
       return;
     }
 
-    ctx.db.execute("UPDATE android_devices SET last_observation_at = datetime('now') WHERE id = ?", [deviceId]);
+    await ctx.db.execute("UPDATE android_devices SET last_observation_at = now() WHERE id = ?", [deviceId]);
     HttpServer.json(res, 400, {
       accepted: false,
       status: pipeResult.status || 'UNRESOLVED',
@@ -510,15 +510,15 @@ export function registerPollerRoutes(server, ctx) {
     });
   };
 
-  server.post('/api/v1/pollers/android/events', (req, res) => handleAndroidSmsEvents(req, res, { requirePackage: true }));
-  server.post('/api/v1/observers/sms', (req, res) => handleAndroidSmsEvents(req, res, { requirePackage: false }));
+  server.post('/api/v1/pollers/android/events', async (req, res) => await handleAndroidSmsEvents(req, res, { requirePackage: true }));
+  server.post('/api/v1/observers/sms', async (req, res) => await handleAndroidSmsEvents(req, res, { requirePackage: false }));
 
   const handleAndroidHeartbeat = async (req, res) => {
     const body = await HttpServer.parseBody(req);
     const deviceId = req.headers['x-device-id'] || body.deviceId;
 
     if (deviceId && typeof deviceId === 'string') {
-      ctx.db.execute('UPDATE android_devices SET last_heartbeat_at = datetime(\'now\') WHERE id = ?', [deviceId]);
+      await ctx.db.execute('UPDATE android_devices SET last_heartbeat_at = now() WHERE id = ?', [deviceId]);
     }
 
     HttpServer.json(res, 200, {
@@ -532,8 +532,8 @@ export function registerPollerRoutes(server, ctx) {
   server.post('/api/v1/observers/heartbeat', handleAndroidHeartbeat);
 
   server.get('/api/v1/admin/sms-gateway/pair-qr', async (req, res) => {
-    let merchant = req.query.merchantId ? (ctx.merchantRepo ? ctx.merchantRepo.findById(req.query.merchantId) : null) : null;
-    if (!merchant && ctx.merchantRepo) merchant = ctx.merchantRepo.getDefault ? ctx.merchantRepo.getDefault() : (ctx.merchantRepo.findById('00000000-0000-0000-0000-000000000001') || ctx.merchantRepo.findAll()[0]);
+    let merchant = req.query.merchantId ? (ctx.merchantRepo ? await ctx.merchantRepo.findById(req.query.merchantId) : null) : null;
+    if (!merchant && ctx.merchantRepo) merchant = ctx.merchantRepo.getDefault ? await ctx.merchantRepo.getDefault() : (await ctx.merchantRepo.findById('00000000-0000-0000-0000-000000000001') || (await ctx.merchantRepo.findAll())[0]);
     const merchantId = merchant ? merchant.id : (req.query.merchantId || '00000000-0000-0000-0000-000000000001');
 
     const runtime = resolveRuntimeUrls(merchant?.branding || {});
@@ -558,7 +558,7 @@ export function registerPollerRoutes(server, ctx) {
     const pairingPayload = JSON.stringify(pairingPayloadObj);
     const qrSvg = generateQrSvg(pairingPayload, 260);
 
-    const rawDevices = ctx.db.query(`
+    const rawDevices = await ctx.db.query(`
       SELECT id, device_name, device_model, is_active, last_heartbeat_at, last_observation_at, created_at
       FROM android_devices
       WHERE merchant_id = ? OR merchant_id = '00000000-0000-0000-0000-000000000001'
@@ -600,11 +600,11 @@ export function registerPollerRoutes(server, ctx) {
   });
 
   server.get('/api/v1/admin/sms-gateway/devices', async (req, res) => {
-    let merchant = req.query.merchantId ? (ctx.merchantRepo ? ctx.merchantRepo.findById(req.query.merchantId) : null) : null;
-    if (!merchant && ctx.merchantRepo) merchant = ctx.merchantRepo.getDefault ? ctx.merchantRepo.getDefault() : (ctx.merchantRepo.findById('00000000-0000-0000-0000-000000000001') || ctx.merchantRepo.findAll()[0]);
+    let merchant = req.query.merchantId ? (ctx.merchantRepo ? await ctx.merchantRepo.findById(req.query.merchantId) : null) : null;
+    if (!merchant && ctx.merchantRepo) merchant = ctx.merchantRepo.getDefault ? await ctx.merchantRepo.getDefault() : (await ctx.merchantRepo.findById('00000000-0000-0000-0000-000000000001') || (await ctx.merchantRepo.findAll())[0]);
     const merchantId = merchant ? merchant.id : (req.query.merchantId || '00000000-0000-0000-0000-000000000001');
 
-    const rawDevices = ctx.db.query(`
+    const rawDevices = await ctx.db.query(`
       SELECT id, device_name, device_model, is_active, last_heartbeat_at, last_observation_at, created_at
       FROM android_devices
       WHERE merchant_id = ? OR merchant_id = '00000000-0000-0000-0000-000000000001'
@@ -634,7 +634,7 @@ export function registerPollerRoutes(server, ctx) {
 
   server.delete('/api/v1/admin/sms-gateway/devices/:deviceId', async (req, res, params) => {
     const deviceId = params.deviceId;
-    ctx.db.execute('DELETE FROM android_devices WHERE id = ?', [deviceId]);
+    await ctx.db.execute('DELETE FROM android_devices WHERE id = ?', [deviceId]);
     HttpServer.json(res, 200, { success: true, message: 'Device unlinked.' });
   });
 

@@ -91,9 +91,9 @@ export class AdminServer {
           res.end(JSON.stringify({ error: 'Unauthorized', code: 'AUTH_REQUIRED' }));
           return;
         }
-        const merchants = this.merchantRepo.findAll();
+        const merchants = await this.merchantRepo.findAll();
         const mId = merchants[0]?.id || '00000000-0000-0000-0000-000000000001';
-        const tickets = this.ticketRepo.findTicketsByMerchant(mId);
+        const tickets = await this.ticketRepo.findTicketsByMerchant(mId);
 
         res.writeHead(200, {
           'Content-Type': 'application/json',
@@ -140,7 +140,7 @@ export class AdminServer {
 
       if (pathname.startsWith('/api/')) {
         const targetPort = Number(process.env.PAYMENT_API_PORT || 6100);
-        const defaultMerchant = this.merchantRepo.getDefault ? this.merchantRepo.getDefault() : (this.merchantRepo.findById('00000000-0000-0000-0000-000000000001') || this.merchantRepo.findAll()[0]);
+        const defaultMerchant = this.merchantRepo.getDefault ? await this.merchantRepo.getDefault() : (await this.merchantRepo.findById('00000000-0000-0000-0000-000000000001') || (await this.merchantRepo.findAll())[0]);
         const defaultMerchantId = defaultMerchant?.id || '00000000-0000-0000-0000-000000000001';
         const proxyReq = http.request({
           hostname: '127.0.0.1',

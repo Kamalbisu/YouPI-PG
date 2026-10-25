@@ -136,10 +136,10 @@ export class ObserverPollerService {
     this.pollCycle(preferredAccountId).catch(() => {});
   }
 
-  getActiveSessions() {
+  async getActiveSessions() {
     try {
       const sixtySecsAgo = new Date(Date.now() - 60000).toISOString();
-      return this.db.query(`
+      return await this.db.query(`
         SELECT id, receiving_account_id, amount_paise, status, verification_level
         FROM payment_sessions
         WHERE method = 'UPI' AND (
@@ -157,7 +157,7 @@ export class ObserverPollerService {
     this._isPollingCycle = true;
 
     try {
-      const activeSessions = this.getActiveSessions();
+      const activeSessions = await this.getActiveSessions();
 
       if (activeSessions.length === 0) {
         this._isIdle = true;
@@ -242,7 +242,7 @@ export class ObserverPollerService {
       }
 
       for (const accountId of accountIds) {
-        const unattributed = this.obsRepo.findUnattributed(accountId);
+        const unattributed = await this.obsRepo.findUnattributed(accountId);
         if (!Array.isArray(unattributed) || unattributed.length === 0) continue;
 
         for (const obs of unattributed) {
@@ -251,7 +251,7 @@ export class ObserverPollerService {
 
           this._inFlightObservationHashes.add(hash);
           try {
-            this.attributionEngine.processObservation({
+            await this.attributionEngine.processObservation({
               source: obs.source,
               receivingAccountId: obs.receivingAccountId,
               amountPaise: obs.amountPaise,

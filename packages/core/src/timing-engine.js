@@ -19,7 +19,7 @@ export class TimingEngine {
     const delayMs = Math.max(0, expiresAt.getTime() - Date.now());
 
     const timer = setTimeout(() => {
-      this.handleActiveTimerExpiration(sessionId);
+      this.handleActiveTimerExpiration(sessionId).catch((err) => console.error("[timing] active-timer expiry failed:", err?.message || err));
     }, delayMs);
 
     if (timer.unref) timer.unref();
@@ -27,20 +27,20 @@ export class TimingEngine {
     this.activeTimers.set(sessionId, timer);
   }
 
-  handleActiveTimerExpiration(sessionId) {
+  async handleActiveTimerExpiration(sessionId) {
     this.activeTimers.delete(sessionId);
 
-    const session = this.sessionRepo.findById(sessionId);
+    const session = await this.sessionRepo.findById(sessionId);
     if (!session) return;
 
     if (session.status !== PaymentStatus.ACTIVE) {
       return;
     }
 
-    this.sessionRepo.transitionToTerminal(sessionId, PaymentStatus.EXPIRED);
+    await this.sessionRepo.transitionToTerminal(sessionId, PaymentStatus.EXPIRED);
 
     if (this.auditRepo) {
-      this.auditRepo.log({
+      await this.auditRepo.log({
         merchantId: session.merchantId,
         entityType: 'PAYMENT_SESSION',
         entityId: sessionId,
@@ -59,7 +59,7 @@ export class TimingEngine {
     });
 
     if (session.receivingAccountId) {
-      this.queueEngine.promoteNext(session.receivingAccountId, this.activeDurationMs);
+      await this.queueEngine.promoteNext(session.receivingAccountId, this.activeDurationMs);
     }
   }
 
@@ -71,17 +71,17 @@ export class TimingEngine {
     }
   }
 
-  handlePaymentDone(sessionId) {
+  async handlePaymentDone(sessionId) {
     const activeTimer = this.activeTimers.get(sessionId);
     if (activeTimer) {
       clearTimeout(activeTimer);
       this.activeTimers.delete(sessionId);
     }
 
-    const session = this.sessionRepo.transitionToProcessing(sessionId, this.processingDurationMs);
+    const session = await this.sessionRepo.transitionToProcessing(sessionId, this.processingDurationMs);
 
     if (this.auditRepo) {
-      this.auditRepo.log({
+      await this.auditRepo.log({
         merchantId: session.merchantId,
         entityType: 'PAYMENT_SESSION',
         entityId: sessionId,
@@ -100,7 +100,7 @@ export class TimingEngine {
     const delayMs = Math.max(0, session.processingExpiresAt.getTime() - Date.now());
 
     const procTimer = setTimeout(() => {
-      this.handleProcessingTimerExpiration(sessionId);
+      this.handleProcessingTimerExpiration(sessionId).catch((err) => console.error("[timing] processing-timer expiry failed:", err?.message || err));
     }, delayMs);
 
     if (procTimer.unref) procTimer.unref();
@@ -109,20 +109,20 @@ export class TimingEngine {
     return session;
   }
 
-  handleProcessingTimerExpiration(sessionId) {
+  async handleProcessingTimerExpiration(sessionId) {
     this.processingTimers.delete(sessionId);
 
-    const session = this.sessionRepo.findById(sessionId);
+    const session = await this.sessionRepo.findById(sessionId);
     if (!session) return;
 
     if (session.status !== PaymentStatus.PROCESSING) {
       return;
     }
 
-    this.sessionRepo.transitionToTerminal(sessionId, PaymentStatus.FAILED);
+    await this.sessionRepo.transitionToTerminal(sessionId, PaymentStatus.FAILED);
 
     if (this.auditRepo) {
-      this.auditRepo.log({
+      await this.auditRepo.log({
         merchantId: session.merchantId,
         entityType: 'PAYMENT_SESSION',
         entityId: sessionId,
@@ -141,12 +141,12 @@ export class TimingEngine {
     });
 
     if (session.receivingAccountId) {
-      this.queueEngine.promoteNext(session.receivingAccountId, this.activeDurationMs);
+      await this.queueEngine.promoteNext(session.receivingAccountId, this.activeDurationMs);
     }
   }
 
-  handleCancel(sessionId) {
-    const session = this.sessionRepo.findById(sessionId);
+  async handleCancel(sessionId) {
+    const session = await this.sessionRepo.findById(sessionId);
     if (!session) return null;
 
     if ([PaymentStatus.PROCESSING, PaymentStatus.SUCCESS, PaymentStatus.FAILED, PaymentStatus.EXPIRED, PaymentStatus.CANCELLED, PaymentStatus.SUSPICIOUS].includes(session.status)) {
@@ -155,10 +155,10 @@ export class TimingEngine {
 
     this.clearTimers(sessionId);
 
-    const updated = this.sessionRepo.transitionToTerminal(sessionId, PaymentStatus.CANCELLED);
+    const updated = await this.sessionRepo.transitionToTerminal(sessionId, PaymentStatus.CANCELLED);
 
     if (this.auditRepo) {
-      this.auditRepo.log({
+      await this.auditRepo.log({
         merchantId: session.merchantId,
         entityType: 'PAYMENT_SESSION',
         entityId: sessionId,
@@ -177,7 +177,7 @@ export class TimingEngine {
     });
 
     if (session.receivingAccountId) {
-      this.queueEngine.promoteNext(session.receivingAccountId, this.activeDurationMs);
+      await this.queueEngine.promoteNext(session.receivingAccountId, this.activeDurationMs);
     }
 
     return updated;

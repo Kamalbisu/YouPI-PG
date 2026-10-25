@@ -84,23 +84,23 @@ function resolveSellingModeAndMethods(body, currentBranding = {}) {
 }
 
 export function registerAdminRoutes(server, ctx) {
-  const resolveMerchant = (req, explicitId = null) => {
+  const resolveMerchant = async (req, explicitId = null) => {
     const targetId = explicitId || (req ? (req.query?.merchantId || req.headers?.['x-merchant-id']) : null);
     if (targetId) {
-      const found = ctx.merchantRepo.findById(targetId);
+      const found = await ctx.merchantRepo.findById(targetId);
       if (found) return found;
     }
     return ctx.merchantRepo.getDefault
-      ? ctx.merchantRepo.getDefault()
-      : (ctx.merchantRepo.findById('00000000-0000-0000-0000-000000000001') || ctx.merchantRepo.findAll()[0]);
+      ? await ctx.merchantRepo.getDefault()
+      : (await ctx.merchantRepo.findById('00000000-0000-0000-0000-000000000001') || (await ctx.merchantRepo.findAll())[0]);
   };
 
   server.get('/api/v1/admin/queue', async (req, res) => {
     const merchantId = req.query.merchantId || req.headers?.['x-merchant-id'] || '00000000-0000-0000-0000-000000000001';
-    let account = ctx.accountRepo.findActiveForMerchant(merchantId);
+    let account = await ctx.accountRepo.findActiveForMerchant(merchantId);
 
     if (!account) {
-      const allAccs = ctx.accountRepo.findByMerchantId ? ctx.accountRepo.findByMerchantId(merchantId) : [];
+      const allAccs = ctx.accountRepo.findByMerchantId ? await ctx.accountRepo.findByMerchantId(merchantId) : [];
       account = allAccs.find(a => a.isActive) || allAccs[0] || null;
     }
 
@@ -109,19 +109,19 @@ export function registerAdminRoutes(server, ctx) {
       return;
     }
 
-    let currentActive = ctx.sessionRepo.findCurrentActiveOrProcessing(account.id);
+    let currentActive = await ctx.sessionRepo.findCurrentActiveOrProcessing(account.id);
     if (!currentActive && ctx.sessionRepo.findCurrentActiveOrProcessingForMerchant) {
-      currentActive = ctx.sessionRepo.findCurrentActiveOrProcessingForMerchant(merchantId);
+      currentActive = await ctx.sessionRepo.findCurrentActiveOrProcessingForMerchant(merchantId);
       if (currentActive && currentActive.receivingAccountId !== account.id) {
         try {
-          ctx.db.execute('UPDATE payment_sessions SET receiving_account_id = ? WHERE id = ?', [account.id, currentActive.id]);
-          ctx.db.execute('UPDATE payment_receiving_accounts SET is_slot_busy = 1, current_active_session_id = ? WHERE id = ?', [currentActive.id, account.id]);
+          await ctx.db.execute('UPDATE payment_sessions SET receiving_account_id = ? WHERE id = ?', [account.id, currentActive.id]);
+          await ctx.db.execute('UPDATE payment_receiving_accounts SET is_slot_busy = true, current_active_session_id = ? WHERE id = ?', [currentActive.id, account.id]);
           currentActive.receivingAccountId = account.id;
         } catch {}
       }
     }
 
-    const queuedSessions = ctx.sessionRepo.findQueuedSessions(account.id);
+    const queuedSessions = await ctx.sessionRepo.findQueuedSessions(account.id);
 
     HttpServer.json(res, 200, {
       receivingAccount: {
@@ -149,7 +149,7 @@ export function registerAdminRoutes(server, ctx) {
   });
 
   server.get('/api/v1/admin/observers', async (req, res) => {
-    const devices = ctx.db.query('SELECT * FROM android_devices ORDER BY created_at DESC');
+    const devices = await ctx.db.query('SELECT * FROM android_devices ORDER BY created_at DESC');
     const now = Date.now();
 
     const androidHealth = devices.map(d => {
@@ -214,7 +214,7 @@ export function registerAdminRoutes(server, ctx) {
   server.get('/api/v1/admin/payments', async (req, res) => {
     const merchantId = req.query.merchantId || '00000000-0000-0000-0000-000000000001';
     const limit = parseInt(req.query.limit || '50', 10);
-    const payments = ctx.sessionRepo.findByMerchantId(merchantId, limit);
+    const payments = await ctx.sessionRepo.findByMerchantId(merchantId, limit);
 
     HttpServer.json(res, 200, {
       payments: payments.map(p => ({
@@ -239,7 +239,7 @@ export function registerAdminRoutes(server, ctx) {
       HttpServer.json(res, 200, { tickets: [] });
       return;
     }
-    const tickets = ctx.ticketRepo.findTicketsByMerchant(merchantId);
+    const tickets = await ctx.ticketRepo.findTicketsByMerchant(merchantId);
     HttpServer.json(res, 200, { tickets });
   });
 
@@ -248,7 +248,7 @@ export function registerAdminRoutes(server, ctx) {
       HttpServer.json(res, 404, { error: 'Ticket repo not configured' });
       return;
     }
-    const ticket = ctx.ticketRepo.updateTicketStatus(params.id, 'RESOLVED');
+    const ticket = await ctx.ticketRepo.updateTicketStatus(params.id, 'RESOLVED');
     HttpServer.json(res, 200, { success: true, ticket });
   });
 
@@ -261,7 +261,7 @@ export function registerAdminRoutes(server, ctx) {
       return;
     }
 
-    const session = ctx.sessionRepo.findById(paymentId);
+    const session = await ctx.sessionRepo.findById(paymentId);
     if (!session) {
       HttpServer.json(res, 404, { error: `Payment session not found: ${paymentId}` });
       return;
@@ -276,9 +276,9 @@ export function registerAdminRoutes(server, ctx) {
       return;
     }
 
-    const updated = ctx.sessionRepo.transitionToTerminal(paymentId, PaymentStatus.SUCCESS);
+    const updated = await ctx.sessionRepo.transitionToTerminal(paymentId, PaymentStatus.SUCCESS);
 
-    ctx.auditRepo.log({
+    await ctx.auditRepo.log({
       merchantId: session.merchantId,
       entityType: 'PAYMENT_SESSION',
       entityId: paymentId,
@@ -306,6 +306,7 @@ export function registerAdminRoutes(server, ctx) {
         merchantId: session.merchantId,
         amountPaise: session.amountPaise
       });
+      if (typeof ctx.eventEmitter.settle === 'function') await ctx.eventEmitter.settle();
     }
 
     HttpServer.json(res, 200, {
@@ -325,15 +326,15 @@ export function registerAdminRoutes(server, ctx) {
       return;
     }
 
-    const session = ctx.sessionRepo.findById(paymentId);
+    const session = await ctx.sessionRepo.findById(paymentId);
     if (!session) {
       HttpServer.json(res, 404, { error: `Payment session not found: ${paymentId}` });
       return;
     }
 
-    const updated = ctx.sessionRepo.transitionToTerminal(paymentId, PaymentStatus.FAILED);
+    const updated = await ctx.sessionRepo.transitionToTerminal(paymentId, PaymentStatus.FAILED);
 
-    ctx.auditRepo.log({
+    await ctx.auditRepo.log({
       merchantId: session.merchantId,
       entityType: 'PAYMENT_SESSION',
       entityId: paymentId,
@@ -368,6 +369,7 @@ export function registerAdminRoutes(server, ctx) {
         amountPaise: session.amountPaise,
         reason: reason || 'Counter payment declined'
       });
+      if (typeof ctx.eventEmitter.settle === 'function') await ctx.eventEmitter.settle();
     }
 
     HttpServer.json(res, 200, {
@@ -379,10 +381,10 @@ export function registerAdminRoutes(server, ctx) {
   });
 
   server.get('/api/v1/admin/upi-settings', async (req, res) => {
-    let merchant = resolveMerchant(req);
+    let merchant = await resolveMerchant(req);
 
-    const account = merchant ? ctx.accountRepo.findActiveForMerchant(merchant.id) : null;
-    const accounts = merchant ? ctx.accountRepo.findByMerchantId(merchant.id) : [];
+    const account = merchant ? await ctx.accountRepo.findActiveForMerchant(merchant.id) : null;
+    const accounts = merchant ? await ctx.accountRepo.findByMerchantId(merchant.id) : [];
 
     if (!account) {
       HttpServer.json(res, 200, {
@@ -406,14 +408,14 @@ export function registerAdminRoutes(server, ctx) {
   });
 
   server.get('/api/v1/admin/upi-accounts', async (req, res) => {
-    let merchant = resolveMerchant(req);
+    let merchant = await resolveMerchant(req);
 
     if (!merchant) {
       HttpServer.json(res, 404, { error: 'Merchant not found' });
       return;
     }
 
-    const accounts = ctx.accountRepo.findByMerchantId(merchant.id);
+    const accounts = await ctx.accountRepo.findByMerchantId(merchant.id);
     HttpServer.json(res, 200, {
       accounts: accounts.map(a => ({
         id: a.id,
@@ -432,7 +434,7 @@ export function registerAdminRoutes(server, ctx) {
   server.post('/api/v1/admin/upi-accounts', async (req, res) => {
     const body = await HttpServer.parseBody(req);
     const { upiId, payeeName, isActive } = body;
-    let merchant = resolveMerchant(req, body.merchantId);
+    let merchant = await resolveMerchant(req, body.merchantId);
 
     if (!merchant) {
       HttpServer.json(res, 404, { error: 'Merchant not found' });
@@ -449,10 +451,10 @@ export function registerAdminRoutes(server, ctx) {
       return;
     }
 
-    const existingAccounts = ctx.accountRepo.findByMerchantId(merchant.id);
+    const existingAccounts = await ctx.accountRepo.findByMerchantId(merchant.id);
     const shouldActivate = isActive !== undefined ? Boolean(isActive) : (existingAccounts.length === 0);
 
-    const account = ctx.accountRepo.create({
+    const account = await ctx.accountRepo.create({
       merchantId: merchant.id,
       upiId: upiId.trim(),
       payeeName: payeeName?.trim() || merchant.businessName,
@@ -460,7 +462,7 @@ export function registerAdminRoutes(server, ctx) {
       isActive: shouldActivate
     });
 
-    ctx.auditRepo.log({
+    await ctx.auditRepo.log({
       merchantId: merchant.id,
       entityType: 'PAYMENT_RECEIVING_ACCOUNT',
       entityId: account.id,
@@ -480,15 +482,15 @@ export function registerAdminRoutes(server, ctx) {
   });
 
   server.post('/api/v1/admin/upi-accounts/:id/activate', async (req, res, params) => {
-    const account = ctx.accountRepo.findById(params.id);
+    const account = await ctx.accountRepo.findById(params.id);
     if (!account) {
       HttpServer.json(res, 404, { error: `UPI Account not found: ${params.id}` });
       return;
     }
 
-    const updated = ctx.accountRepo.activateAccount(account.merchantId, account.id);
+    const updated = await ctx.accountRepo.activateAccount(account.merchantId, account.id);
 
-    ctx.auditRepo.log({
+    await ctx.auditRepo.log({
       merchantId: account.merchantId,
       entityType: 'PAYMENT_RECEIVING_ACCOUNT',
       entityId: updated.id,
@@ -508,7 +510,7 @@ export function registerAdminRoutes(server, ctx) {
   });
 
   server.post('/api/v1/admin/upi-accounts/:id/toggle', async (req, res, params) => {
-    const account = ctx.accountRepo.findById(params.id);
+    const account = await ctx.accountRepo.findById(params.id);
     if (!account) {
       HttpServer.json(res, 404, { error: `UPI Account not found: ${params.id}` });
       return;
@@ -516,12 +518,12 @@ export function registerAdminRoutes(server, ctx) {
 
     let updated;
     if (account.isActive) {
-      updated = ctx.accountRepo.deactivateAccount(account.merchantId, account.id);
+      updated = await ctx.accountRepo.deactivateAccount(account.merchantId, account.id);
     } else {
-      updated = ctx.accountRepo.activateAccount(account.merchantId, account.id);
+      updated = await ctx.accountRepo.activateAccount(account.merchantId, account.id);
     }
 
-    ctx.auditRepo.log({
+    await ctx.auditRepo.log({
       merchantId: account.merchantId,
       entityType: 'PAYMENT_RECEIVING_ACCOUNT',
       entityId: updated.id,
@@ -537,15 +539,15 @@ export function registerAdminRoutes(server, ctx) {
   });
 
   server.delete('/api/v1/admin/upi-accounts/:id', async (req, res, params) => {
-    const account = ctx.accountRepo.findById(params.id);
+    const account = await ctx.accountRepo.findById(params.id);
     if (!account) {
       HttpServer.json(res, 404, { error: `UPI Account not found: ${params.id}` });
       return;
     }
 
     try {
-      ctx.accountRepo.deleteAccount(account.merchantId, account.id);
-      ctx.auditRepo.log({
+      await ctx.accountRepo.deleteAccount(account.merchantId, account.id);
+      await ctx.auditRepo.log({
         merchantId: account.merchantId,
         entityType: 'PAYMENT_RECEIVING_ACCOUNT',
         entityId: account.id,
@@ -562,7 +564,7 @@ export function registerAdminRoutes(server, ctx) {
   server.post('/api/v1/admin/upi-settings', async (req, res) => {
     const body = await HttpServer.parseBody(req);
     const { upiId, payeeName, isMerchantEnabled } = body;
-    let merchant = resolveMerchant(req, body.merchantId);
+    let merchant = await resolveMerchant(req, body.merchantId);
 
     if (!merchant) {
       HttpServer.json(res, 404, { error: 'Merchant not found' });
@@ -580,14 +582,14 @@ export function registerAdminRoutes(server, ctx) {
     }
 
     const isEnabled = isMerchantEnabled !== undefined ? Boolean(isMerchantEnabled) : true;
-    const updatedAccount = ctx.accountRepo.upsertActiveForMerchant(
+    const updatedAccount = await ctx.accountRepo.upsertActiveForMerchant(
       merchant.id,
       upiId.trim(),
       payeeName?.trim() || merchant.businessName,
       isEnabled
     );
 
-    ctx.auditRepo.log({
+    await ctx.auditRepo.log({
       merchantId: merchant.id,
       entityType: 'PAYMENT_RECEIVING_ACCOUNT',
       entityId: updatedAccount.id,
@@ -613,14 +615,14 @@ export function registerAdminRoutes(server, ctx) {
   });
 
   server.get('/api/v1/admin/all-settings', async (req, res) => {
-    let merchant = resolveMerchant(req);
+    let merchant = await resolveMerchant(req);
 
     if (!merchant) {
       HttpServer.json(res, 404, { error: 'Merchant not found' });
       return;
     }
 
-    const account = ctx.accountRepo.findActiveForMerchant(merchant.id);
+    const account = await ctx.accountRepo.findActiveForMerchant(merchant.id);
     const branding = merchant.branding || {};
     const modeResult = resolveSellingModeAndMethods({}, branding);
     const sellingMode = modeResult.sellingMode;
@@ -667,20 +669,20 @@ export function registerAdminRoutes(server, ctx) {
 
   server.post('/api/v1/admin/all-settings', async (req, res) => {
     const body = await HttpServer.parseBody(req);
-    let merchant = resolveMerchant(req, body.merchantId);
+    let merchant = await resolveMerchant(req, body.merchantId);
 
     if (!merchant) {
       HttpServer.json(res, 404, { error: 'Merchant not found' });
       return;
     }
 
-    let account = ctx.accountRepo.findActiveForMerchant(merchant.id);
+    let account = await ctx.accountRepo.findActiveForMerchant(merchant.id);
     if (body.upiId && body.upiId.trim()) {
       if (!isValidVpa(body.upiId.trim())) {
         HttpServer.json(res, 400, { error: `Invalid UPI VPA format: "${body.upiId}". Expected: username@bank` });
         return;
       }
-      account = ctx.accountRepo.upsertActiveForMerchant(merchant.id, body.upiId.trim(), body.payeeName?.trim() || body.businessName?.trim() || merchant.businessName);
+      account = await ctx.accountRepo.upsertActiveForMerchant(merchant.id, body.upiId.trim(), body.payeeName?.trim() || body.businessName?.trim() || merchant.businessName);
     }
 
     const updates = {};
@@ -758,9 +760,9 @@ export function registerAdminRoutes(server, ctx) {
 
     updates.branding = mergedBranding;
 
-    const updated = ctx.merchantRepo.update(merchant.id, updates);
+    const updated = await ctx.merchantRepo.update(merchant.id, updates);
 
-    ctx.auditRepo.log({
+    await ctx.auditRepo.log({
       merchantId: merchant.id,
       entityType: 'MERCHANT',
       entityId: merchant.id,
@@ -790,8 +792,8 @@ export function registerAdminRoutes(server, ctx) {
   });
 
   server.get('/api/v1/admin/merchant-settings', async (req, res) => {
-    let merchant = req.query.merchantId ? ctx.merchantRepo.findById(req.query.merchantId) : (req.headers['x-merchant-id'] ? ctx.merchantRepo.findById(req.headers['x-merchant-id']) : null);
-    if (!merchant) merchant = ctx.merchantRepo.getDefault ? ctx.merchantRepo.getDefault() : (ctx.merchantRepo.findById('00000000-0000-0000-0000-000000000001') || ctx.merchantRepo.findAll()[0]);
+    let merchant = req.query.merchantId ? await ctx.merchantRepo.findById(req.query.merchantId) : (req.headers['x-merchant-id'] ? await ctx.merchantRepo.findById(req.headers['x-merchant-id']) : null);
+    if (!merchant) merchant = ctx.merchantRepo.getDefault ? await ctx.merchantRepo.getDefault() : (await ctx.merchantRepo.findById('00000000-0000-0000-0000-000000000001') || (await ctx.merchantRepo.findAll())[0]);
 
     if (!merchant) {
       HttpServer.json(res, 404, { error: 'Merchant not found' });
@@ -877,8 +879,8 @@ export function registerAdminRoutes(server, ctx) {
 
   server.post('/api/v1/admin/merchant-settings', async (req, res) => {
     const body = await HttpServer.parseBody(req);
-    let merchant = body.merchantId ? ctx.merchantRepo.findById(body.merchantId) : (req.headers['x-merchant-id'] ? ctx.merchantRepo.findById(req.headers['x-merchant-id']) : null);
-    if (!merchant) merchant = ctx.merchantRepo.getDefault ? ctx.merchantRepo.getDefault() : (ctx.merchantRepo.findById('00000000-0000-0000-0000-000000000001') || ctx.merchantRepo.findAll()[0]);
+    let merchant = body.merchantId ? await ctx.merchantRepo.findById(body.merchantId) : (req.headers['x-merchant-id'] ? await ctx.merchantRepo.findById(req.headers['x-merchant-id']) : null);
+    if (!merchant) merchant = ctx.merchantRepo.getDefault ? await ctx.merchantRepo.getDefault() : (await ctx.merchantRepo.findById('00000000-0000-0000-0000-000000000001') || (await ctx.merchantRepo.findAll())[0]);
 
     if (!merchant) {
       HttpServer.json(res, 404, { error: 'Merchant not found' });
@@ -1001,9 +1003,9 @@ export function registerAdminRoutes(server, ctx) {
       updates.branding = mergedBranding;
     }
 
-    const updated = ctx.merchantRepo.update(merchant.id, updates);
+    const updated = await ctx.merchantRepo.update(merchant.id, updates);
 
-    ctx.auditRepo.log({
+    await ctx.auditRepo.log({
       merchantId: merchant.id,
       entityType: 'MERCHANT',
       entityId: merchant.id,
@@ -1037,15 +1039,15 @@ export function registerAdminRoutes(server, ctx) {
   });
 
   server.get('/api/v1/admin/cod-orders', async (req, res) => {
-    let merchant = req.query.merchantId ? ctx.merchantRepo.findById(req.query.merchantId) : null;
-    if (!merchant) merchant = ctx.merchantRepo.findAll()[0];
+    let merchant = req.query.merchantId ? await ctx.merchantRepo.findById(req.query.merchantId) : null;
+    if (!merchant) merchant = (await ctx.merchantRepo.findAll())[0];
 
     if (!merchant) {
       HttpServer.json(res, 404, { error: 'Merchant not found' });
       return;
     }
 
-    const codSessions = ctx.sessionRepo.db.query(
+    const codSessions = await ctx.sessionRepo.db.query(
       `SELECT ps.*, c.name as customer_name, c.mobile_number as customer_mobile, c.email as customer_email
        FROM payment_sessions ps
        LEFT JOIN customers c ON ps.customer_id = c.id
@@ -1277,26 +1279,26 @@ export function registerAdminRoutes(server, ctx) {
     const merchantId = body.merchantId || req.query.merchantId || '00000000-0000-0000-0000-000000000001';
 
     try {
-      const sessionsToExpire = ctx.db.query(`
+      const sessionsToExpire = await ctx.db.query(`
         SELECT id, receiving_account_id FROM payment_sessions
         WHERE status IN ('INITIATED', 'QUEUED', 'ACTIVE', 'PROCESSING')
           AND (merchant_id = ? OR ? = '00000000-0000-0000-0000-000000000001')
       `, [merchantId, merchantId]);
 
       for (const s of sessionsToExpire) {
-        ctx.sessionRepo.transitionToTerminal(s.id, PaymentStatus.EXPIRED);
+        await ctx.sessionRepo.transitionToTerminal(s.id, PaymentStatus.EXPIRED);
         server.broadcastSse(s.id, 'status_change', { status: PaymentStatus.EXPIRED });
         server.broadcastSse(s.id, 'state_change', { status: PaymentStatus.EXPIRED });
       }
 
-      ctx.db.execute(`
+      await ctx.db.execute(`
         UPDATE payment_receiving_accounts
-        SET is_slot_busy = 0, current_active_session_id = NULL
+        SET is_slot_busy = false, current_active_session_id = NULL
         WHERE merchant_id = ? OR ? = '00000000-0000-0000-0000-000000000001'
       `, [merchantId, merchantId]);
 
       if (ctx.auditRepo) {
-        ctx.auditRepo.log({
+        await ctx.auditRepo.log({
           merchantId,
           entityType: 'PAYMENT_QUEUE',
           entityId: merchantId,
@@ -1322,12 +1324,12 @@ export function registerAdminRoutes(server, ctx) {
       ? `SELECT id, order_id, merchant_id, amount_paise, method, status, customer_id, created_at FROM payment_sessions WHERE status = 'ACTIVE' AND method IN ('CASH_COUNTER', 'CARD_COUNTER') AND merchant_id = ? ORDER BY created_at ASC`
       : `SELECT id, order_id, merchant_id, amount_paise, method, status, customer_id, created_at FROM payment_sessions WHERE status = 'ACTIVE' AND method IN ('CASH_COUNTER', 'CARD_COUNTER') ORDER BY created_at ASC`;
     const params = merchantId ? [merchantId] : [];
-    const rows = ctx.db.query(query, params);
+    const rows = await ctx.db.query(query, params);
 
-    const pending = rows.map(r => {
+    const pending = await Promise.all(rows.map(async r => {
       let customer = null;
       if (r.customer_id && ctx.customerRepo) {
-        const c = ctx.customerRepo.findById(r.customer_id);
+        const c = await ctx.customerRepo.findById(r.customer_id);
         if (c) customer = { name: c.name, mobile: c.mobileNumber };
       }
       return {
@@ -1340,7 +1342,7 @@ export function registerAdminRoutes(server, ctx) {
         customer,
         createdAt: r.created_at
       };
-    });
+    }));
 
     HttpServer.json(res, 200, {
       count: pending.length,
@@ -1358,7 +1360,7 @@ export function registerAdminRoutes(server, ctx) {
     let command = body.command;
 
     if (!command || !command.trim()) {
-      const merchant = resolveMerchant(req);
+      const merchant = await resolveMerchant(req);
       command = merchant?.branding?.cloudflareTunnelCommand;
     }
 
@@ -1368,10 +1370,10 @@ export function registerAdminRoutes(server, ctx) {
     }
 
     try {
-      const merchant = resolveMerchant(req);
+      const merchant = await resolveMerchant(req);
       if (merchant && body.command) {
         const currentBranding = merchant.branding || {};
-        ctx.merchantRepo.update(merchant.id, {
+        await ctx.merchantRepo.update(merchant.id, {
           branding: { ...currentBranding, cloudflareTunnelCommand: command.trim() }
         });
       }
@@ -1389,7 +1391,7 @@ export function registerAdminRoutes(server, ctx) {
   });
 
   server.get('/api/v1/admin/gmail/credentials', async (req, res) => {
-    let merchant = resolveMerchant(req, req.query?.merchantId);
+    let merchant = await resolveMerchant(req, req.query?.merchantId);
     const merchantId = merchant ? merchant.id : (req.query?.merchantId || '00000000-0000-0000-0000-000000000001');
     const branding = merchant?.branding || {};
     const gmailConfig = branding.gmailConfig || {};
@@ -1433,7 +1435,7 @@ export function registerAdminRoutes(server, ctx) {
   });
 
   server.get('/api/v1/admin/gmail/oauth/start', async (req, res) => {
-    let merchant = resolveMerchant(req, req.query?.merchantId);
+    let merchant = await resolveMerchant(req, req.query?.merchantId);
     const branding = merchant?.branding || {};
     const gmailConfig = branding.gmailConfig || {};
 
@@ -1458,7 +1460,7 @@ export function registerAdminRoutes(server, ctx) {
 
   server.post('/api/v1/admin/gmail/disconnect', async (req, res) => {
     const body = await HttpServer.parseBody(req).catch(() => ({}));
-    let merchant = resolveMerchant(req, body.merchantId);
+    let merchant = await resolveMerchant(req, body.merchantId);
     const merchantId = merchant ? merchant.id : (body.merchantId || '00000000-0000-0000-0000-000000000001');
     if (!merchant) {
       HttpServer.json(res, 404, { error: 'Merchant not found' });
@@ -1484,11 +1486,11 @@ export function registerAdminRoutes(server, ctx) {
       gmailConfig: updatedGmail
     };
 
-    ctx.merchantRepo.update(merchantId, { branding: newBranding });
+    await ctx.merchantRepo.update(merchantId, { branding: newBranding });
 
-    for (const m of ctx.merchantRepo.findAll()) {
+    for (const m of await ctx.merchantRepo.findAll()) {
       if (m.id !== merchantId) {
-        ctx.merchantRepo.update(m.id, {
+        await ctx.merchantRepo.update(m.id, {
           branding: { ...m.branding, gmailConfig: updatedGmail }
         });
       }
@@ -1507,7 +1509,7 @@ export function registerAdminRoutes(server, ctx) {
 
   server.post('/api/v1/admin/gmail/credentials', async (req, res) => {
     const body = await HttpServer.parseBody(req).catch(() => ({}));
-    let merchant = resolveMerchant(req, body.merchantId);
+    let merchant = await resolveMerchant(req, body.merchantId);
     const merchantId = merchant ? merchant.id : (body.merchantId || '00000000-0000-0000-0000-000000000001');
     if (!merchant) {
       HttpServer.json(res, 404, { error: 'Merchant not found' });
@@ -1535,11 +1537,11 @@ export function registerAdminRoutes(server, ctx) {
       gmailConfig: updatedGmail
     };
 
-    ctx.merchantRepo.update(merchantId, { branding: newBranding });
+    await ctx.merchantRepo.update(merchantId, { branding: newBranding });
 
-    for (const m of ctx.merchantRepo.findAll()) {
+    for (const m of await ctx.merchantRepo.findAll()) {
       if (m.id !== merchantId) {
-        ctx.merchantRepo.update(m.id, {
+        await ctx.merchantRepo.update(m.id, {
           branding: { ...m.branding, gmailConfig: updatedGmail }
         });
       }
@@ -1554,7 +1556,7 @@ export function registerAdminRoutes(server, ctx) {
 
   server.post('/api/v1/admin/gmail/test', async (req, res) => {
     const body = await HttpServer.parseBody(req).catch(() => ({}));
-    const merchant = resolveMerchant(req, body.merchantId);
+    const merchant = await resolveMerchant(req, body.merchantId);
     const merchantId = merchant ? merchant.id : (body.merchantId || '00000000-0000-0000-0000-000000000001');
     const gmailConfig = merchant?.branding?.gmailConfig || {};
 
@@ -1615,7 +1617,7 @@ export function registerAdminRoutes(server, ctx) {
       const currentGmail = currentBranding.gmailConfig || {};
       const nowIso = new Date().toISOString();
       if (merchant) {
-        ctx.merchantRepo.update(merchantId, {
+        await ctx.merchantRepo.update(merchantId, {
           branding: {
             ...currentBranding,
             gmailConfig: {
@@ -1652,7 +1654,7 @@ export function registerAdminRoutes(server, ctx) {
 
   server.get('/api/v1/admin/dev/false-narrative', async (req, res) => {
     const merchantId = req.headers['x-merchant-id'] || '00000000-0000-0000-0000-000000000001';
-    const merchant = ctx.merchantRepo.findById(merchantId);
+    const merchant = await ctx.merchantRepo.findById(merchantId);
     const until = merchant?.branding?.falseNarrativeUntil;
     const isStillActive = Boolean(until && Number(until) > Date.now());
     const narrative = isStillActive ? (merchant?.branding?.falseNarrativeMode || 'GREEN').toUpperCase() : 'OFF';
@@ -1670,7 +1672,7 @@ export function registerAdminRoutes(server, ctx) {
     const body = await HttpServer.parseBody(req).catch(() => ({}));
     const { enabled, narrative, mode } = body;
     const merchantId = req.headers['x-merchant-id'] || '00000000-0000-0000-0000-000000000001';
-    const merchant = ctx.merchantRepo.findById(merchantId);
+    const merchant = await ctx.merchantRepo.findById(merchantId);
     if (!merchant) {
       HttpServer.json(res, 404, { error: 'Merchant not found' });
       return;
@@ -1686,7 +1688,7 @@ export function registerAdminRoutes(server, ctx) {
       falseNarrativeUntil,
       falseNarrativeMode
     };
-    ctx.merchantRepo.update(merchantId, { branding: newBranding });
+    await ctx.merchantRepo.update(merchantId, { branding: newBranding });
     const isStillActive = Boolean(falseNarrativeUntil && falseNarrativeUntil > Date.now());
     const remainingSeconds = isStillActive ? Math.max(0, Math.round((falseNarrativeUntil - Date.now()) / 1000)) : 0;
     HttpServer.json(res, 200, {
@@ -1700,7 +1702,7 @@ export function registerAdminRoutes(server, ctx) {
 
   server.get('/api/v1/admin/dev/test-mode', async (req, res) => {
     const merchantId = req.headers['x-merchant-id'] || '00000000-0000-0000-0000-000000000001';
-    const merchant = ctx.merchantRepo.findById(merchantId);
+    const merchant = await ctx.merchantRepo.findById(merchantId);
     const until = merchant?.branding?.testModeUntil;
     const enabledAt = merchant?.branding?.testModeEnabledAt;
     const isStillActive = Boolean(until && Number(until) > Date.now());
@@ -1718,7 +1720,7 @@ export function registerAdminRoutes(server, ctx) {
     const body = await HttpServer.parseBody(req).catch(() => ({}));
     const { enabled } = body;
     const merchantId = req.headers['x-merchant-id'] || '00000000-0000-0000-0000-000000000001';
-    const merchant = ctx.merchantRepo.findById(merchantId);
+    const merchant = await ctx.merchantRepo.findById(merchantId);
     if (!merchant) {
       HttpServer.json(res, 404, { error: 'Merchant not found' });
       return;
@@ -1734,10 +1736,10 @@ export function registerAdminRoutes(server, ctx) {
       testModeEnabledAt,
       testModeUntil
     };
-    ctx.merchantRepo.update(merchantId, { branding: newBranding });
+    await ctx.merchantRepo.update(merchantId, { branding: newBranding });
 
     if (ctx.auditRepo) {
-      ctx.auditRepo.log({
+      await ctx.auditRepo.log({
         merchantId,
         entityType: 'TEST_MODE',
         entityId: merchantId,
@@ -1765,7 +1767,7 @@ export function registerAdminRoutes(server, ctx) {
 
   server.post('/api/v1/admin/dev/test-mode/inject', async (req, res) => {
     const merchantId = req.headers['x-merchant-id'] || '00000000-0000-0000-0000-000000000001';
-    const merchant = ctx.merchantRepo.findById(merchantId);
+    const merchant = await ctx.merchantRepo.findById(merchantId);
     if (!merchant) {
       HttpServer.json(res, 404, { error: 'Merchant not found' });
       return;
@@ -1806,7 +1808,7 @@ export function registerAdminRoutes(server, ctx) {
       eventEmitter: ctx.eventEmitter
     });
 
-    const result = pipeline.process({
+    const result = await pipeline.process({
       source: body.source || 'SMS',
       rawText: rawMessage,
       sender: body.sender,
@@ -1820,7 +1822,7 @@ export function registerAdminRoutes(server, ctx) {
     });
 
     if (ctx.auditRepo) {
-      ctx.auditRepo.log({
+      await ctx.auditRepo.log({
         merchantId,
         entityType: 'TEST_OBSERVATION',
         entityId: result.messageId,
@@ -1848,7 +1850,7 @@ export function registerAdminRoutes(server, ctx) {
 
   server.get('/api/v1/admin/dev/test-mode/audit', async (req, res) => {
     const merchantId = req.headers['x-merchant-id'] || '00000000-0000-0000-0000-000000000001';
-    const logs = ctx.db.query(`
+    const logs = await ctx.db.query(`
       SELECT id, entity_type, entity_id, action, actor_type, details, created_at
       FROM audit_logs
       WHERE entity_type IN ('TEST_OBSERVATION', 'TEST_MODE')
@@ -1873,7 +1875,7 @@ export function registerAdminRoutes(server, ctx) {
     HttpServer.json(res, 200, { logs: parsedLogs });
   });
 
-  function checkSimulatorAuth(req, res) {
+  async function checkSimulatorAuth(req, res) {
     const merchantId = req.headers['x-merchant-id'] || req.query?.merchantId || null;
     if (!merchantId) {
       HttpServer.json(res, 401, {
@@ -1883,7 +1885,7 @@ export function registerAdminRoutes(server, ctx) {
       return null;
     }
 
-    const merchant = ctx.merchantRepo.findById(merchantId);
+    const merchant = await ctx.merchantRepo.findById(merchantId);
     if (!merchant) {
       HttpServer.json(res, 403, {
         success: false,
@@ -1895,7 +1897,7 @@ export function registerAdminRoutes(server, ctx) {
     const authHeader = req.headers['authorization'] || '';
     const custToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : (req.headers['x-customer-session-token'] || null);
     if (custToken && ctx.customerSessionRepo) {
-      const custAuth = ctx.customerSessionRepo.findByToken(custToken);
+      const custAuth = await ctx.customerSessionRepo.findByToken(custToken);
       if (custAuth && custAuth.customer) {
         HttpServer.json(res, 403, {
           success: false,
@@ -1909,7 +1911,7 @@ export function registerAdminRoutes(server, ctx) {
   }
 
   server.get('/api/v1/admin/dev/simulator/customers', async (req, res) => {
-    const merchant = checkSimulatorAuth(req, res);
+    const merchant = await checkSimulatorAuth(req, res);
     if (!merchant) return;
 
     const q = (req.query.q || '').trim();
@@ -1926,7 +1928,7 @@ export function registerAdminRoutes(server, ctx) {
     }
     querySql += ` ORDER BY created_at DESC LIMIT 30`;
 
-    const rows = ctx.db.query(querySql, params);
+    const rows = await ctx.db.query(querySql, params);
     const customers = rows.map(r => ({
       id: r.id,
       name: r.name,
@@ -1941,16 +1943,16 @@ export function registerAdminRoutes(server, ctx) {
   });
 
   server.get('/api/v1/admin/dev/simulator/customers/:id/sessions', async (req, res, params) => {
-    const merchant = checkSimulatorAuth(req, res);
+    const merchant = await checkSimulatorAuth(req, res);
     if (!merchant) return;
 
-    const customer = ctx.customerRepo ? ctx.customerRepo.findById(params.id) : null;
+    const customer = ctx.customerRepo ? await ctx.customerRepo.findById(params.id) : null;
     if (!customer) {
       HttpServer.json(res, 404, { error: 'Customer not found.' });
       return;
     }
 
-    const rows = ctx.db.query(`
+    const rows = await ctx.db.query(`
       SELECT id, order_id, amount_paise, status, device_id, method, created_at, expires_at
       FROM payment_sessions
       WHERE customer_id = ?
@@ -1985,7 +1987,7 @@ export function registerAdminRoutes(server, ctx) {
   });
 
   server.post('/api/v1/admin/dev/simulator/inject', async (req, res) => {
-    const merchant = checkSimulatorAuth(req, res);
+    const merchant = await checkSimulatorAuth(req, res);
     if (!merchant) return;
 
     const until = merchant?.branding?.testModeUntil;
@@ -2004,7 +2006,7 @@ export function registerAdminRoutes(server, ctx) {
     const paymentSessionId = body.paymentSessionId || body.sessionId || null;
     let targetSession = null;
     if (paymentSessionId) {
-      targetSession = ctx.sessionRepo.findById(paymentSessionId);
+      targetSession = await ctx.sessionRepo.findById(paymentSessionId);
       if (!targetSession) {
         HttpServer.json(res, 404, {
           success: false,
@@ -2056,7 +2058,7 @@ export function registerAdminRoutes(server, ctx) {
       eventEmitter: ctx.eventEmitter
     });
 
-    const pipelineResult = pipeline.process({
+    const pipelineResult = await pipeline.process({
       source,
       rawText: rawContent,
       sender: rawSender,
@@ -2073,7 +2075,7 @@ export function registerAdminRoutes(server, ctx) {
     });
 
     if (ctx.auditRepo) {
-      ctx.auditRepo.log({
+      await ctx.auditRepo.log({
         merchantId: merchant.id,
         entityType: 'PAYMENT_SIMULATION',
         entityId: messageId,
@@ -2108,10 +2110,10 @@ export function registerAdminRoutes(server, ctx) {
   });
 
   server.get('/api/v1/admin/dev/simulator/history', async (req, res) => {
-    const merchant = checkSimulatorAuth(req, res);
+    const merchant = await checkSimulatorAuth(req, res);
     if (!merchant) return;
 
-    const rows = ctx.db.query(`
+    const rows = await ctx.db.query(`
       SELECT id, entity_type, entity_id, action, actor_type, details, created_at
       FROM audit_logs
       WHERE entity_type = 'PAYMENT_SIMULATION'
@@ -2145,7 +2147,7 @@ export function registerAdminRoutes(server, ctx) {
       HttpServer.json(res, 200, { bannedUsers: [] });
       return;
     }
-    const bannedUsers = ctx.customerRepo.findAllBanned(q);
+    const bannedUsers = await ctx.customerRepo.findAllBanned(q);
     HttpServer.json(res, 200, { bannedUsers });
   });
 
@@ -2154,7 +2156,7 @@ export function registerAdminRoutes(server, ctx) {
       HttpServer.json(res, 404, { error: 'Customer repository not configured' });
       return;
     }
-    const evidence = ctx.customerRepo.getBanEvidence(params.id);
+    const evidence = await ctx.customerRepo.getBanEvidence(params.id);
     if (!evidence) {
       HttpServer.json(res, 404, { error: 'Customer not found' });
       return;
@@ -2170,17 +2172,17 @@ export function registerAdminRoutes(server, ctx) {
       return;
     }
 
-    const customer = ctx.customerRepo.findById(customerId);
+    const customer = await ctx.customerRepo.findById(customerId);
     if (!customer) {
       HttpServer.json(res, 404, { error: 'Customer not found.' });
       return;
     }
 
     const prevStatus = customer.status;
-    const updated = ctx.customerRepo.unbanCustomer(customerId);
+    const updated = await ctx.customerRepo.unbanCustomer(customerId);
 
     if (ctx.auditRepo) {
-      ctx.auditRepo.log({
+      await ctx.auditRepo.log({
         merchantId: req.headers['x-merchant-id'] || '00000000-0000-0000-0000-000000000001',
         entityType: 'CUSTOMER',
         entityId: customerId,
@@ -2203,7 +2205,7 @@ export function registerAdminRoutes(server, ctx) {
     }
 
     if (ctx.customerRepo.createSecurityEvent) {
-      ctx.customerRepo.createSecurityEvent({
+      await ctx.customerRepo.createSecurityEvent({
         merchantId: req.headers['x-merchant-id'] || '00000000-0000-0000-0000-000000000001',
         customerId,
         eventType: 'USER_UNBANNED',
@@ -2230,19 +2232,19 @@ export function registerAdminRoutes(server, ctx) {
       return;
     }
 
-    const customer = ctx.customerRepo.findById(customerId);
+    const customer = await ctx.customerRepo.findById(customerId);
     if (!customer) {
       HttpServer.json(res, 404, { error: 'Customer not found.' });
       return;
     }
 
     const prevStatus = customer.status;
-    const updated = ctx.customerRepo.banCustomer(customerId, 'MANUAL_BAN', {
+    const updated = await ctx.customerRepo.banCustomer(customerId, 'MANUAL_BAN', {
       lastDevice: body.deviceInfo || 'Manual Admin Action'
     });
 
     if (ctx.auditRepo) {
-      ctx.auditRepo.log({
+      await ctx.auditRepo.log({
         merchantId: req.headers['x-merchant-id'] || '00000000-0000-0000-0000-000000000001',
         entityType: 'CUSTOMER',
         entityId: customerId,
@@ -2263,7 +2265,7 @@ export function registerAdminRoutes(server, ctx) {
     }
 
     if (ctx.customerRepo.createSecurityEvent) {
-      ctx.customerRepo.createSecurityEvent({
+      await ctx.customerRepo.createSecurityEvent({
         merchantId: req.headers['x-merchant-id'] || '00000000-0000-0000-0000-000000000001',
         customerId,
         eventType: 'MANUAL_BAN',
@@ -2280,12 +2282,12 @@ export function registerAdminRoutes(server, ctx) {
   });
 
   server.get('/api/v1/admin/security/events', async (req, res) => {
-    const events = ctx.customerRepo ? ctx.customerRepo.getSecurityEvents(null, 100) : [];
+    const events = ctx.customerRepo ? await ctx.customerRepo.getSecurityEvents(null, 100) : [];
     HttpServer.json(res, 200, { events });
   });
 
   server.get('/api/v1/admin/security/history', async (req, res) => {
-    const logs = ctx.db.query(`
+    const logs = await ctx.db.query(`
       SELECT id, entity_type, entity_id, action, actor_type, actor_id, details, created_at
       FROM audit_logs
       WHERE action IN ('CUSTOMER_AUTOMATICALLY_BANNED', 'CUSTOMER_MANUALLY_BANNED', 'USER_UNBANNED', 'TEST_MODE_FRAUD_FLAGGED_BAN_SUPPRESSED')
@@ -2311,7 +2313,7 @@ export function registerAdminRoutes(server, ctx) {
   });
 
   server.get('/api/v1/admin/customers', async (req, res) => {
-    const rows = ctx.db.query('SELECT id, name, email, mobile_number, status, created_at FROM customers ORDER BY created_at DESC LIMIT 100');
+    const rows = await ctx.db.query('SELECT id, name, email, mobile_number, status, created_at FROM customers ORDER BY created_at DESC LIMIT 100');
     HttpServer.json(res, 200, {
       customers: rows.map(r => ({
         id: r.id,

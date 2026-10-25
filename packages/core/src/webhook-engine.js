@@ -10,7 +10,7 @@ export class WebhookEngine {
   }
 
   async dispatch(event, session) {
-    const merchant = this.merchantRepo.findById(session.merchantId);
+    const merchant = await this.merchantRepo.findById(session.merchantId);
     if (!merchant || !merchant.webhookUrl) {
       return { delivered: false, deliveryId: '', error: 'No webhook URL configured for merchant.' };
     }
@@ -20,11 +20,11 @@ export class WebhookEngine {
 
     if (!merchant.webhookSecret) {
       const deliveryId = crypto.randomUUID();
-      this.db.execute(`
+      await this.db.execute(`
         INSERT INTO webhook_deliveries (
           id, merchant_id, payment_id, event_type, payload, endpoint_url,
           response_status, response_body, attempt_count, is_successful, next_retry_at, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 500, 'Merchant webhookSecret is not configured.', 1, 0, NULL, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, 500, 'Merchant webhookSecret is not configured.', 1, false, NULL, ?)
       `, [
         deliveryId,
         merchant.id,
@@ -44,11 +44,11 @@ export class WebhookEngine {
     }
     if (!endpointCheck.valid) {
       const deliveryId = crypto.randomUUID();
-      this.db.execute(`
+      await this.db.execute(`
         INSERT INTO webhook_deliveries (
           id, merchant_id, payment_id, event_type, payload, endpoint_url,
           response_status, response_body, attempt_count, is_successful, next_retry_at, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 400, ?, 1, 0, NULL, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, 400, ?, 1, false, NULL, ?)
       `, [
         deliveryId,
         merchant.id,
@@ -65,7 +65,7 @@ export class WebhookEngine {
     let utr = session.utr || session.bankReferenceNumber || session.bank_reference_number || '';
     if (!utr && session.attributedObservationId) {
       try {
-        const obsRow = this.db.queryOne(
+        const obsRow = await this.db.queryOne(
           'SELECT bank_reference_number FROM payment_observations WHERE id = ?',
           [session.attributedObservationId]
         );
@@ -132,7 +132,7 @@ export class WebhookEngine {
       ? null
       : new Date(Date.now() + 5000).toISOString();
 
-    this.db.execute(`
+    await this.db.execute(`
       INSERT INTO webhook_deliveries (
         id, merchant_id, payment_id, event_type, payload, endpoint_url,
         response_status, response_body, attempt_count, is_successful, next_retry_at, created_at
@@ -146,7 +146,7 @@ export class WebhookEngine {
       merchant.webhookUrl,
       responseStatus,
       responseBody,
-      isSuccessful ? 1 : 0,
+      isSuccessful,
       nextRetryAt,
       nowIso
     ]);
@@ -162,19 +162,21 @@ export class WebhookEngine {
   async retryPending() {
     const nowIso = new Date().toISOString();
 
-    const claimed = this.db.transaction(() => {
-      const pending = this.db.query(`
+    const claimed = await this.db.transaction(async () => {
+      const pending = await this.db.query(`
         SELECT id, merchant_id, payment_id, event_type, payload, endpoint_url, attempt_count
         FROM webhook_deliveries
-        WHERE is_successful = 0 AND attempt_count < ? AND next_retry_at <= ?
+        WHERE is_successful = false AND attempt_count < ? AND next_retry_at <= ?
+        ORDER BY next_retry_at
         LIMIT 20
+        FOR UPDATE SKIP LOCKED
       `, [this.maxRetries, nowIso]);
 
       if (pending.length === 0) return [];
 
       const claimLockIso = new Date(Date.now() + 60000).toISOString();
       for (const item of pending) {
-        this.db.execute(`
+        await this.db.execute(`
           UPDATE webhook_deliveries
           SET next_retry_at = ?, attempt_count = attempt_count + 1
           WHERE id = ?
@@ -190,11 +192,11 @@ export class WebhookEngine {
     const backoffs = [5000, 30000, 120000, 600000, 3600000];
 
     for (const item of claimed) {
-      const merchant = this.merchantRepo.findById(item.merchant_id);
+      const merchant = await this.merchantRepo.findById(item.merchant_id);
       if (!merchant || !merchant.webhookSecret || !item.endpoint_url) {
-        this.db.execute(`
+        await this.db.execute(`
           UPDATE webhook_deliveries
-          SET is_successful = 0, next_retry_at = NULL, response_body = 'Missing merchant or webhookSecret'
+          SET is_successful = false, next_retry_at = NULL, response_body = 'Missing merchant or webhookSecret'
           WHERE id = ?
         `, [item.id]);
         continue;
@@ -206,9 +208,9 @@ export class WebhookEngine {
         if (!resolved.valid) retryEndpoint = resolved;
       }
       if (!retryEndpoint.valid) {
-        this.db.execute(`
+        await this.db.execute(`
           UPDATE webhook_deliveries
-          SET is_successful = 0, next_retry_at = NULL, response_body = ?
+          SET is_successful = false, next_retry_at = NULL, response_body = ?
           WHERE id = ?
         `, [`SSRF blocked: ${retryEndpoint.error}`, item.id]);
         continue;
@@ -262,11 +264,11 @@ export class WebhookEngine {
         ? null
         : new Date(Date.now() + nextRetryDelay).toISOString();
 
-      this.db.execute(`
+      await this.db.execute(`
         UPDATE webhook_deliveries
         SET is_successful = ?, response_status = ?, response_body = ?, next_retry_at = ?
         WHERE id = ?
-      `, [isSuccess ? 1 : 0, respStatus, respBody, nextRetryAt, item.id]);
+      `, [isSuccess, respStatus, respBody, nextRetryAt, item.id]);
 
       results.push({ id: item.id, success: isSuccess, attempt: nextAttempt });
     }

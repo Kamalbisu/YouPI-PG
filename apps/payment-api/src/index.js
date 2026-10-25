@@ -18,8 +18,7 @@ if (!process.env.BASE_CHECKOUT_URL && typeof process.loadEnvFile === 'function')
 }
 import {
   getDatabase,
-  ensureDatabaseInitialized,
-  runMigrations,
+  initDatabase,
   MerchantRepository,
   ReceivingAccountRepository,
   CustomerRepository,
@@ -49,10 +48,9 @@ import { registerDeviceRoutes } from './routes/device.routes.js';
 import { getWhatsAppBerryService, WhatsAppBerryService } from './services/whatsapp-berry.service.js';
 import { ObserverPollerService } from './services/observer-poller.service.js';
 
-export function createPaymentApp(customDb = null, options = {}) {
+export async function createPaymentApp(customDb = null, options = {}) {
   const db = customDb || getDatabase();
-  ensureDatabaseInitialized(db);
-  const { defaultMerchant } = runMigrations(db);
+  const { defaultMerchant } = await initDatabase(db);
   const isCustom = !!customDb;
   const whatsappBerryService = options.whatsappBerryService || (isCustom ? new WhatsAppBerryService({
     sessionId: 'test_berry_session',
@@ -144,12 +142,25 @@ export function createPaymentApp(customDb = null, options = {}) {
     }
   } catch {}
 
-  function handleSlotFreedAndPromote(receivingAccountId) {
+  const pendingHandlers = new Set();
+  eventEmitter.settle = async () => {
+    while (pendingHandlers.size) await Promise.allSettled([...pendingHandlers]);
+  };
+  const onAsync = (event, handler) => {
+    eventEmitter.on(event, (data) => {
+      const p = Promise.resolve().then(() => handler(data)).catch((err) => {
+        console.error(`[events] ${event} handler failed:`, err?.message || err);
+      }).finally(() => pendingHandlers.delete(p));
+      pendingHandlers.add(p);
+    });
+  };
+
+  async function handleSlotFreedAndPromote(receivingAccountId) {
     if (!receivingAccountId) return null;
-    const promoted = queueEngine.promoteNext(receivingAccountId);
+    const promoted = await queueEngine.promoteNext(receivingAccountId);
     if (promoted) {
       if (promoted.expiresAt) {
-        timingEngine.startActiveTimer(promoted.id, promoted.expiresAt);
+        await timingEngine.startActiveTimer(promoted.id, promoted.expiresAt);
       }
       server.broadcastSse(promoted.id, 'status_change', {
         status: PaymentStatus.ACTIVE,
@@ -163,8 +174,8 @@ export function createPaymentApp(customDb = null, options = {}) {
     return promoted;
   }
 
-  eventEmitter.on('PAYMENT.SUCCESS', (data) => {
-    const session = sessionRepo.findById(data.paymentId);
+  onAsync('PAYMENT.SUCCESS', async (data) => {
+    const session = await sessionRepo.findById(data.paymentId);
     if (session) {
       server.broadcastSse(session.id, 'status_change', {
         status: PaymentStatus.SUCCESS,
@@ -173,7 +184,7 @@ export function createPaymentApp(customDb = null, options = {}) {
         sources: data.sources || session.verificationSources
       });
       webhookEngine.dispatch('SUCCESS', session).catch(() => {});
-      handleSlotFreedAndPromote(session.receivingAccountId);
+      await handleSlotFreedAndPromote(session.receivingAccountId);
     }
   });
 
@@ -186,33 +197,33 @@ export function createPaymentApp(customDb = null, options = {}) {
     });
   });
 
-  eventEmitter.on('PAYMENT.FAILED', (data) => {
-    const session = sessionRepo.findById(data.paymentId);
+  onAsync('PAYMENT.FAILED', async (data) => {
+    const session = await sessionRepo.findById(data.paymentId);
     if (session) {
       webhookEngine.dispatch('FAILED', session).catch(() => {});
-      handleSlotFreedAndPromote(session.receivingAccountId);
+      await handleSlotFreedAndPromote(session.receivingAccountId);
     }
   });
 
-  eventEmitter.on('PAYMENT.EXPIRED', (data) => {
-    const session = sessionRepo.findById(data.paymentId);
+  onAsync('PAYMENT.EXPIRED', async (data) => {
+    const session = await sessionRepo.findById(data.paymentId);
     if (session) {
       server.broadcastSse(session.id, 'status_change', {
         status: PaymentStatus.EXPIRED
       });
       webhookEngine.dispatch('EXPIRED', session).catch(() => {});
-      handleSlotFreedAndPromote(session.receivingAccountId);
+      await handleSlotFreedAndPromote(session.receivingAccountId);
     }
   });
 
-  eventEmitter.on('PAYMENT.CANCELLED', (data) => {
-    const session = sessionRepo.findById(data.paymentId);
+  onAsync('PAYMENT.CANCELLED', async (data) => {
+    const session = await sessionRepo.findById(data.paymentId);
     if (session) {
       server.broadcastSse(session.id, 'status_change', {
         status: PaymentStatus.CANCELLED
       });
       webhookEngine.dispatch('CANCELLED', session).catch(() => {});
-      handleSlotFreedAndPromote(session.receivingAccountId);
+      await handleSlotFreedAndPromote(session.receivingAccountId);
     }
   });
 
@@ -242,58 +253,58 @@ export function createPaymentApp(customDb = null, options = {}) {
   });
 
 
-  const queueSyncDaemon = setInterval(() => {
+  const queueSyncDaemon = setInterval(async () => {
     try {
       const nowIso = new Date().toISOString();
 
-      const expiredActive = db.query(`
+      const expiredActive = await db.query(`
         SELECT id, merchant_id, order_id, receiving_account_id FROM payment_sessions
         WHERE status = 'ACTIVE' AND expires_at <= ?
       `, [nowIso]);
 
       for (const row of expiredActive) {
-        sessionRepo.transitionToTerminal(row.id, PaymentStatus.EXPIRED);
+        await sessionRepo.transitionToTerminal(row.id, PaymentStatus.EXPIRED);
         server.broadcastSse(row.id, 'status_change', { status: PaymentStatus.EXPIRED });
         eventEmitter.emit('PAYMENT.EXPIRED', {
           paymentId: row.id,
           orderId: row.order_id,
           merchantId: row.merchant_id
         });
-        handleSlotFreedAndPromote(row.receiving_account_id);
+        await handleSlotFreedAndPromote(row.receiving_account_id);
       }
 
-      const failedProc = db.query(`
+      const failedProc = await db.query(`
         SELECT id, merchant_id, order_id, receiving_account_id FROM payment_sessions
         WHERE status = 'PROCESSING' AND processing_expires_at <= ?
       `, [nowIso]);
 
       for (const row of failedProc) {
-        sessionRepo.transitionToTerminal(row.id, PaymentStatus.FAILED);
+        await sessionRepo.transitionToTerminal(row.id, PaymentStatus.FAILED);
         server.broadcastSse(row.id, 'status_change', { status: PaymentStatus.FAILED });
         eventEmitter.emit('PAYMENT.FAILED', {
           paymentId: row.id,
           orderId: row.order_id,
           merchantId: row.merchant_id
         });
-        handleSlotFreedAndPromote(row.receiving_account_id);
+        await handleSlotFreedAndPromote(row.receiving_account_id);
       }
 
-      const vacantAccounts = db.query(`
+      const vacantAccounts = await db.query(`
         SELECT id FROM payment_receiving_accounts
-        WHERE is_active = 1 AND (is_slot_busy = 0 OR current_active_session_id IS NULL)
+        WHERE is_active = true AND (is_slot_busy = false OR current_active_session_id IS NULL)
       `);
 
       for (const acc of vacantAccounts) {
-        handleSlotFreedAndPromote(acc.id);
+        await handleSlotFreedAndPromote(acc.id);
       }
     } catch {}
   }, 1000);
 
   if (queueSyncDaemon.unref) queueSyncDaemon.unref();
 
-  const webhookRetryDaemon = setInterval(() => {
+  const webhookRetryDaemon = setInterval(async () => {
     try {
-      const outcome = webhookEngine.retryPending();
+      const outcome = await webhookEngine.retryPending();
       if (outcome && typeof outcome.catch === 'function') outcome.catch(() => {});
     } catch {}
   }, Number(process.env.WEBHOOK_RETRY_INTERVAL_MS || 5000));
@@ -312,7 +323,7 @@ export function createPaymentApp(customDb = null, options = {}) {
     gmailPort: Number(process.env.GMAIL_OBSERVER_PORT || 6003)
   });
 
-  const recoveryStats = recoveryEngine.recover();
+  const recoveryStats = await recoveryEngine.recover();
 
   const healthHandler = (req, res) => {
     HttpServer.json(res, 200, {
@@ -369,13 +380,13 @@ export function createPaymentApp(customDb = null, options = {}) {
   registerCustomerRoutes(server, context);
   registerDeviceRoutes(server, context);
 
-  function destroy() {
+  async function destroy() {
     clearInterval(queueSyncDaemon);
     clearInterval(webhookRetryDaemon);
     observerPollerService.destroy();
-    timingEngine.destroy();
+    await timingEngine.destroy();
     if (typeof attributionEngine.destroy === 'function') {
-      attributionEngine.destroy();
+      await attributionEngine.destroy();
     }
     if (whatsappBerryService && typeof whatsappBerryService.disconnect === 'function') {
       whatsappBerryService.disconnect({ cleanSession: false }).catch(() => {});
@@ -390,9 +401,9 @@ export function createPaymentApp(customDb = null, options = {}) {
   };
 }
 
-export function startServer(port = null, customDb = null) {
+export async function startServer(port = null, customDb = null) {
   const finalPort = port || Number(process.env.PAYMENT_API_PORT || 6100);
-  const app = createPaymentApp(customDb);
+  const app = await createPaymentApp(customDb);
 
   return new Promise(resolve => {
     const bindHost = process.env.YOUPI_BIND_HOST || '127.0.0.1';
@@ -401,15 +412,23 @@ export function startServer(port = null, customDb = null) {
       resolve({
         app,
         port: finalPort,
-        close: () => new Promise(cb => {
-          app.destroy();
-          instance.close(cb);
-        })
+        close: async () => {
+          await app.destroy();
+          await new Promise(cb => instance.close(cb));
+        }
       });
     });
   });
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  startServer();
+  try {
+    await startServer();
+  } catch (err) {
+    if (err?.name === 'MigrationsRequiredError') {
+      console.error(`[youpi] ${err.message}`);
+      process.exit(1);
+    }
+    throw err;
+  }
 }
