@@ -30,16 +30,9 @@ COPY apps/payment-help/package.json ./apps/payment-help/
 COPY apps/android-observer-app/package.json ./apps/android-observer-app/
 
 # Clean installation of dependencies. Install scripts stay disabled during `npm ci` so no
-# arbitrary third-party postinstall code runs during the build, then better-sqlite3's native
-# binding is compiled explicitly: it is a transitive dependency of the WhatsApp Berry SDK and
-# has no prebuilt binary for node 24 on musl, so skipping it leaves that feature broken.
-#
-# There is no prebuilt binary to fall back on, so the C toolchain has to be present for
-# node-gyp. It is installed here in the throwaway deps stage only - the runner image is
-# built FROM base and therefore never inherits it.
-RUN apk add --no-cache --virtual .build-deps python3 make g++ \
- && npm ci --ignore-scripts \
- && npm rebuild better-sqlite3
+# arbitrary third-party postinstall code runs during the build. The database driver (pg) is pure
+# JavaScript and needs no native toolchain.
+RUN npm ci --ignore-scripts
 
 # ── Stage 2: Builder ────────────────────────────────────────────────────────
 FROM deps AS builder
@@ -72,10 +65,10 @@ RUN rm -rf /usr/local/lib/node_modules/npm \
 RUN addgroup -S -g 1001 youpi && \
     adduser -S -u 1001 -G youpi youpi
 
-# Copy built application and workspace modules
+# Copy built application and workspace modules (includes /migrations and migrate.js)
 COPY --from=builder --chown=youpi:youpi /app ./
 
-# Setup data persistence directory for native SQLite
+# Data directory for runtime files (signing secrets, browser sessions). The database itself is PostgreSQL (DATABASE_URL).
 RUN mkdir -p /app/data && chown -R youpi:youpi /app/data
 VOLUME ["/app/data"]
 

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
-import { runMigrations } from '../packages/db/src/migrate.js';
+import { initDatabase } from '../packages/db/src/database.js';
 import { startControlCenter } from '../apps/control-center/src/index.js';
 import { resolveRuntimeUrls } from '../packages/common/src/runtime-config.js';
 import { startCloudflaredSafely } from '../packages/common/src/tunnel-command.js';
@@ -38,7 +38,10 @@ if (runInLocalhostMode) {
 }
 
 console.log('[1/3] Loading persisted production database & settings...');
-const migrationResult = runMigrations();
+const migrationResult = await initDatabase().catch((err) => {
+  console.error('\n[-] ' + err.message);
+  process.exit(1);
+});
 const merchant = migrationResult.defaultMerchant;
 const branding = merchant?.branding || {};
 

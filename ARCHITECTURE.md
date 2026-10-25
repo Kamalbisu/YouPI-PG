@@ -3,7 +3,7 @@
 > **YOUPI PG V2**  
 > *Sovereign • Self-Hosted • Zero-Fee • Deterministic UPI Payment Gateway Suite*  
 > **Architecture Reference:** Production Specification V2  
-> **Runtime Target:** Node.js `>= 20.0.0` (ESM Native) • SQLite WAL • Android Kotlin
+> **Runtime Target:** Node.js `>= 20.0.0` (ESM Native) • PostgreSQL • Android Kotlin
 
 ---
 
@@ -63,16 +63,15 @@ The Payment Gateway is the exclusive owner of customer authentication. Merchandi
 - Customers authenticate via **WhatsApp OTP** powered by Berry Protocol / Baileys multi-device socket.
 - Eliminates phone number spoofing, unauthenticated bot sessions, and fake orders before slot allocation.
 
-### Invariant 7 — Pure Source & SQLite WAL Architecture
-The active production persistence layer uses Node.js native `node:sqlite` (`DatabaseSync`) operating in Write-Ahead Logging (`WAL`) mode with foreign key constraints enabled (`PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;`).
-- Zero external database daemon dependencies.
-- Zero Docker container overhead.
+### Invariant 7 — PostgreSQL Persistence
+The persistence layer is PostgreSQL, accessed through the `pg` driver with a connection pool (`DATABASE_URL`, optional TLS via `PGSSLMODE` or `?sslmode=`).
+- Transactions use one pooled client per transaction (tracked with `AsyncLocalStorage`), so repositories do not need to know whether they run inside one.
+- Slot ownership is enforced by unique indexes, and queue/slot/seed steps use row locks or advisory locks, so several API processes can share one database.
 
-### Invariant 8 — Zero-Config Database Auto-Provisioning
-On first system boot or after cloning, YOUPI PG guarantees zero-config database provisioning:
-- Automatically detects if `data/youpi_pg.sqlite` and core tables exist (`SELECT count(*) FROM sqlite_master WHERE type='table' AND name='merchants'`).
-- If missing, creates the parent directory `data/` and runs all schema DDL and baseline seeds idempotently before accepting HTTP traffic.
-- Eliminates manual database creation scripts and avoids runtime `SqliteError: no such table` crashes entirely.
+### Invariant 8 — Versioned Migrations
+The schema is defined only by ordered SQL files in `/migrations` and applied by `npm run migrate` (`migrate.js`):
+- Each file runs in its own transaction under a PostgreSQL advisory lock; applied files are recorded in `schema_migrations` with a checksum, so re-running is a no-op and an edited, already-applied file is rejected.
+- On startup the services check that migrations are applied and refuse to run otherwise. Setting `YOUPI_AUTO_MIGRATE=true` makes them apply pending migrations themselves.
 
 ---
 
@@ -109,7 +108,7 @@ flowchart TB
     end
 
     subgraph PersistenceLayer["Storage & Supervision"]
-        SQLiteDB[("SQLite WAL Database<br/>• data/youpi_pg.sqlite<br/>• Strict Foreign Keys<br/>• Atomic BEGIN/COMMIT")]
+        PostgresDB[("PostgreSQL<br/>• DATABASE_URL<br/>• Strict Foreign Keys<br/>• Atomic BEGIN/COMMIT")]
         ControlCenter["Control Center (Port 8090)<br/>• Host Process Supervisor<br/>• Health & Log Aggregator"]
     end
 
@@ -127,15 +126,15 @@ flowchart TB
     APIEndpoints --> AttributionEngine
     APIEndpoints --> FraudEngine
 
-    AuthService --> SQLiteDB
-    QueueEngine --> SQLiteDB
-    TimingEngine --> SQLiteDB
+    AuthService --> PostgresDB
+    QueueEngine --> PostgresDB
+    TimingEngine --> PostgresDB
 
     AndroidAPK -->|POST /api/v1/observers/sms (Signed)| APIEndpoints
     GmailObserver -->|POST /api/v1/observers/gmail| APIEndpoints
     SMSObserver -->|POST /api/v1/observers/sms| APIEndpoints
 
-    AttributionEngine --> SQLiteDB
+    AttributionEngine --> PostgresDB
     AttributionEngine --> WebhookEngine
     WebhookEngine -->|Signed HMAC Webhook| MerchantStore
 
@@ -177,27 +176,24 @@ stateDiagram-v2
 
 #### Atomic Slot Acquisition Logic
 ```javascript
-// packages/core/src/queue-engine.js (Abstracted Schema)
-db.exec('BEGIN IMMEDIATE TRANSACTION');
-const account = db.prepare('SELECT is_slot_busy FROM payment_receiving_accounts WHERE id = ?').get(accountId);
+// packages/core/src/queue-engine.js (abstracted)
+await db.transaction(async () => {
+  const account = await db.queryOne(
+    'SELECT is_slot_busy FROM payment_receiving_accounts WHERE id = ? FOR UPDATE', [accountId]);
 
-if (!account.is_slot_busy) {
-  // Acquire Slot Immediately
-  db.prepare('UPDATE payment_receiving_accounts SET is_slot_busy = 1 WHERE id = ?').run(accountId);
-  db.prepare(`UPDATE payment_sessions SET 
-    status = 'ACTIVE', 
-    expires_at = datetime('now', '+5 minutes'),
-    activated_at = datetime('now')
-    WHERE id = ?`).run(sessionId);
-} else {
-  // Enqueue Customer
-  const nextPos = db.prepare('SELECT COALESCE(MAX(queue_position), 0) + 1 AS pos FROM payment_sessions WHERE receiving_account_id = ? AND status = "QUEUED"').get(accountId).pos;
-  db.prepare(`UPDATE payment_sessions SET 
-    status = 'QUEUED', 
-    queue_position = ? 
-    WHERE id = ?`).run(nextPos, sessionId);
-}
-db.exec('COMMIT');
+  if (!account.is_slot_busy) {
+    // Acquire slot immediately (a unique index also guarantees one active session per account)
+    await db.run('UPDATE payment_receiving_accounts SET is_slot_busy = true WHERE id = ?', [accountId]);
+    await db.run(`UPDATE payment_sessions SET status = 'ACTIVE', expires_at = ?, activated_at = ? WHERE id = ?`,
+      [expiresAtIso, nowIso, sessionId]);
+  } else {
+    // Enqueue customer
+    const { pos } = await db.queryOne(
+      `SELECT COALESCE(MAX(queue_position), 0) + 1 AS pos FROM payment_sessions
+       WHERE receiving_account_id = ? AND status = 'QUEUED'`, [accountId]);
+    await db.run(`UPDATE payment_sessions SET status = 'QUEUED', queue_position = ? WHERE id = ?`, [pos, sessionId]);
+  }
+});
 ```
 
 ---
@@ -372,10 +368,10 @@ Configured via Tab 5 of the Merchant Admin dashboard and persisted in `merchants
 
 ## 6. Persistence & Schema Architecture
 
-All runtime state is stored in `data/youpi_pg.sqlite` with strict foreign keys and Write-Ahead Logging:
+All runtime state is stored in PostgreSQL (schema defined in `migrations/0001_init.sql`) with strict foreign keys:
 
 ```text
-data/youpi_pg.sqlite
+postgres: $DATABASE_URL
 ├── merchants (id, business_name, api_key, webhook_secret, branding [JSON])
 ├── payment_receiving_accounts (id, merchant_id, vpa, account_name, is_slot_busy, daily_limit_paise)
 ├── customers (id, mobile_number, name, email, risk_tier, is_banned, created_at)
@@ -396,7 +392,7 @@ node scripts/test-all.js
 ```
 The suite executes **31 curated test suites** across packages, applications, and chaos-concurrency harnesses in under 18 seconds:
 - **Common & Contracts:** Types, enums, paise minor units, UPI URIs, crypto builders.
-- **Database & Repositories:** SQLite migrations, foreign keys, transaction rollbacks, auth matrix.
+- **Database & Repositories:** PostgreSQL migrations, foreign keys, transaction rollbacks, auth matrix.
 - **Core Engine:** Queue arbitration, dual timers, attribution normalizer, webhooks.
 - **Payment API:** WhatsApp Berry Auth, counter billing, COD decoupling, fraud pipeline, device binding.
 - **Checkout Portal & SDK:** Universal embed script, postMessage protocols, vector QR SVG generator.

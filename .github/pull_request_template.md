@@ -28,7 +28,7 @@ Closes #
 - [ ] **Webhook Raw Payload Integrity**: HMAC signature is computed over raw unparsed payload bytes (`X-Gateway-Signature: sha256=...`).
 - [ ] **Secret Isolation**: No private keys, database credentials, or observer tokens exposed to client scripts.
 - [ ] **Device & Token Binding**: Device access and customer session checks fail closed on state-changing operations.
-- [ ] **Node.js Engine Target**: Code runs compatibly with Node.js >= 22.5.0 (`node:sqlite`).
+- [ ] **Node.js Engine Target**: Code runs compatibly with Node.js >= 24 and PostgreSQL (database calls awaited; schema changes via a new file in `/migrations`).
 
 ---
 

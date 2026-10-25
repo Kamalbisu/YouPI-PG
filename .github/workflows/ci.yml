@@ -118,6 +118,21 @@ jobs:
     needs: [build]
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: youpi_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -131,11 +146,19 @@ jobs:
       - name: Install Dependencies
         run: npm ci
 
+      - name: Apply migrations (twice, to prove they are idempotent)
+        run: |
+          npm run migrate
+          npm run migrate
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/youpi_ci
+
       - name: Run Full Regression Test Suite
         run: npm test
         env:
           NODE_ENV: test
           YOUPI_MODE: localhost
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/youpi_ci
 
   # =============================================================
   # Stage 5: Update ReviewGround Sticky Comment with CI Status

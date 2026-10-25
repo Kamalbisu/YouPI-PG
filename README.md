@@ -40,7 +40,7 @@
 [![Zero Aggregator Fees](https://img.shields.io/badge/Fees-0%25%20Forever-10b981?style=for-the-badge&logo=cashapp&logoColor=white)](#)
 [![Direct Settlement](https://img.shields.io/badge/Settlement-Instant%20P2P%20Bank-3b82f6?style=for-the-badge&logo=buffer&logoColor=white)](#)
 [![WhatsApp Berry Auth](https://img.shields.io/badge/Auth-WhatsApp%20OTP-25d366?style=for-the-badge&logo=whatsapp&logoColor=white)](#)
-[![SQLite WAL](https://img.shields.io/badge/Database-SQLite%20Native%20WAL-003b57?style=for-the-badge&logo=sqlite&logoColor=white)](#)
+[![PostgreSQL](https://img.shields.io/badge/Database-PostgreSQL-336791?style=for-the-badge&logo=postgresql&logoColor=white)](#)
 [![Native Android Observer](https://img.shields.io/badge/Android-Kotlin%20Observer%20APK-3ddc84?style=for-the-badge&logo=android&logoColor=white)](#)
 [![Regression Tests](https://img.shields.io/badge/Tests-33%20Curated%20Suites-success?style=for-the-badge&logo=vitest&logoColor=white)](#)
 [![White Label Ready](https://img.shields.io/badge/Branding-100%25%20White--Label-f59e0b?style=for-the-badge&logo=target&logoColor=white)](#)
@@ -234,16 +234,16 @@ This section is a practical project warning, not a certification, compliance che
 ##  Quickstart in 60 Seconds
  
 ### Prerequisites
-- **Node.js `>= 24.0.0`** (matches `engines` in `package.json`; `node -v`) for native `node:sqlite` (`DatabaseSync`) engine.
+- **Node.js `>= 24.0.0`** (matches `engines` in `package.json`; `node -v`).
 - Standard Linux, macOS, or Windows host
-- *External database services (PostgreSQL/Redis) are completely optional!*
+- **PostgreSQL 14 or newer** (local, Docker, or hosted). `DATABASE_URL` is required; SQLite is no longer supported.
 
 > **Note:** A `Dockerfile` and `docker-compose.yml` are included (see `docs/DEPLOYMENT.md`). The steps below run the services on a native Node.js host.
 
 ### Native Host Quickstart
 
 #### 1. Clone & Install Dependencies
-`npm install` installs all workspaces. `better-sqlite3` is a native module and may need a build toolchain; you still must create and edit `.env` (see `docs/CONFIGURATION.md`) before starting services in production:
+`npm install` installs all workspaces. You still must create and edit `.env` (see `docs/CONFIGURATION.md`) before starting services in production:
 ```bash
 git clone https://github.com/youpi-pg/YouPI-PG.git youpi-pg
 cd youpi-pg
@@ -257,8 +257,9 @@ cp .env.example .env
 *(The template leaves all secrets unset: random per-install secrets are generated into `data/.secrets/` on first start. Never commit `.env`, and do not paste example secrets from documentation into production.)*
 
 ### 3. Start the Services
-On first launch, YOUPI PG automatically provisions `data/youpi_pg.sqlite`, creates the directory if missing, and executes idempotent migrations and baseline seeds. No manual database setup is required:
+Set `DATABASE_URL` in `.env`, then apply the database migrations (idempotent, safe to re-run). The first start seeds the default merchant and receiving account:
 ```bash
+npm run migrate     # applies /migrations/*.sql to DATABASE_URL
 npm run dev
 # or
 npm start
@@ -561,10 +562,10 @@ YOUPI PG confirms payments without expensive commercial banking APIs using a tri
 ##  Security & Reliability Architecture
 
 - **64-Bit Integer Minor Units (Paise):** Financial values are strictly represented as integers (`49900` paise = ₹499.00). Floating-point rounding drift is mathematically impossible.
-- **Server-Authoritative Timers:** Timers are calculated strictly from SQLite state timestamps. Client-side browser tampering cannot manipulate countdowns.
+- **Server-Authoritative Timers:** Timers are calculated strictly from database state timestamps. Client-side browser tampering cannot manipulate countdowns.
 - **Anti-Replay Observation Protection:** Android observer payloads require HMAC signatures with timestamp drift verification ($< 60$ seconds).
 - **Hardware & Browser Fingerprinting:** The implementation may collect device/browser signals. Treat these as fallible risk signals, not reliable identity proof; review privacy, retention, and appeal requirements before use.
-- **Write-Ahead Logging (WAL):** SQLite operates with `PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;`, ensuring crash safety and concurrent read performance.
+- **PostgreSQL transactions:** Slot allocation and payment state changes run in database transactions with row locks and unique indexes, so concurrent API processes cannot double-book a receiving account.
 
 <br/>
 

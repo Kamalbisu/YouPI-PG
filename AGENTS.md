@@ -250,7 +250,7 @@ app.post('/api/webhook', express.raw({ type: 'application/json' }), (req, res) =
 4. **Preserve Customer Metadata**:
    - Unrecognized fields in `metadata` are passed through untouched and included in webhooks and API responses.
 5. **Node.js Engine Standard**:
-   - The project strictly targets **Node.js >= 22.5.0** due to built-in `node:sqlite` (`DatabaseSync`).
+   - The project targets **Node.js >= 24** (see `engines`). Persistence is PostgreSQL through `pg` (`DATABASE_URL`); schema changes are new numbered files in `/migrations`, never edits to an applied file. Database calls are async and must be awaited.
 
 ---
 

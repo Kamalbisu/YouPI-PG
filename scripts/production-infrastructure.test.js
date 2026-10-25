@@ -1,4 +1,5 @@
 import { describe, test } from 'node:test';
+import { createTestDatabase } from '@youpi/db/testing';
 import assert from 'node:assert/strict';
 import {
   SERVICE_PORTS,
@@ -111,13 +112,13 @@ describe('YOUPI PG V2 — Production Infrastructure Finalization (Part L Accepta
       );
     });
 
-    test('15: Stored production settings survive restart without auto-reset to localhost', () => {
-      const db = new Database({ inMemory: true });
-      runMigrations(db);
+    test('15: Stored production settings survive restart without auto-reset to localhost', async () => {
+      const db = await createTestDatabase();
+      await runMigrations(db);
       const merchantRepo = new MerchantRepository(db);
       const merchantId = '00000000-0000-0000-0000-000000000001';
 
-      merchantRepo.update(merchantId, {
+      await merchantRepo.update(merchantId, {
         branding: {
           envMode: 'production',
           cloudflareDomain: 'production-brand.com',
@@ -126,7 +127,7 @@ describe('YOUPI PG V2 — Production Infrastructure Finalization (Part L Accepta
         }
       });
 
-      const loaded = merchantRepo.findById(merchantId);
+      const loaded = await merchantRepo.findById(merchantId);
       assert.equal(loaded.branding.envMode, 'production');
       assert.equal(loaded.branding.cloudflareDomain, 'production-brand.com');
       assert.equal(loaded.branding.deploymentPrefix, 'pay');
@@ -138,7 +139,7 @@ describe('YOUPI PG V2 — Production Infrastructure Finalization (Part L Accepta
       });
       assert.equal(urls.checkoutUrl, 'https://pay.production-brand.com');
       assert.equal(urls.apiUrl, 'https://pay-api.production-brand.com');
-      db.close();
+      await db.destroy();
     });
 
     test('16, 17: Localhost mode is only active when explicitly selected', () => {
@@ -230,11 +231,11 @@ describe('YOUPI PG V2 — Production Infrastructure Finalization (Part L Accepta
 
   describe('Group 4: SMS Observer Transport-Only & Server Pipeline Authority', () => {
     test('29, 30, 31: Observer forwards non-bank SMS; server does not reject with 400', async () => {
-      const db = new Database({ inMemory: true });
-      runMigrations(db);
+      const db = await createTestDatabase();
+      await runMigrations(db);
       const deviceRepo = new DeviceRepository(db);
       const deviceId = 'dev_test_phone_001';
-      deviceRepo.create({
+      await deviceRepo.create({
         id: deviceId,
         publicKey: 'pub_test_123',
         fingerprintHash: 'hash_test_456',
@@ -242,7 +243,7 @@ describe('YOUPI PG V2 — Production Infrastructure Finalization (Part L Accepta
         status: 'ACTIVE'
       });
 
-      const device = deviceRepo.findById(deviceId);
+      const device = await deviceRepo.findById(deviceId);
       assert.ok(device);
       assert.equal(device.status, 'ACTIVE');
 
@@ -253,7 +254,7 @@ describe('YOUPI PG V2 — Production Infrastructure Finalization (Part L Accepta
       assert.equal(typeof rawBody, 'string');
       assert.equal(typeof sender, 'string');
       assert.ok(receivedAt);
-      db.close();
+      await db.destroy();
     });
   });
 
@@ -270,14 +271,14 @@ describe('YOUPI PG V2 — Production Infrastructure Finalization (Part L Accepta
       assert.equal(redirectUri, 'http://localhost:6003/oauth/callback');
     });
 
-    test('37, 38: Gmail offline refresh token persists in merchant configuration across restarts', () => {
-      const db = new Database({ inMemory: true });
-      runMigrations(db);
+    test('37, 38: Gmail offline refresh token persists in merchant configuration across restarts', async () => {
+      const db = await createTestDatabase();
+      await runMigrations(db);
       const merchantRepo = new MerchantRepository(db);
       const merchantId = '00000000-0000-0000-0000-000000000001';
       const testRefreshToken = 'mock_google_refresh_token_xyz_98765';
 
-      merchantRepo.update(merchantId, {
+      await merchantRepo.update(merchantId, {
         branding: {
           gmailConfig: {
             clientId: 'client_id_123.apps.googleusercontent.com',
@@ -289,11 +290,11 @@ describe('YOUPI PG V2 — Production Infrastructure Finalization (Part L Accepta
         }
       });
 
-      const reloaded = merchantRepo.findById(merchantId);
+      const reloaded = await merchantRepo.findById(merchantId);
       const gmailConfig = reloaded.branding?.gmailConfig || {};
       assert.equal(gmailConfig.refreshToken, testRefreshToken);
       assert.equal(gmailConfig.connectedEmail, 'billing@merchant.com');
-      db.close();
+      await db.destroy();
     });
 
     test('41, 42, 44: Gmail observer raw email payload preserves fields and transports without local domain filtering', () => {
