@@ -1,4 +1,5 @@
 import { test, describe, before, after, beforeEach } from 'node:test';
+import { createTestDatabase } from '@youpi/db/testing';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { Database, CustomerRepository, CustomerSessionRepository, PaymentSessionRepository, MerchantRepository } from '@youpi/db';
@@ -17,7 +18,7 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
   const receivingAccountId = '00000000-0000-0000-0000-000000000002';
 
   before(async () => {
-    testDb = new Database({ inMemory: true });
+    testDb = await createTestDatabase();
     merchantRepo = new MerchantRepository(testDb);
     sessionRepo = new PaymentSessionRepository(testDb);
     customerRepo = new CustomerRepository(testDb);
@@ -26,18 +27,18 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
     apiInstance = await startPaymentApi(6205, testDb);
     baseUrl = `http://localhost:${apiInstance.port}`;
 
-    testDb.execute("UPDATE payment_sessions SET status = 'CANCELLED' WHERE status IN ('ACTIVE', 'PROCESSING', 'QUEUED')");
-    testDb.execute('UPDATE payment_receiving_accounts SET is_slot_busy = 0, current_active_session_id = NULL WHERE id = ?', [receivingAccountId]);
+    await testDb.execute("UPDATE payment_sessions SET status = 'CANCELLED' WHERE status IN ('ACTIVE', 'PROCESSING', 'QUEUED')");
+    await testDb.execute('UPDATE payment_receiving_accounts SET is_slot_busy = false, current_active_session_id = NULL WHERE id = ?', [receivingAccountId]);
   });
 
   after(async () => {
     if (apiInstance) await apiInstance.close();
-    if (testDb) testDb.close();
+    if (testDb) await testDb.destroy();
   });
 
-  function resetSlot() {
-    testDb.execute("UPDATE payment_sessions SET status = 'CANCELLED' WHERE status IN ('ACTIVE', 'PROCESSING', 'QUEUED')");
-    testDb.execute('UPDATE payment_receiving_accounts SET is_slot_busy = 0, current_active_session_id = NULL WHERE id = ?', [receivingAccountId]);
+  async function resetSlot() {
+    await testDb.execute("UPDATE payment_sessions SET status = 'CANCELLED' WHERE status IN ('ACTIVE', 'PROCESSING', 'QUEUED')");
+    await testDb.execute('UPDATE payment_receiving_accounts SET is_slot_busy = false, current_active_session_id = NULL WHERE id = ?', [receivingAccountId]);
   }
 
   function request(path, options = {}) {
@@ -102,14 +103,14 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
     assert.equal(unauthRes.status, 401);
     assert.equal(unauthRes.body.success, false);
 
-    const cust = customerRepo.create({
+    const cust = await customerRepo.create({
       merchantId,
       name: 'Regular Customer',
       email: 'customer@example.com',
       mobileNumber: '+919988776655'
     });
 
-    const custSession = customerSessionRepo.create({ customerId: cust.id });
+    const custSession = await customerSessionRepo.create({ customerId: cust.id });
     const custToken = custSession.token;
 
     const custRes = await request('/api/v1/admin/dev/simulator/customers', {
@@ -123,9 +124,9 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
   });
 
   test('1, 2, 3. Developer can search existing customer, list sessions, and identify active session', async () => {
-    resetSlot();
+    await resetSlot();
 
-    const cust = customerRepo.create({
+    const cust = await customerRepo.create({
       merchantId,
       name: 'Mohit Developer',
       email: 'mohit.dev@example.com',
@@ -183,7 +184,7 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
   });
 
   test('6. Active Session Requirement: terminal sessions (CANCELLED, EXPIRED, SUCCESS) reject injection with SESSION NO LONGER ACTIVE', async () => {
-    resetSlot();
+    await resetSlot();
     await enableTestMode();
 
     const payRes = await request('/api/v1/payments', {
@@ -196,7 +197,7 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
     });
     const sessId = payRes.body.paymentId;
 
-    testDb.execute("UPDATE payment_sessions SET status = 'CANCELLED' WHERE id = ?", [sessId]);
+    await testDb.execute("UPDATE payment_sessions SET status = 'CANCELLED' WHERE id = ?", [sessId]);
 
     const res = await request('/api/v1/admin/dev/simulator/inject', {
       method: 'POST',
@@ -379,7 +380,7 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
   });
 
   test('23. Wrong amount is rejected by REAL Stage 4', async () => {
-    resetSlot();
+    await resetSlot();
     await enableTestMode();
 
     const payRes = await request('/api/v1/payments', {
@@ -409,7 +410,7 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
   });
 
   test('24. Message received before session creation is rejected by REAL Stage 4', async () => {
-    resetSlot();
+    await resetSlot();
     await enableTestMode();
 
     const payRes = await request('/api/v1/payments', {
@@ -442,7 +443,7 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
   });
 
   test('25. Message received after session expiry is rejected by REAL Stage 4', async () => {
-    resetSlot();
+    await resetSlot();
     await enableTestMode();
 
     const payRes = await request('/api/v1/payments', {
@@ -475,7 +476,7 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
   });
 
   test('26, 27. Duplicate observation and reference reuse are rejected by REAL Stage 4', async () => {
-    resetSlot();
+    await resetSlot();
     await enableTestMode();
 
     const payRes = await request('/api/v1/payments', {
@@ -504,7 +505,7 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
     assert.equal(res1.status, 200);
     assert.equal(res1.body.status, 'VERIFIED');
 
-    resetSlot();
+    await resetSlot();
     const payRes1B = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -530,7 +531,7 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
     assert.equal(res2.body.failingStage, 4);
     assert.equal(res2.body.reason, 'DUPLICATE_OBSERVATION');
 
-    resetSlot();
+    await resetSlot();
     const payRes2 = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -558,7 +559,7 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
   });
 
   test('28, 29, 30. Valid synthetic observation reaches normal VERIFIED status, updates session, and emits SSE', async () => {
-    resetSlot();
+    await resetSlot();
     await enableTestMode();
 
     const payRes = await request('/api/v1/payments', {
@@ -594,7 +595,7 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
     assert.equal(res.body.stages.stage5.status, 'PASSED');
     assert.equal(res.body.stages.stage6.status, 'ATTRIBUTED');
 
-    const sessionDb = testDb.db.prepare('SELECT status FROM payment_sessions WHERE id = ?').get(sessId);
+    const sessionDb = await testDb.queryOne('SELECT status FROM payment_sessions WHERE id = ?', [sessId]);
     assert.equal(sessionDb.status, 'SUCCESS');
 
     const stateAfter = await request(`/api/v1/checkout/${sessId}/state`);

@@ -12,9 +12,11 @@
 | `HELP_PORTAL_PORT` | `3000` | Host port for the Customer Payment Help Portal |
 | `GMAIL_OBSERVER_PORT` | `6003` | Host port for the Gmail Polling Service & OAuth Callback |
 | `SMS_OBSERVER_PORT` | `6002` | Host port for the Google Messages / SMS Web Automator |
-| `DATABASE_URL` | `postgresql://...` | PostgreSQL connection URL |
-| `USE_SQLITE_FALLBACK` | `true` | When true, uses embedded SQLite if PostgreSQL is unreachable |
-| `SQLITE_DB_PATH` | `./data/youpi_pg.sqlite`| Path to local SQLite database file |
+| `DATABASE_URL` | required | PostgreSQL connection URL (for a hosted database usually ends in `?sslmode=require`). SQLite is no longer supported |
+| `PGSSLMODE` | unset | TLS to the database: `disable`, `require` (encrypt, do not verify the certificate), `verify-ca` / `verify-full` (verify; optional `PGSSLROOTCERT` CA file). A `?sslmode=` in `DATABASE_URL` takes precedence |
+| `DATABASE_POOL_MAX` | `10` | Maximum pooled connections per process |
+| `DATABASE_CONNECT_TIMEOUT_MS` | `10000` | Connection timeout |
+| `YOUPI_AUTO_MIGRATE` | unset | When `true`, services apply pending migrations at startup. Otherwise they only verify that migrations are applied and refuse to start if not (run `npm run migrate`) |
 | `ENCRYPTION_MASTER_KEY` | auto-generated (`64-hex chars` if set) | 256-bit key for encrypting OAuth credentials and device keys |
 | `PAYMENT_ACTIVE_WINDOW_MS` | `300000` | Duration of active payment slot (5 minutes = 300,000ms) |
 | `PAYMENT_PROCESSING_WINDOW_MS` | `30000` | Duration of verification slot (30 seconds = 30,000ms) |

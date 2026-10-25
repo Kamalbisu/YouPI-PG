@@ -59,17 +59,17 @@ export function isObserverRequest(req) {
   return Boolean(presented) && safeEqual(presented, getObserverToken()) && !safeEqual(presented, getAdminToken());
 }
 
-export function isPaymentOwner(req, session, ctx) {
+export async function isPaymentOwner(req, session, ctx) {
   if (isAdminRequest(req)) return true;
   if (hasBearer(req, getObserverToken())) return true;
 
   const presented = req.headers['x-merchant-key'];
   if (!presented || typeof presented !== 'string' || !presented.trim()) return false;
 
-  const merchant = ctx.merchantRepo?.findById ? ctx.merchantRepo.findById(session.merchantId) : null;
+  const merchant = ctx.merchantRepo?.findById ? await ctx.merchantRepo.findById(session.merchantId) : null;
   if (!merchant) return false;
   if (typeof ctx.merchantRepo?.verifyApiKey === 'function') {
-    return ctx.merchantRepo.verifyApiKey(merchant, presented.trim());
+    return await ctx.merchantRepo.verifyApiKey(merchant, presented.trim());
   }
   if (!merchant.webhookSecret) return false;
   return safeEqual(presented.trim(), merchant.webhookSecret);

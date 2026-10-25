@@ -44,12 +44,8 @@ pg_dump -U youpi -d youpi_pg -F c -b -v -f "/var/backups/youpi_pg_$(date +\%Y\%m
 pg_restore -U youpi -d youpi_pg -v "/var/backups/youpi_pg_20260908.dump"
 ```
 
-### SQLite Local Backup
-For embedded/small deployments using SQLite:
-```bash
-# Atomic SQLite Online Backup
-sqlite3 ./data/youpi_pg.sqlite ".backup './data/youpi_pg_backup.sqlite'"
-```
+### Migrations
+`npm run migrate` is idempotent. If a service refuses to start with "not been migrated", run it against the same `DATABASE_URL` (add `PGSSLMODE=require` for most hosted databases). Never edit an already-applied file in `/migrations`; add a new numbered file instead.
 
 ---
 

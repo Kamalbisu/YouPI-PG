@@ -1,4 +1,5 @@
 import { test, describe, before, after } from 'node:test';
+import { createTestDatabase } from '@youpi/db/testing';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -205,15 +206,15 @@ describe('Issue #64 hardening: returnUrl, branding sinks, postMessage, framing',
     let merchantId;
 
     before(async () => {
-      testDb = new Database({ inMemory: true });
+      testDb = await createTestDatabase();
       apiInstance = await startPaymentApi(6194, testDb);
       apiBaseUrl = `http://localhost:${apiInstance.port}`;
-      merchantId = new MerchantRepository(testDb).findAll()[0].id;
+      merchantId = (await new MerchantRepository(testDb).findAll())[0].id;
     });
 
     after(async () => {
       await apiInstance.close();
-      testDb.close();
+      await testDb.destroy();
     });
 
     function post(body) {
@@ -266,7 +267,7 @@ describe('Issue #64 hardening: returnUrl, branding sinks, postMessage, framing',
         returnUrl: '  https://store.test/success  '
       });
       assert.equal(res.status, 201);
-      const stored = new PaymentSessionRepository(testDb).findByOrderId(merchantId, orderId);
+      const stored = await new PaymentSessionRepository(testDb).findByOrderId(merchantId, orderId);
       assert.ok(stored, 'session should exist');
       assert.equal(stored.returnUrl, 'https://store.test/success');
     });

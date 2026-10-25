@@ -22,6 +22,12 @@ export class PaymentVerificationPipeline {
   }
 
   process(input) {
+    const run = (this._queue || Promise.resolve()).then(() => this._processUnlocked(input));
+    this._queue = run.catch(() => {});
+    return run;
+  }
+
+  async _processUnlocked(input) {
     const isTest = Boolean(input.isTest);
     const isProductionMode = process.env.NODE_ENV === 'production' || process.env.YOUPI_MODE === 'production';
     const testModeActive = Boolean(input.testModeActive);
@@ -136,21 +142,21 @@ export class PaymentVerificationPipeline {
     const observedVpa = ((rawText.match(/[a-zA-Z0-9._-]{2,64}@[a-zA-Z0-9._-]{2,32}/) || [])[0] || '').toLowerCase() || null;
 
     if (input.paymentSessionId) {
-      session = this.sessionRepo.findById(input.paymentSessionId);
+      session = await this.sessionRepo.findById(input.paymentSessionId);
     } else if (input.receivingAccountId) {
-      session = this.sessionRepo.findCurrentActiveOrProcessing(input.receivingAccountId);
+      session = await this.sessionRepo.findCurrentActiveOrProcessing(input.receivingAccountId);
     }
 
     if (!session) {
       if (input.receivingAccountId) {
-        const row = this.db.queryOne(
+        const row = await this.db.queryOne(
           `SELECT * FROM payment_sessions WHERE receiving_account_id = ? AND status IN ('ACTIVE', 'PROCESSING') ORDER BY created_at DESC LIMIT 1`,
           [input.receivingAccountId]
         );
         if (row) session = this.sessionRepo.mapRow(row);
       }
       if (!session && observedVpa) {
-        const row = this.db.queryOne(`
+        const row = await this.db.queryOne(`
           SELECT ps.* FROM payment_sessions ps
           JOIN payment_receiving_accounts ra ON ps.receiving_account_id = ra.id
           WHERE LOWER(ra.upi_id) = ? AND ps.status IN ('ACTIVE', 'PROCESSING')
@@ -160,7 +166,7 @@ export class PaymentVerificationPipeline {
       }
       if (!session && input.receivingAccountId) {
         const sixtySecsAgo = new Date(Date.now() - 60000).toISOString();
-        const row = this.db.queryOne(
+        const row = await this.db.queryOne(
           `SELECT * FROM payment_sessions WHERE receiving_account_id = ? AND status = 'SUCCESS' AND completed_at >= ? ORDER BY completed_at DESC LIMIT 1`,
           [input.receivingAccountId, sixtySecsAgo]
         );
@@ -170,11 +176,11 @@ export class PaymentVerificationPipeline {
 
     let customer = null;
     if (session?.customerId && this.customerRepo) {
-      customer = this.customerRepo.findById(session.customerId);
+      customer = await this.customerRepo.findById(session.customerId);
     } else if (input.customerId && this.customerRepo) {
-      customer = this.customerRepo.findById(input.customerId);
+      customer = await this.customerRepo.findById(input.customerId);
     } else if (sender && this.customerRepo) {
-      customer = this.customerRepo.findByIdentifier(sender);
+      customer = await this.customerRepo.findByIdentifier(sender);
     }
 
     let isAttributableToCustomer = false;
@@ -498,7 +504,7 @@ export class PaymentVerificationPipeline {
     if (!session && parsedData?.amountPaise) {
       const scopeByVpa = observedVpa || (parsedData.vpa ? String(parsedData.vpa).toLowerCase() : null);
       if (scopeByVpa) {
-        const matchRow = this.db.queryOne(`
+        const matchRow = await this.db.queryOne(`
           SELECT ps.* FROM payment_sessions ps
           JOIN payment_receiving_accounts ra ON ps.receiving_account_id = ra.id
           WHERE ps.status IN ('ACTIVE', 'PROCESSING')
@@ -657,7 +663,7 @@ export class PaymentVerificationPipeline {
       observedAt: receivedAt
     });
 
-    const existingObs = this.obsRepo.findByFingerprint(fingerprint);
+    const existingObs = await this.obsRepo.findByFingerprint(fingerprint);
     if (existingObs && existingObs.source === observerSourceEnum) {
       stage4 = {
         stage: 4,
@@ -679,7 +685,7 @@ export class PaymentVerificationPipeline {
       });
     }
 
-    const priorUsedSession = this.db.queryOne(`
+    const priorUsedSession = await this.db.queryOne(`
       SELECT ps.id, ps.order_id
       FROM payment_sessions ps
       JOIN payment_observations po ON ps.attributed_observation_id = po.id
@@ -820,7 +826,7 @@ export class PaymentVerificationPipeline {
       const isExplicitlySuppressed = Boolean(input.suppressBan);
 
       if (this.customerRepo && typeof this.customerRepo.createSecurityEvent === 'function') {
-        this.customerRepo.createSecurityEvent({
+        await this.customerRepo.createSecurityEvent({
           merchantId: session.merchantId,
           customerId: customer.id,
           paymentSessionId: session.id,
@@ -861,7 +867,7 @@ export class PaymentVerificationPipeline {
         };
 
         if (this.auditRepo) {
-          this.auditRepo.log({
+          await this.auditRepo.log({
             merchantId: session.merchantId,
             entityType: 'PAYMENT_SESSION',
             entityId: session.id,
@@ -872,7 +878,7 @@ export class PaymentVerificationPipeline {
         }
       } else {
         autoBanApplied = true;
-        this.customerRepo.banCustomer(customer.id, 'FRAUDULENT_PAYMENT_INJECTION', { lastDevice: evidence.deviceInfo });
+        await this.customerRepo.banCustomer(customer.id, 'FRAUDULENT_PAYMENT_INJECTION', { lastDevice: evidence.deviceInfo });
         securityDiagnostic = 'FRAUDULENT_PAYMENT_INJECTION detected. Associated customer identity has been automatically BANNED by Security Engine.';
 
         stage5 = {
@@ -888,7 +894,7 @@ export class PaymentVerificationPipeline {
         };
 
         if (this.auditRepo) {
-          this.auditRepo.log({
+          await this.auditRepo.log({
             merchantId: session.merchantId,
             entityType: 'CUSTOMER',
             entityId: customer.id,
@@ -995,7 +1001,7 @@ export class PaymentVerificationPipeline {
     });
 
     const attributionResult = this.attributionEngine
-      ? this.attributionEngine.processObservation(normalized)
+      ? await this.attributionEngine.processObservation(normalized)
       : {
           attributed: true,
           outcomeStatus: 'VERIFIED',
@@ -1023,7 +1029,7 @@ export class PaymentVerificationPipeline {
 
     const finalStatus = attributionResult.attributed ? 'VERIFIED' : 'UNRESOLVED';
 
-    const updatedSession = this.sessionRepo.findById(session.id);
+    const updatedSession = await this.sessionRepo.findById(session.id);
 
     return buildResult({
       finalStatus,

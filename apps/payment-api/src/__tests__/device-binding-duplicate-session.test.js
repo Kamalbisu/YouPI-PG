@@ -1,4 +1,5 @@
 import { test, describe, before, after } from 'node:test';
+import { createTestDatabase } from '@youpi/db/testing';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import crypto from 'node:crypto';
@@ -19,7 +20,7 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
   const receivingAccountId = '00000000-0000-0000-0000-000000000002';
 
   before(async () => {
-    testDb = new Database({ inMemory: true });
+    testDb = await createTestDatabase();
     merchantRepo = new MerchantRepository(testDb);
     sessionRepo = new PaymentSessionRepository(testDb);
     customerRepo = new CustomerRepository(testDb);
@@ -31,7 +32,7 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
 
   after(async () => {
     if (apiInstance) await apiInstance.close();
-    if (testDb) testDb.close();
+    if (testDb) await testDb.destroy();
   });
 
   function request(path, options = {}) {
@@ -124,12 +125,12 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     assert.equal(stateRes1.body.paymentId, sessionId);
     assert.equal(stateRes1.body.deviceId, dev1Id);
 
-    const row = testDb.db.prepare('SELECT device_id FROM payment_sessions WHERE id = ?').get(sessionId);
+    const row = await testDb.queryOne('SELECT device_id FROM payment_sessions WHERE id = ?', [sessionId]);
     assert.equal(row.device_id, dev1Id);
   });
 
   test('3. Same bound device can perform repeated requests without conflict', async () => {
-    const row = testDb.db.prepare('SELECT id, device_id FROM payment_sessions WHERE order_id = ?').get('ORDER_DEV_001');
+    const row = await testDb.queryOne('SELECT id, device_id FROM payment_sessions WHERE order_id = ?', ['ORDER_DEV_001']);
     const sessionId = row.id;
     const dev1Id = row.device_id;
 
@@ -153,7 +154,7 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
   });
 
   test('4. Different device (dev-2) attempting to access session triggers DUPLICATE_SESSION_DETECTED (HTTP 409)', async () => {
-    const row = testDb.db.prepare('SELECT id, device_id FROM payment_sessions WHERE order_id = ?').get('ORDER_DEV_001');
+    const row = await testDb.queryOne('SELECT id, device_id FROM payment_sessions WHERE order_id = ?', ['ORDER_DEV_001']);
     const sessionId = row.id;
 
     const regRes2 = await request('/api/v1/devices/register', {
@@ -180,7 +181,7 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
   });
 
   test('5. Non-bound device (dev-2) is blocked from taking payment actions', async () => {
-    const row = testDb.db.prepare('SELECT id, device_id FROM payment_sessions WHERE order_id = ?').get('ORDER_DEV_001');
+    const row = await testDb.queryOne('SELECT id, device_id FROM payment_sessions WHERE order_id = ?', ['ORDER_DEV_001']);
     const sessionId = row.id;
 
     const resMethod = await request(`/api/v1/checkout/${sessionId}/select-method`, {
@@ -200,7 +201,7 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
   });
 
   test('6. "End Session & Start New Payment" terminates the old session and creates a fresh session bound to the requesting device', async () => {
-    const row = testDb.db.prepare('SELECT id, device_id FROM payment_sessions WHERE order_id = ?').get('ORDER_DEV_001');
+    const row = await testDb.queryOne('SELECT id, device_id FROM payment_sessions WHERE order_id = ?', ['ORDER_DEV_001']);
     const oldSessionId = row.id;
 
     const regNew = await request('/api/v1/devices/register', {
@@ -230,10 +231,10 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     assert.notEqual(restartRes.body.newSessionId, oldSessionId);
     assert.ok(restartRes.body.checkoutUrl.includes(restartRes.body.newSessionId));
 
-    const oldSessionDb = testDb.db.prepare('SELECT status FROM payment_sessions WHERE id = ?').get(oldSessionId);
+    const oldSessionDb = await testDb.queryOne('SELECT status FROM payment_sessions WHERE id = ?', [oldSessionId]);
     assert.equal(oldSessionDb.status, 'CANCELLED');
 
-    const newSessionDb = testDb.db.prepare('SELECT id, status, device_id, amount_paise, order_id FROM payment_sessions WHERE id = ?').get(restartRes.body.newSessionId);
+    const newSessionDb = await testDb.queryOne('SELECT id, status, device_id, amount_paise, order_id FROM payment_sessions WHERE id = ?', [restartRes.body.newSessionId]);
     assert.ok(newSessionDb);
     assert.equal(newSessionDb.device_id, newDevId);
     assert.equal(newSessionDb.amount_paise, 49900);
@@ -249,13 +250,13 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
   });
 
   test('7. If a customer binds to a session, another session for the same customer triggers active session conflict', async () => {
-    const cust = customerRepo.create({
+    const cust = await customerRepo.create({
       merchantId,
       name: 'Concurrent User',
       email: 'concurrent@example.com',
       mobileNumber: '+919999888877'
     });
-    const custSess = customerSessionRepo.create({ customerId: cust.id });
+    const custSess = await customerSessionRepo.create({ customerId: cust.id });
 
     const s1Res = await request('/api/v1/payments', {
       method: 'POST',
@@ -298,8 +299,8 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
   });
 
   test('8. Prompt 64 Regression: Device A creates ACTIVE Session A, Device B attempts access, Device B chooses "End Session & Start New Payment" -> Session A becomes terminal, slot is released, and Device B\'s new Session B becomes ACTIVE immediately (not queued behind Session A)', async () => {
-    testDb.execute("UPDATE payment_sessions SET status = 'CANCELLED' WHERE status IN ('ACTIVE', 'PROCESSING', 'QUEUED')");
-    testDb.execute("UPDATE payment_receiving_accounts SET is_slot_busy = 0, current_active_session_id = NULL");
+    await testDb.execute("UPDATE payment_sessions SET status = 'CANCELLED' WHERE status IN ('ACTIVE', 'PROCESSING', 'QUEUED')");
+    await testDb.execute("UPDATE payment_receiving_accounts SET is_slot_busy = false, current_active_session_id = NULL");
 
     const regLaptop = await request('/api/v1/devices/register', {
       method: 'POST',
@@ -314,13 +315,13 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     const devMobileId = regMobile.body.deviceId;
     const devMobileToken = regMobile.body.deviceToken;
 
-    const custP64 = customerRepo.create({
+    const custP64 = await customerRepo.create({
       merchantId,
       name: 'Mohit Laptop User',
       email: 'mohit.p64@example.com',
       mobileNumber: '+918796266491'
     });
-    const custP64Sess = customerSessionRepo.create({ customerId: custP64.id });
+    const custP64Sess = await customerSessionRepo.create({ customerId: custP64.id });
 
     const createRes = await request('/api/v1/payments', {
       method: 'POST',
@@ -352,13 +353,13 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     });
     assert.equal(bindResA.status, 200);
 
-    const sessionADbBefore = testDb.db.prepare('SELECT id, status, queue_position, device_id, receiving_account_id FROM payment_sessions WHERE id = ?').get(sessionAId);
+    const sessionADbBefore = await testDb.queryOne('SELECT id, status, queue_position, device_id, receiving_account_id FROM payment_sessions WHERE id = ?', [sessionAId]);
     assert.equal(sessionADbBefore.status, 'ACTIVE');
     assert.equal(sessionADbBefore.queue_position, 0);
     assert.equal(sessionADbBefore.device_id, devLaptopId);
 
-    const receivingAccBefore = testDb.db.prepare('SELECT is_slot_busy, current_active_session_id FROM payment_receiving_accounts WHERE id = ?').get(sessionADbBefore.receiving_account_id);
-    assert.equal(receivingAccBefore.is_slot_busy, 1);
+    const receivingAccBefore = await testDb.queryOne('SELECT is_slot_busy, current_active_session_id FROM payment_receiving_accounts WHERE id = ?', [sessionADbBefore.receiving_account_id]);
+    assert.equal(receivingAccBefore.is_slot_busy, true);
     assert.equal(receivingAccBefore.current_active_session_id, sessionAId);
 
     const accessResB = await request(`/api/v1/checkout/${sessionAId}/state`, {
@@ -394,15 +395,15 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     assert.equal(restartRes.body.status, 'ACTIVE', 'New session on Device B must become ACTIVE immediately');
     assert.equal(restartRes.body.queuePosition, 0, 'New session must have queuePosition 0, not queued');
 
-    const sessionADbAfter = testDb.db.prepare('SELECT status, completed_at FROM payment_sessions WHERE id = ?').get(sessionAId);
+    const sessionADbAfter = await testDb.queryOne('SELECT status, completed_at FROM payment_sessions WHERE id = ?', [sessionAId]);
     assert.equal(sessionADbAfter.status, 'CANCELLED');
     assert.ok(sessionADbAfter.completed_at);
 
-    const receivingAccAfter = testDb.db.prepare('SELECT is_slot_busy, current_active_session_id FROM payment_receiving_accounts WHERE id = ?').get(sessionADbBefore.receiving_account_id);
-    assert.equal(receivingAccAfter.is_slot_busy, 1);
+    const receivingAccAfter = await testDb.queryOne('SELECT is_slot_busy, current_active_session_id FROM payment_receiving_accounts WHERE id = ?', [sessionADbBefore.receiving_account_id]);
+    assert.equal(receivingAccAfter.is_slot_busy, true);
     assert.equal(receivingAccAfter.current_active_session_id, restartRes.body.newSessionId);
 
-    const sessionBDb = testDb.db.prepare('SELECT id, status, queue_position, device_id FROM payment_sessions WHERE id = ?').get(restartRes.body.newSessionId);
+    const sessionBDb = await testDb.queryOne('SELECT id, status, queue_position, device_id FROM payment_sessions WHERE id = ?', [restartRes.body.newSessionId]);
     assert.equal(sessionBDb.status, 'ACTIVE');
     assert.equal(sessionBDb.queue_position, 0);
     assert.equal(sessionBDb.device_id, devMobileId);
@@ -420,8 +421,8 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
   });
 
   test('9. Prompt 64 Queue Invariant: When Session A is terminated, existing queued Customer C is promoted to ACTIVE, and new Session B is queued at position 1', async () => {
-    testDb.execute("UPDATE payment_sessions SET status = 'CANCELLED' WHERE status IN ('ACTIVE', 'PROCESSING', 'QUEUED')");
-    testDb.execute("UPDATE payment_receiving_accounts SET is_slot_busy = 0, current_active_session_id = NULL");
+    await testDb.execute("UPDATE payment_sessions SET status = 'CANCELLED' WHERE status IN ('ACTIVE', 'PROCESSING', 'QUEUED')");
+    await testDb.execute("UPDATE payment_receiving_accounts SET is_slot_busy = false, current_active_session_id = NULL");
 
     const regL = await request('/api/v1/devices/register', {
       method: 'POST',
@@ -460,7 +461,7 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     });
     const sAId = sARes.body.paymentId;
 
-    const sADb = testDb.db.prepare('SELECT status, receiving_account_id FROM payment_sessions WHERE id = ?').get(sAId);
+    const sADb = await testDb.queryOne('SELECT status, receiving_account_id FROM payment_sessions WHERE id = ?', [sAId]);
     assert.equal(sADb.status, 'ACTIVE');
 
     const sCRes = await request('/api/v1/payments', {
@@ -479,7 +480,7 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
       }
     });
     const sCId = sCRes.body.paymentId;
-    const sCDb = testDb.db.prepare('SELECT status, queue_position FROM payment_sessions WHERE id = ?').get(sCId);
+    const sCDb = await testDb.queryOne('SELECT status, queue_position FROM payment_sessions WHERE id = ?', [sCId]);
     assert.equal(sCDb.status, 'QUEUED');
     assert.equal(sCDb.queue_position, 1);
 
@@ -499,29 +500,29 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     assert.equal(restartRes.status, 201);
     assert.equal(restartRes.body.success, true);
 
-    const sADbAfter = testDb.db.prepare('SELECT status FROM payment_sessions WHERE id = ?').get(sAId);
+    const sADbAfter = await testDb.queryOne('SELECT status FROM payment_sessions WHERE id = ?', [sAId]);
     assert.equal(sADbAfter.status, 'CANCELLED');
 
-    const sCDbAfter = testDb.db.prepare('SELECT status, queue_position FROM payment_sessions WHERE id = ?').get(sCId);
+    const sCDbAfter = await testDb.queryOne('SELECT status, queue_position FROM payment_sessions WHERE id = ?', [sCId]);
     assert.equal(sCDbAfter.status, 'ACTIVE');
     assert.equal(sCDbAfter.queue_position, 0);
 
-    const receivingAcc = testDb.db.prepare('SELECT is_slot_busy, current_active_session_id FROM payment_receiving_accounts WHERE id = ?').get(sADb.receiving_account_id);
-    assert.equal(receivingAcc.is_slot_busy, 1);
+    const receivingAcc = await testDb.queryOne('SELECT is_slot_busy, current_active_session_id FROM payment_receiving_accounts WHERE id = ?', [sADb.receiving_account_id]);
+    assert.equal(receivingAcc.is_slot_busy, true);
     assert.equal(receivingAcc.current_active_session_id, sCId);
 
     assert.equal(restartRes.body.status, 'QUEUED');
     assert.equal(restartRes.body.queuePosition, 1);
 
-    const sBDb = testDb.db.prepare('SELECT status, queue_position, device_id FROM payment_sessions WHERE id = ?').get(restartRes.body.newSessionId);
+    const sBDb = await testDb.queryOne('SELECT status, queue_position, device_id FROM payment_sessions WHERE id = ?', [restartRes.body.newSessionId]);
     assert.equal(sBDb.status, 'QUEUED');
     assert.equal(sBDb.queue_position, 1);
     assert.equal(sBDb.device_id, devMId);
   });
 
   test('10. When duplicate payment session is detected and user starts new payment, admin queue receives info about ongoing session', async () => {
-    testDb.execute("UPDATE payment_sessions SET status = 'CANCELLED' WHERE status IN ('ACTIVE', 'PROCESSING', 'QUEUED')");
-    testDb.execute("UPDATE payment_receiving_accounts SET is_slot_busy = 0, current_active_session_id = NULL");
+    await testDb.execute("UPDATE payment_sessions SET status = 'CANCELLED' WHERE status IN ('ACTIVE', 'PROCESSING', 'QUEUED')");
+    await testDb.execute("UPDATE payment_receiving_accounts SET is_slot_busy = false, current_active_session_id = NULL");
 
     const regA = await request('/api/v1/devices/register', {
       method: 'POST',
@@ -606,7 +607,7 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
       body: { orderId: 'ORDER_ISSUE8_SPOOF', amount: 100.00 }
     });
     assert.equal(spoofPay.status, 401);
-    const adhocRow = testDb.db.prepare('SELECT id FROM devices WHERE id = ?').get('dev_unregistered_spoof_123');
+    const adhocRow = await testDb.queryOne('SELECT id FROM devices WHERE id = ?', ['dev_unregistered_spoof_123']);
     assert.equal(adhocRow, undefined, 'Must not auto-create adhoc_ device row');
 
     const missingTokenPay = await request('/api/v1/payments', {
@@ -756,8 +757,8 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
   });
 
   test('13. Issue #8 Security: bind-customer rejects bare customerId, and cancel / retry / end-and-restart reject PROCESSING sessions and unauthenticated body.customerId', async () => {
-    testDb.execute("UPDATE payment_sessions SET status = 'CANCELLED' WHERE status IN ('ACTIVE', 'PROCESSING', 'QUEUED')");
-    testDb.execute("UPDATE payment_receiving_accounts SET is_slot_busy = 0, current_active_session_id = NULL");
+    await testDb.execute("UPDATE payment_sessions SET status = 'CANCELLED' WHERE status IN ('ACTIVE', 'PROCESSING', 'QUEUED')");
+    await testDb.execute("UPDATE payment_receiving_accounts SET is_slot_busy = false, current_active_session_id = NULL");
 
     const regDev = await request('/api/v1/devices/register', {
       method: 'POST',
@@ -766,7 +767,7 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     const devId = regDev.body.deviceId;
     const devToken = regDev.body.deviceToken;
 
-    const cust = customerRepo.create({
+    const cust = await customerRepo.create({
       merchantId,
       name: 'Protected Customer',
       email: 'protected.issue8@example.com',
@@ -817,10 +818,10 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     assert.equal(restartProc.status, 409);
     assert.equal(restartProc.body.error, 'SESSION_PROCESSING');
 
-    const dbRow = testDb.db.prepare('SELECT status FROM payment_sessions WHERE id = ?').get(sid);
+    const dbRow = await testDb.queryOne('SELECT status FROM payment_sessions WHERE id = ?', [sid]);
     assert.equal(dbRow.status, 'PROCESSING');
 
-    testDb.execute("UPDATE payment_sessions SET status = 'ACTIVE' WHERE id = ?", [sid]);
+    await testDb.execute("UPDATE payment_sessions SET status = 'ACTIVE' WHERE id = ?", [sid]);
     const restartBareCust = await request(`/api/v1/checkout/${sid}/end-and-restart-payment`, {
       method: 'POST',
       headers: { 'x-device-id': devId, 'x-device-token': devToken },

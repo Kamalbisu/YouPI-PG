@@ -1,4 +1,5 @@
 import { test, describe, before, after } from 'node:test';
+import { createTestDatabase } from '@youpi/db/testing';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import net from 'node:net';
@@ -27,17 +28,17 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
   let merchantWebhookUrl;
 
   before(async () => {
-    testDb = new Database({ inMemory: true });
+    testDb = await createTestDatabase();
     serverInstance = await startServer(6199, testDb);
     baseUrl = `http://localhost:${serverInstance.port}`;
-    const seededMerchant = new MerchantRepository(testDb).findAll()[0];
+    const seededMerchant = (await new MerchantRepository(testDb).findAll())[0];
     merchantSecret = seededMerchant.webhookSecret;
     merchantWebhookUrl = seededMerchant.webhookUrl;
   });
 
   after(async () => {
     await serverInstance.close();
-    testDb.close();
+    await testDb.destroy();
   });
 
   function request(path, options = {}) {
@@ -238,9 +239,9 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
   });
 
   test('Custom UPI ID persistence & dynamic QR injection', async () => {
-    const prevActive = serverInstance.app.context.sessionRepo.findCurrentActiveOrProcessing('00000000-0000-0000-0000-000000000002');
+    const prevActive = await serverInstance.app.context.sessionRepo.findCurrentActiveOrProcessing('00000000-0000-0000-0000-000000000002');
     if (prevActive) {
-      serverInstance.app.context.sessionRepo.transitionToTerminal(prevActive.id, PaymentStatus.CANCELLED);
+      await serverInstance.app.context.sessionRepo.transitionToTerminal(prevActive.id, PaymentStatus.CANCELLED);
     }
 
     const upiUpdateRes = await request('/api/v1/admin/upi-settings', {
@@ -384,9 +385,9 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
   });
 
   test('Payment timer does not start until customer logs in or signs up', async () => {
-    const prevActive = serverInstance.app.context.sessionRepo.findCurrentActiveOrProcessing('00000000-0000-0000-0000-000000000002');
+    const prevActive = await serverInstance.app.context.sessionRepo.findCurrentActiveOrProcessing('00000000-0000-0000-0000-000000000002');
     if (prevActive) {
-      serverInstance.app.context.sessionRepo.transitionToTerminal(prevActive.id, PaymentStatus.CANCELLED);
+      await serverInstance.app.context.sessionRepo.transitionToTerminal(prevActive.id, PaymentStatus.CANCELLED);
     }
 
     const createRes = await request('/api/v1/payments', {
@@ -433,14 +434,14 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
   });
 
   test('Queue Sync Invariant: When Session A expires, queued Session B is immediately promoted to ACTIVE with armed timer', async () => {
-    testDb.execute(`
+    await testDb.execute(`
       UPDATE payment_sessions
       SET status = 'CANCELLED'
       WHERE receiving_account_id = ? AND status IN ('ACTIVE', 'PROCESSING', 'QUEUED')
     `, ['00000000-0000-0000-0000-000000000002']);
-    testDb.execute(`
+    await testDb.execute(`
       UPDATE payment_receiving_accounts
-      SET is_slot_busy = 0, current_active_session_id = NULL
+      SET is_slot_busy = false, current_active_session_id = NULL
       WHERE id = ?
     `, ['00000000-0000-0000-0000-000000000002']);
 
@@ -466,7 +467,7 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
     assert.equal(payB.body.status, PaymentStatus.QUEUED);
     assert.equal(payB.body.queuePosition, 1);
 
-    testDb.execute(`UPDATE payment_sessions SET expires_at = ? WHERE id = ?`, [new Date(Date.now() - 1000).toISOString(), payA.body.paymentId]);
+    await testDb.execute(`UPDATE payment_sessions SET expires_at = ? WHERE id = ?`, [new Date(Date.now() - 1000).toISOString(), payA.body.paymentId]);
     const expireRes = await request(`/api/v1/checkout/${payA.body.paymentId}/expire`, {
       method: 'POST'
     });
@@ -483,14 +484,14 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
   });
 
   test('2-Level Payment Verification Engine: Upgrades verification tier from L1 (SMS) to L2 (Dual: SMS + Gmail)', async () => {
-    testDb.execute(`
+    await testDb.execute(`
       UPDATE payment_sessions
       SET status = 'CANCELLED'
       WHERE receiving_account_id = ? AND status IN ('ACTIVE', 'PROCESSING', 'QUEUED')
     `, ['00000000-0000-0000-0000-000000000002']);
-    testDb.execute(`
+    await testDb.execute(`
       UPDATE payment_receiving_accounts
-      SET is_slot_busy = 0, current_active_session_id = NULL
+      SET is_slot_busy = false, current_active_session_id = NULL
       WHERE id = ?
     `, ['00000000-0000-0000-0000-000000000002']);
 
@@ -693,7 +694,7 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
     const receiverUrl = `http://localhost:${receiverPort}/api/webhook`;
     const customSecret = 'sec_wh_retry_test_key_9911';
 
-    const retryDb = new Database({ inMemory: true });
+    const retryDb = await createTestDatabase();
     const previousInterval = process.env.WEBHOOK_RETRY_INTERVAL_MS;
     process.env.WEBHOOK_RETRY_INTERVAL_MS = '1000';
     let retryServer = null;
@@ -734,7 +735,7 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
       let failedRow = null;
       const rowDeadline = Date.now() + 5000;
       while (Date.now() < rowDeadline) {
-        failedRow = retryDb.queryOne(
+        failedRow = await retryDb.queryOne(
           'SELECT id, attempt_count, is_successful, next_retry_at FROM webhook_deliveries WHERE payment_id = ?',
           [paymentId]
         );
@@ -742,11 +743,11 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
         await new Promise(resolve => setTimeout(resolve, 50));
       }
       assert.ok(failedRow, 'the failed delivery was not recorded');
-      assert.equal(failedRow.is_successful, 0);
+      assert.equal(failedRow.is_successful, false);
       assert.equal(failedRow.attempt_count, 1);
       assert.ok(failedRow.next_retry_at, 'a failed delivery must be scheduled for a retry');
 
-      retryDb.execute(
+      await retryDb.execute(
         'UPDATE webhook_deliveries SET next_retry_at = ? WHERE id = ?',
         [new Date(Date.now() - 1000).toISOString(), failedRow.id]
       );
@@ -765,16 +766,16 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
         'the stored payload is re-signed, not re-built'
       );
 
-      const settledRow = retryDb.queryOne(
+      const settledRow = await retryDb.queryOne(
         'SELECT attempt_count, is_successful, response_status FROM webhook_deliveries WHERE id = ?',
         [failedRow.id]
       );
       assert.equal(settledRow.attempt_count, 2);
-      assert.equal(settledRow.is_successful, 1);
+      assert.equal(settledRow.is_successful, true);
       assert.equal(settledRow.response_status, 200);
     } finally {
       if (retryServer) await retryServer.close();
-      retryDb.close();
+      await retryDb.destroy();
       if (previousInterval === undefined) {
         delete process.env.WEBHOOK_RETRY_INTERVAL_MS;
       } else {
@@ -785,14 +786,14 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
   });
 
   test('Auto-detection in ACTIVE state without Payment Done click: immediate SUCCESS, L1 to L2 upgrade, exactly 1 webhook', async () => {
-    testDb.execute(`
+    await testDb.execute(`
       UPDATE payment_sessions
       SET status = 'CANCELLED'
       WHERE receiving_account_id = ? AND status IN ('ACTIVE', 'PROCESSING', 'QUEUED')
     `, ['00000000-0000-0000-0000-000000000002']);
-    testDb.execute(`
+    await testDb.execute(`
       UPDATE payment_receiving_accounts
-      SET is_slot_busy = 0, current_active_session_id = NULL
+      SET is_slot_busy = false, current_active_session_id = NULL
       WHERE id = ?
     `, ['00000000-0000-0000-0000-000000000002']);
 
@@ -819,7 +820,7 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
           webhookSecret: 'secret_autodetect_test_9988'
         }
       });
-      merchantSecret = new MerchantRepository(testDb).findAll()[0].webhookSecret;
+      merchantSecret = (await new MerchantRepository(testDb).findAll())[0].webhookSecret;
 
       const payRes = await request('/api/v1/payments', {
         method: 'POST',
@@ -892,10 +893,10 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
 
   describe('Terminal Payment State HTTP Route Protections (Issue #4)', () => {
     test('POST /api/v1/checkout/:id/retry-new-payment rejects terminal sessions with HTTP 400', async () => {
-      const prevActive = serverInstance.app.context.sessionRepo.findCurrentActiveOrProcessing('00000000-0000-0000-0000-000000000002');
+      const prevActive = await serverInstance.app.context.sessionRepo.findCurrentActiveOrProcessing('00000000-0000-0000-0000-000000000002');
       if (prevActive) {
         const terminalStatus = prevActive.status === PaymentStatus.PROCESSING ? PaymentStatus.FAILED : PaymentStatus.CANCELLED;
-        serverInstance.app.context.sessionRepo.transitionToTerminal(prevActive.id, terminalStatus);
+        await serverInstance.app.context.sessionRepo.transitionToTerminal(prevActive.id, terminalStatus);
       }
 
       const createRes = await request('/api/v1/payments', {
@@ -923,10 +924,10 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
     });
 
     test('POST /api/v1/checkout/:id/select-method rejects PROCESSING sessions with HTTP 400', async () => {
-      const prevActive = serverInstance.app.context.sessionRepo.findCurrentActiveOrProcessing('00000000-0000-0000-0000-000000000002');
+      const prevActive = await serverInstance.app.context.sessionRepo.findCurrentActiveOrProcessing('00000000-0000-0000-0000-000000000002');
       if (prevActive) {
         const terminalStatus = prevActive.status === PaymentStatus.PROCESSING ? PaymentStatus.FAILED : PaymentStatus.CANCELLED;
-        serverInstance.app.context.sessionRepo.transitionToTerminal(prevActive.id, terminalStatus);
+        await serverInstance.app.context.sessionRepo.transitionToTerminal(prevActive.id, terminalStatus);
       }
 
       const createRes = await request('/api/v1/payments', {
@@ -957,10 +958,10 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
     });
 
     test('POST /api/v1/checkout/:id/confirm-cod rejects PROCESSING sessions with HTTP 400', async () => {
-      const prevActive = serverInstance.app.context.sessionRepo.findCurrentActiveOrProcessing('00000000-0000-0000-0000-000000000002');
+      const prevActive = await serverInstance.app.context.sessionRepo.findCurrentActiveOrProcessing('00000000-0000-0000-0000-000000000002');
       if (prevActive) {
         const terminalStatus = prevActive.status === PaymentStatus.PROCESSING ? PaymentStatus.FAILED : PaymentStatus.CANCELLED;
-        serverInstance.app.context.sessionRepo.transitionToTerminal(prevActive.id, terminalStatus);
+        await serverInstance.app.context.sessionRepo.transitionToTerminal(prevActive.id, terminalStatus);
       }
 
       const createRes = await request('/api/v1/payments', {
@@ -990,10 +991,10 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
     });
 
     test('POST /api/v1/checkout/:id/confirm-cod rejects terminal sessions with HTTP 400', async () => {
-      const prevActive = serverInstance.app.context.sessionRepo.findCurrentActiveOrProcessing('00000000-0000-0000-0000-000000000002');
+      const prevActive = await serverInstance.app.context.sessionRepo.findCurrentActiveOrProcessing('00000000-0000-0000-0000-000000000002');
       if (prevActive) {
         const terminalStatus = prevActive.status === PaymentStatus.PROCESSING ? PaymentStatus.FAILED : PaymentStatus.CANCELLED;
-        serverInstance.app.context.sessionRepo.transitionToTerminal(prevActive.id, terminalStatus);
+        await serverInstance.app.context.sessionRepo.transitionToTerminal(prevActive.id, terminalStatus);
       }
 
       const createRes = await request('/api/v1/payments', {

@@ -39,7 +39,7 @@ export class MerchantRepository {
     this.db = db;
   }
 
-  create(data) {
+  async create(data) {
     const id = data.id || crypto.randomUUID();
     const branding = typeof data.branding === 'object'
       ? serializeBranding(data.branding)
@@ -53,7 +53,7 @@ export class MerchantRepository {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
-    this.db.execute(sql, [
+    await this.db.execute(sql, [
       id,
       data.businessName,
       data.slug,
@@ -67,37 +67,37 @@ export class MerchantRepository {
       now
     ]);
 
-    return this.findById(id);
+    return await this.findById(id);
   }
 
-  findById(id) {
-    const row = this.db.queryOne('SELECT * FROM merchants WHERE id = ?', [id]);
+  async findById(id) {
+    const row = await this.db.queryOne('SELECT * FROM merchants WHERE id = ?', [id]);
     if (!row) return null;
     return this.mapRow(row);
   }
 
-  findBySlug(slug) {
-    const row = this.db.queryOne('SELECT * FROM merchants WHERE slug = ?', [slug]);
+  async findBySlug(slug) {
+    const row = await this.db.queryOne('SELECT * FROM merchants WHERE slug = ?', [slug]);
     if (!row) return null;
     return this.mapRow(row);
   }
 
-  getDefault() {
-    const canonical = this.findById('00000000-0000-0000-0000-000000000001');
+  async getDefault() {
+    const canonical = await this.findById('00000000-0000-0000-0000-000000000001');
     if (canonical) return canonical;
-    const all = this.findAll();
+    const all = await this.findAll();
     return all[0] || null;
   }
 
-  findAll() {
-    const rows = this.db.query(`
+  async findAll() {
+    const rows = await this.db.query(`
       SELECT * FROM merchants 
       ORDER BY CASE WHEN id = '00000000-0000-0000-0000-000000000001' THEN 0 ELSE 1 END, created_at ASC
     `);
     return rows.map(r => this.mapRow(r));
   }
 
-  update(id, updates) {
+  async update(id, updates) {
     const fields = [];
     const params = [];
 
@@ -137,18 +137,18 @@ export class MerchantRepository {
       params.push(typeof updates.branding === 'object' ? serializeBranding(updates.branding) : updates.branding);
     }
 
-    if (fields.length === 0) return this.findById(id);
+    if (fields.length === 0) return await this.findById(id);
 
     fields.push('updated_at = ?');
     params.push(new Date().toISOString());
 
     params.push(id);
-    this.db.execute(`UPDATE merchants SET ${fields.join(', ')} WHERE id = ?`, params);
+    await this.db.execute(`UPDATE merchants SET ${fields.join(', ')} WHERE id = ?`, params);
 
-    return this.findById(id);
+    return await this.findById(id);
   }
 
-  verifyApiKey(merchant, candidateKey) {
+  async verifyApiKey(merchant, candidateKey) {
     if (!merchant || !candidateKey || typeof candidateKey !== 'string') return false;
     const clean = candidateKey.trim();
     if (!clean) return false;

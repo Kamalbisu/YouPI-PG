@@ -1,109 +1,216 @@
 import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { DatabaseSync } from 'node:sqlite';
-import { runMigrations } from './migrate.js';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import pg from 'pg';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const repoRoot = path.resolve(__dirname, '../../..');
+const { Pool, types } = pg;
 
-export function ensureDatabaseInitialized(db) {
+let parsersInstalled = false;
+function installTypeParsers() {
+  if (parsersInstalled) return;
+  parsersInstalled = true;
+  types.setTypeParser(types.builtins.INT8, (v) => (v === null ? null : Number(v)));
+  types.setTypeParser(types.builtins.NUMERIC, (v) => (v === null ? null : Number(v)));
+  types.setTypeParser(types.builtins.TIMESTAMPTZ, (v) => {
+    if (v === null) return null;
+    const d = new Date(v);
+    return Number.isNaN(d.getTime()) ? v : d.toISOString();
+  });
+}
+
+export function toPgPlaceholders(sql) {
+  if (!sql.includes('?')) return sql;
+  let out = '';
+  let n = 0;
+  let i = 0;
+  const len = sql.length;
+  while (i < len) {
+    const ch = sql[i];
+    if (ch === "'" || ch === '"') {
+      const quote = ch;
+      out += ch;
+      i++;
+      while (i < len) {
+        out += sql[i];
+        if (sql[i] === quote) {
+          if (sql[i + 1] === quote) { out += sql[i + 1]; i += 2; continue; }
+          i++;
+          break;
+        }
+        i++;
+      }
+      continue;
+    }
+    if (ch === '-' && sql[i + 1] === '-') {
+      while (i < len && sql[i] !== '\n') { out += sql[i]; i++; }
+      continue;
+    }
+    if (ch === '/' && sql[i + 1] === '*') {
+      const end = sql.indexOf('*/', i + 2);
+      const stop = end === -1 ? len : end + 2;
+      out += sql.slice(i, stop);
+      i = stop;
+      continue;
+    }
+    if (ch === '?') {
+      n++;
+      out += `$${n}`;
+      i++;
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return out;
+}
+
+export function resolveConnection(connectionString, options = {}) {
+  let cleaned = connectionString;
+  let urlMode = null;
   try {
-    const row = db.queryOne("SELECT count(*) as count FROM sqlite_master WHERE type='table' AND name='merchants'");
-    if (!row || Number(row.count) === 0) {
-      return runMigrations(db);
+    const url = new URL(connectionString);
+    urlMode = url.searchParams.get('sslmode');
+    if (urlMode !== null) {
+      url.searchParams.delete('sslmode');
+      cleaned = url.toString();
     }
   } catch {
-    return runMigrations(db);
+  }
+  if (options.ssl !== undefined) return { connectionString: cleaned, ssl: options.ssl };
+
+  const mode = String(urlMode || process.env.PGSSLMODE || '').toLowerCase();
+  if (!mode || mode === 'disable' || mode === 'allow' || mode === 'prefer') {
+    return { connectionString: cleaned, ssl: false };
+  }
+  if (mode === 'require' || mode === 'no-verify') {
+    return { connectionString: cleaned, ssl: { rejectUnauthorized: false } };
+  }
+  if (mode === 'verify-ca' || mode === 'verify-full') {
+    const ssl = { rejectUnauthorized: true };
+    if (process.env.PGSSLROOTCERT) ssl.ca = fs.readFileSync(process.env.PGSSLROOTCERT, 'utf8');
+    return { connectionString: cleaned, ssl };
+  }
+  throw new Error(`Unsupported sslmode "${mode}". Use disable, require, verify-ca or verify-full.`);
+}
+
+export class MigrationsRequiredError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'MigrationsRequiredError';
   }
 }
 
+const txStorage = new AsyncLocalStorage();
+
 export class Database {
   constructor(options = {}) {
-    if (options.inMemory) {
-      this.db = new DatabaseSync(':memory:');
+    installTypeParsers();
+    const raw = options.connectionString || process.env.DATABASE_URL;
+    if (!raw && !options.pool) {
+      throw new Error(
+        'DATABASE_URL is not set. Set it to a PostgreSQL connection string, e.g. ' +
+        'postgres://user:password@host:5432/dbname (see .env.example), then run `npm run migrate`.'
+      );
+    }
+    this.searchPath = options.searchPath || null;
+    if (options.pool) {
+      this.pool = options.pool;
     } else {
-      let dbPath;
-      if (options.dbPath) {
-        dbPath = path.isAbsolute(options.dbPath)
-          ? options.dbPath
-          : path.resolve(process.cwd(), options.dbPath);
-      } else if (process.env.SQLITE_DB_PATH) {
-        dbPath = path.isAbsolute(process.env.SQLITE_DB_PATH)
-          ? process.env.SQLITE_DB_PATH
-          : path.resolve(repoRoot, process.env.SQLITE_DB_PATH);
-      } else {
-        dbPath = path.resolve(repoRoot, 'data/youpi_pg.sqlite');
-      }
-      const dir = path.dirname(dbPath);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-      }
-      this.db = new DatabaseSync(dbPath);
-      try { fs.chmodSync(dbPath, 0o600); } catch {}
-      try { fs.chmodSync(dir, 0o700); } catch {}
+      const { connectionString, ssl } = resolveConnection(raw, options);
+      this.pool = new Pool({
+        connectionString,
+        ssl,
+        max: options.max || Number(process.env.DATABASE_POOL_MAX) || 10,
+        idleTimeoutMillis: 30_000,
+        connectionTimeoutMillis: Number(process.env.DATABASE_CONNECT_TIMEOUT_MS) || 10_000,
+        ...(this.searchPath ? { options: `-c search_path=${this.searchPath}` } : {})
+      });
     }
-
-    this.db.exec('PRAGMA foreign_keys = ON;');
-    this.db.exec('PRAGMA busy_timeout = 5000;');
-    try {
-      this.db.exec('PRAGMA journal_mode = WAL;');
-    } catch {}
-
-    if (!options.inMemory && options.autoMigrate !== false) {
-      ensureDatabaseInitialized(this);
-    }
+    this.pool.on('error', (err) => {
+      console.error('[db] idle PostgreSQL client error:', err.message);
+    });
   }
 
-  normalizeSql(sql) {
-    return sql.replace(/\$\d+/g, '?');
+  _txClient() {
+    const store = txStorage.getStore();
+    return store && store.db === this ? store.client : null;
   }
 
-  execute(sql, params = []) {
-    const normalized = this.normalizeSql(sql);
-    const stmt = this.db.prepare(normalized);
-    return stmt.run(...params);
+  async _run(sql, params = []) {
+    const text = toPgPlaceholders(sql);
+    const client = this._txClient();
+    return client ? client.query(text, params) : this.pool.query(text, params);
   }
 
-  run(sql, params = []) {
+  async execute(sql, params = []) {
+    const res = await this._run(sql, params);
+    const rowCount = res.rowCount ?? 0;
+    return { changes: rowCount, rowCount, rows: res.rows || [] };
+  }
+
+  async run(sql, params = []) {
     return this.execute(sql, params);
   }
 
-  query(sql, params = []) {
-    const normalized = this.normalizeSql(sql);
-    const stmt = this.db.prepare(normalized);
-    return stmt.all(...params);
+  async query(sql, params = []) {
+    const res = await this._run(sql, params);
+    return res.rows;
   }
 
-  queryOne(sql, params = []) {
-    const normalized = this.normalizeSql(sql);
-    const stmt = this.db.prepare(normalized);
-    const res = stmt.get(...params);
-    return res !== undefined ? res : null;
+  async queryOne(sql, params = []) {
+    const res = await this._run(sql, params);
+    return res.rows[0];
   }
 
-  exec(sql) {
-    this.db.exec(sql);
+  async exec(sql) {
+    const client = this._txClient();
+    if (client) await client.query(sql);
+    else await this.pool.query(sql);
   }
 
-  transaction(callback) {
-    this.db.exec('BEGIN IMMEDIATE;');
+  async transaction(callback) {
+    if (this._txClient()) return callback();
+    const client = await this.pool.connect();
     try {
-      const result = callback();
-      this.db.exec('COMMIT;');
+      await client.query('BEGIN');
+      const result = await txStorage.run({ db: this, client }, callback);
+      await client.query('COMMIT');
       return result;
     } catch (err) {
-      try {
-        this.db.exec('ROLLBACK;');
-      } catch {
-      }
+      try { await client.query('ROLLBACK'); } catch { }
       throw err;
+    } finally {
+      client.release();
     }
   }
 
-  close() {
-    this.db.close();
+  async assertMigrated(opts = {}) {
+    const { listMigrationFiles } = await import('./migrations.js');
+    const expected = opts.expected || listMigrationFiles().map((m) => m.id);
+    let applied = [];
+    try {
+      const rows = await this.query('SELECT id FROM schema_migrations');
+      applied = rows.map((r) => r.id);
+    } catch (err) {
+      if (err && err.code === '42P01') {
+        throw new MigrationsRequiredError(
+          'The database schema has not been created (table schema_migrations is missing). ' +
+          'Run `npm run migrate` with DATABASE_URL set, then start the app again.'
+        );
+      }
+      throw err;
+    }
+    const missing = expected.filter((id) => !applied.includes(id));
+    if (missing.length > 0) {
+      throw new MigrationsRequiredError(
+        `The database is behind: ${missing.length} migration(s) not applied (${missing.join(', ')}). ` +
+        'Run `npm run migrate` with DATABASE_URL set, then start the app again.'
+      );
+    }
+    return applied;
+  }
+
+  async close() {
+    await this.pool.end();
   }
 }
 
@@ -112,7 +219,25 @@ let defaultDbInstance = null;
 export function getDatabase(options = {}) {
   if (!defaultDbInstance) {
     defaultDbInstance = new Database(options);
-    ensureDatabaseInitialized(defaultDbInstance);
   }
   return defaultDbInstance;
+}
+
+export async function closeDefaultDatabase() {
+  if (defaultDbInstance) {
+    const db = defaultDbInstance;
+    defaultDbInstance = null;
+    await db.close();
+  }
+}
+
+export async function initDatabase(db = getDatabase()) {
+  const { applyMigrations } = await import('./migrations.js');
+  if (String(process.env.YOUPI_AUTO_MIGRATE || '').toLowerCase() === 'true') {
+    await applyMigrations(db);
+  }
+  await db.assertMigrated();
+  const { seedDefaults } = await import('./migrate.js');
+  const seeded = await seedDefaults(db);
+  return { db, defaultMerchant: seeded.defaultMerchant };
 }

@@ -1,4 +1,5 @@
 import { test, describe, before, after } from 'node:test';
+import { createTestDatabase } from '@youpi/db/testing';
 import assert from 'node:assert/strict';
 import { Database } from '@youpi/db';
 import { startServer as startPaymentApi } from '../../../apps/payment-api/src/index.js';
@@ -11,7 +12,7 @@ describe('Android Payment Observer Integration Tests', () => {
   let testDb;
 
   before(async () => {
-    testDb = new Database({ inMemory: true });
+    testDb = await createTestDatabase();
     apiInstance = await startPaymentApi(6217, testDb);
     driver = new AndroidObserverDriver({
       apiBaseUrl: `http://localhost:${apiInstance.port}`,
@@ -23,7 +24,7 @@ describe('Android Payment Observer Integration Tests', () => {
   after(async () => {
     driver.stopHeartbeat();
     await apiInstance.close();
-    testDb.close();
+    await testDb.destroy();
   });
 
   test('rejects pairing with invalid enrollment token', async () => {
@@ -63,15 +64,15 @@ describe('Android Payment Observer Integration Tests', () => {
   });
 
   test('submits valid HMAC-signed observation and confirms payment in Payment API', async () => {
-    const session = apiInstance.app.context.sessionRepo.create({
+    const session = await apiInstance.app.context.sessionRepo.create({
       merchantId: '00000000-0000-0000-0000-000000000001',
       receivingAccountId: '00000000-0000-0000-0000-000000000002',
       orderId: 'ANDR-ORD-350',
       amountPaise: 35000n
     });
 
-    apiInstance.app.context.queueEngine.enqueueOrActivate(session.id, '00000000-0000-0000-0000-000000000002');
-    apiInstance.app.context.timingEngine.handlePaymentDone(session.id);
+    await apiInstance.app.context.queueEngine.enqueueOrActivate(session.id, '00000000-0000-0000-0000-000000000002');
+    await apiInstance.app.context.timingEngine.handlePaymentDone(session.id);
 
     const res = await driver.submitObservation({
       amount: '350.00',
@@ -87,7 +88,7 @@ describe('Android Payment Observer Integration Tests', () => {
     assert.equal(res.body.attribution.paymentSessionId, session.id);
     assert.equal(res.body.attribution.outcomeStatus, PaymentStatus.SUCCESS);
 
-    const updated = apiInstance.app.context.sessionRepo.findById(session.id);
+    const updated = await apiInstance.app.context.sessionRepo.findById(session.id);
     assert.equal(updated.status, PaymentStatus.SUCCESS);
   });
 

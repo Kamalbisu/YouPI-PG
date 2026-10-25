@@ -10,8 +10,8 @@ export class QueueEngine {
     this.auditRepo = options.auditRepo;
   }
 
-  enqueueOrActivate(sessionId, receivingAccountId, activeDurationMs = this.activeDurationMs) {
-    const result = this.sessionRepo.acquireSlotAtomic(sessionId, receivingAccountId, activeDurationMs);
+  async enqueueOrActivate(sessionId, receivingAccountId, activeDurationMs = this.activeDurationMs) {
+    const result = await this.sessionRepo.acquireSlotAtomic(sessionId, receivingAccountId, activeDurationMs);
 
     if (result.status === PaymentStatus.ACTIVE) {
       this.eventEmitter.emit('SESSION.ACTIVATED', {
@@ -21,7 +21,7 @@ export class QueueEngine {
       });
 
       if (this.auditRepo) {
-        this.auditRepo.log({
+        await this.auditRepo.log({
           entityType: 'PAYMENT_SESSION',
           entityId: sessionId,
           action: 'PAYMENT_SLOT_ACTIVATED',
@@ -37,7 +37,7 @@ export class QueueEngine {
       });
 
       if (this.auditRepo) {
-        this.auditRepo.log({
+        await this.auditRepo.log({
           entityType: 'PAYMENT_SESSION',
           entityId: sessionId,
           action: 'PAYMENT_ENQUEUED',
@@ -50,22 +50,22 @@ export class QueueEngine {
     return result;
   }
 
-  promoteNext(receivingAccountId, activeDurationMs = this.activeDurationMs) {
-    const active = this.sessionRepo.findCurrentActiveOrProcessing(receivingAccountId);
+  async promoteNext(receivingAccountId, activeDurationMs = this.activeDurationMs) {
+    const active = await this.sessionRepo.findCurrentActiveOrProcessing(receivingAccountId);
     if (active) {
       return null;
     }
 
-    const nextQueued = this.sessionRepo.getNextQueuedSession(receivingAccountId);
+    const nextQueued = await this.sessionRepo.getNextQueuedSession(receivingAccountId);
     if (!nextQueued) {
       return null;
     }
 
-    const res = this.sessionRepo.acquireSlotAtomic(nextQueued.id, receivingAccountId, activeDurationMs);
+    const res = await this.sessionRepo.acquireSlotAtomic(nextQueued.id, receivingAccountId, activeDurationMs);
     if (res.status === PaymentStatus.ACTIVE) {
-      this.sessionRepo.reindexQueue(receivingAccountId);
+      await this.sessionRepo.reindexQueue(receivingAccountId);
 
-      const activatedSession = this.sessionRepo.findById(nextQueued.id);
+      const activatedSession = await this.sessionRepo.findById(nextQueued.id);
 
       this.eventEmitter.emit('SESSION.ACTIVATED', {
         sessionId: nextQueued.id,
@@ -79,7 +79,7 @@ export class QueueEngine {
       });
 
       if (this.auditRepo) {
-        this.auditRepo.log({
+        await this.auditRepo.log({
           merchantId: activatedSession.merchantId,
           entityType: 'PAYMENT_SESSION',
           entityId: nextQueued.id,
@@ -95,11 +95,11 @@ export class QueueEngine {
     return null;
   }
 
-  calculateEstimatedWaitSeconds(receivingAccountId, queuePosition) {
+  async calculateEstimatedWaitSeconds(receivingAccountId, queuePosition) {
     if (queuePosition <= 0) return 0;
 
     let currentSlotRemaining = 0;
-    const currentActive = this.sessionRepo.findCurrentActiveOrProcessing(receivingAccountId);
+    const currentActive = await this.sessionRepo.findCurrentActiveOrProcessing(receivingAccountId);
 
     if (currentActive) {
       const now = Date.now();

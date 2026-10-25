@@ -1,4 +1,5 @@
 import { test, describe, before, after } from 'node:test';
+import { createTestDatabase } from '@youpi/db/testing';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { Database, MerchantRepository } from '@youpi/db';
@@ -13,15 +14,15 @@ describe('Architectural Update: Selling Modes (Online vs Offline), COD Flow, & C
   let merchantSecret;
 
   before(async () => {
-    testDb = new Database({ inMemory: true });
+    testDb = await createTestDatabase();
     apiInstance = await startPaymentApi(6195, testDb);
     baseUrl = `http://localhost:${apiInstance.port}`;
-    merchantSecret = new MerchantRepository(testDb).findAll()[0].webhookSecret;
+    merchantSecret = (await new MerchantRepository(testDb).findAll())[0].webhookSecret;
   });
 
   after(async () => {
     await apiInstance.close();
-    testDb.close();
+    await testDb.destroy();
   });
 
   function request(path, options = {}) {
@@ -130,8 +131,8 @@ describe('Architectural Update: Selling Modes (Online vs Offline), COD Flow, & C
   });
 
   test('3. COD Pre-Purchase Confirmation, Slot Release, & Developer API Endpoints', async () => {
-    testDb.execute(`UPDATE payment_sessions SET status = 'CANCELLED' WHERE status IN ('ACTIVE', 'PROCESSING', 'QUEUED')`);
-    testDb.execute(`UPDATE payment_receiving_accounts SET is_slot_busy = 0, current_active_session_id = NULL`);
+    await testDb.execute(`UPDATE payment_sessions SET status = 'CANCELLED' WHERE status IN ('ACTIVE', 'PROCESSING', 'QUEUED')`);
+    await testDb.execute(`UPDATE payment_receiving_accounts SET is_slot_busy = false, current_active_session_id = NULL`);
 
     await request('/api/v1/admin/merchant-settings', {
       method: 'POST',
@@ -141,9 +142,9 @@ describe('Architectural Update: Selling Modes (Online vs Offline), COD Flow, & C
       }
     });
 
-    testDb.execute(
+    await testDb.execute(
       `INSERT INTO customers (id, name, mobile_number, email, created_at, updated_at)
-       VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))`,
+       VALUES (?, ?, ?, ?, now(), now())`,
       ['00000000-0000-0000-0000-000000000099', 'Rahul Sharma', '9876543210', 'rahul@example.com']
     );
 
@@ -276,18 +277,18 @@ describe('Architectural Update: Selling Modes (Online vs Offline), COD Flow, & C
   });
 
   test('a settled order cannot be restarted (409, not a 500 from the unique index)', async () => {
-    const activeAccount = testDb.queryOne(
-      `SELECT id FROM payment_receiving_accounts WHERE merchant_id = ? AND is_active = 1 LIMIT 1`,
+    const activeAccount = await testDb.queryOne(
+      `SELECT id FROM payment_receiving_accounts WHERE merchant_id = ? AND is_active = true LIMIT 1`,
       ['00000000-0000-0000-0000-000000000001']
     );
     const accountId = activeAccount?.id || '00000000-0000-0000-0000-000000000002';
-    testDb.execute(
+    await testDb.execute(
       `UPDATE payment_sessions SET status = 'CANCELLED', updated_at = ?
        WHERE receiving_account_id = ? AND status IN ('ACTIVE', 'PROCESSING', 'QUEUED')`,
       [new Date().toISOString(), accountId]
     );
-    testDb.execute(
-      `UPDATE payment_receiving_accounts SET is_slot_busy = 0, current_active_session_id = NULL
+    await testDb.execute(
+      `UPDATE payment_receiving_accounts SET is_slot_busy = false, current_active_session_id = NULL
        WHERE id = ?`,
       [accountId]
     );

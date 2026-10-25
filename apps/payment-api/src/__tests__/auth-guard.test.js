@@ -1,4 +1,5 @@
 import { test, describe, before, after } from 'node:test';
+import { createTestDatabase } from '@youpi/db/testing';
 import assert from 'node:assert/strict';
 import net from 'node:net';
 import { Database } from '@youpi/db';
@@ -22,14 +23,14 @@ describe('Auth guard: admin, observer and force-success endpoints', () => {
     });
 
   before(async () => {
-    db = new Database({ inMemory: true });
+    db = await createTestDatabase();
     api = await startPaymentApi(6197, db);
     baseUrl = `http://localhost:${api.port}`;
   });
 
   after(async () => {
     await api.close();
-    db.close();
+    await db.destroy();
   });
 
   test('admin routes reject missing and wrong tokens, accept the admin token', async () => {

@@ -43,12 +43,28 @@ Open `.env` in your editor and configure:
 npm install
 ```
 
-### Step 4: Initialize Fresh Database
-Run the automated database setup to initialize schema and seed the default merchant and receiving account:
+### Step 4: Apply Database Migrations
+Set `DATABASE_URL` in `.env` (and `PGSSLMODE=require` for most hosted databases), then apply the schema:
 ```bash
-npm run db:setup
+npm run migrate
 ```
-*(Creates `data/youpi_pg.sqlite` in clean state with 0 transactions).*
+*(Creates `schema_migrations` and applies the files in `/migrations` in order. Safe to run again; already-applied files are skipped. The default merchant and receiving account are seeded on the first service start.)*
+
+Against a hosted database without a local `.env`:
+```bash
+DATABASE_URL="postgres://USER:PASSWORD@HOST:5432/DBNAME" PGSSLMODE=require npm run migrate
+```
+With Docker Compose, `YOUPI_AUTO_MIGRATE=true` (the compose default) applies migrations when the gateway starts, or run `docker compose run --rm gateway node migrate.js`.
+
+#### Copying data from an old SQLite install (optional)
+Existing SQLite data is not migrated automatically. After `npm run migrate`, a one-off copy is available:
+
+```bash
+DATABASE_URL="postgres://USER:PASSWORD@HOST:5432/DBNAME" PGSSLMODE=require node scripts/sqlite-to-postgres.js ./data/youpi_pg.sqlite --dry-run
+DATABASE_URL="..." PGSSLMODE=require node scripts/sqlite-to-postgres.js ./data/youpi_pg.sqlite
+```
+
+It reads the file read-only, copies all 13 tables in one transaction, and skips rows that already exist (re-runnable). `--dry-run` rolls back.
 
 ### Step 5: Start the System
 

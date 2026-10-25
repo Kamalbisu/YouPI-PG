@@ -1,4 +1,5 @@
 import { test, describe, before, after } from 'node:test';
+import { createTestDatabase } from '@youpi/db/testing';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { Database, CustomerRepository, PaymentSessionRepository, MerchantRepository } from '@youpi/db';
@@ -17,7 +18,7 @@ describe('Section 12: Developer Test Mode Acceptance Tests (All 29 Points)', () 
   const receivingAccountId = '00000000-0000-0000-0000-000000000002';
 
   before(async () => {
-    testDb = new Database({ inMemory: true });
+    testDb = await createTestDatabase();
     customerRepo = new CustomerRepository(testDb);
     sessionRepo = new PaymentSessionRepository(testDb);
     merchantRepo = new MerchantRepository(testDb);
@@ -28,7 +29,7 @@ describe('Section 12: Developer Test Mode Acceptance Tests (All 29 Points)', () 
 
   after(async () => {
     await apiInstance.close();
-    testDb.close();
+    await testDb.destroy();
   });
 
   function request(path, options = {}) {
@@ -63,15 +64,15 @@ describe('Section 12: Developer Test Mode Acceptance Tests (All 29 Points)', () 
     });
   }
 
-  function createActiveSession(orderId, amountPaise, customerId = null, slotOffsetMs = 0) {
-    testDb.execute(
+  async function createActiveSession(orderId, amountPaise, customerId = null, slotOffsetMs = 0) {
+    await testDb.execute(
       `UPDATE payment_sessions SET status = ?, updated_at = ?
        WHERE receiving_account_id = ? AND status IN ('ACTIVE', 'PROCESSING')`,
       [PaymentStatus.CANCELLED, new Date().toISOString(), receivingAccountId]
     );
 
     const now = Date.now() + slotOffsetMs;
-    const session = sessionRepo.create({
+    const session = await sessionRepo.create({
       merchantId,
       customerId,
       receivingAccountId,
@@ -112,14 +113,14 @@ describe('Section 12: Developer Test Mode Acceptance Tests (All 29 Points)', () 
   });
 
   test('4. Verify server restart does not reset timer (DB persistence)', async () => {
-    const merchant = merchantRepo.findById(merchantId);
+    const merchant = await merchantRepo.findById(merchantId);
     assert.ok(merchant.branding.testModeUntil);
     assert.ok(merchant.branding.testModeEnabledAt);
     assert.equal(merchant.branding.testModeUntil - merchant.branding.testModeEnabledAt, 600000);
   });
 
   test('5 & 6. Inject a valid SMS message & verify passes through real parser and stages', async () => {
-    const s1 = createActiveSession('TEST_ORD_001', 49900);
+    const s1 = await createActiveSession('TEST_ORD_001', 49900);
     const rawSms = 'A/C XX1234 credited by Rs 499.00 CR. Ref 123456789012.';
 
     const res = await request('/api/v1/admin/dev/test-mode/inject', {
@@ -144,12 +145,12 @@ describe('Section 12: Developer Test Mode Acceptance Tests (All 29 Points)', () 
     assert.equal(res.body.stages.stage5.status, 'PASSED');
     assert.equal(res.body.stages.stage6.status, 'ATTRIBUTED');
 
-    const updated = sessionRepo.findById(s1.id);
+    const updated = await sessionRepo.findById(s1.id);
     assert.ok([PaymentStatus.SUCCESS, PaymentStatus.PROCESSING].includes(updated.status));
   });
 
   test('7 & 8. Inject a valid Gmail message & verify passes through real parser', async () => {
-    const s2 = createActiveSession('TEST_ORD_002', 75000);
+    const s2 = await createActiveSession('TEST_ORD_002', 75000);
     const rawGmail = 'Dear Customer, your account has been credited with INR 750.00 via UPI. UPI Ref No: 987654321098.';
 
     const res = await request('/api/v1/admin/dev/test-mode/inject', {
@@ -174,7 +175,7 @@ describe('Section 12: Developer Test Mode Acceptance Tests (All 29 Points)', () 
   });
 
   test('9 & 10. Inject an incorrect amount & verify rejection', async () => {
-    const s3 = createActiveSession('TEST_ORD_003', 49900);
+    const s3 = await createActiveSession('TEST_ORD_003', 49900);
     const rawWrongAmount = 'A/C XX1234 credited by Rs 250.00 CR. Ref 111122223333.';
 
     const res = await request('/api/v1/admin/dev/test-mode/inject', {
@@ -196,7 +197,7 @@ describe('Section 12: Developer Test Mode Acceptance Tests (All 29 Points)', () 
   });
 
   test('11 & 12. Remove CR/CREDIT/CREDITED & verify rejection', async () => {
-    const s4 = createActiveSession('TEST_ORD_004', 49900);
+    const s4 = await createActiveSession('TEST_ORD_004', 49900);
     const rawNoCredit = 'A/C XX1234 notification for Rs 499.00. Ref 123456789012.';
 
     const res = await request('/api/v1/admin/dev/test-mode/inject', {
@@ -218,7 +219,7 @@ describe('Section 12: Developer Test Mode Acceptance Tests (All 29 Points)', () 
   });
 
   test('13 & 14. Remove Rs/₹ & verify rejection', async () => {
-    const s5 = createActiveSession('TEST_ORD_005', 49900);
+    const s5 = await createActiveSession('TEST_ORD_005', 49900);
     const rawNoCurrency = 'A/C XX1234 credited by 499.00 CR. Ref 123456789012.';
 
     const res = await request('/api/v1/admin/dev/test-mode/inject', {
@@ -240,7 +241,7 @@ describe('Section 12: Developer Test Mode Acceptance Tests (All 29 Points)', () 
   });
 
   test('15 & 16. Remove 12-digit reference & verify rejection', async () => {
-    const s6 = createActiveSession('TEST_ORD_006', 49900);
+    const s6 = await createActiveSession('TEST_ORD_006', 49900);
     const rawNoRef = 'A/C XX1234 credited by Rs 499.00 CR. Transaction completed without reference.';
 
     const res = await request('/api/v1/admin/dev/test-mode/inject', {
@@ -262,7 +263,7 @@ describe('Section 12: Developer Test Mode Acceptance Tests (All 29 Points)', () 
   });
 
   test('17 & 18. Inject a message received before session creation & verify rejection', async () => {
-    const s7 = createActiveSession('TEST_ORD_007', 49900);
+    const s7 = await createActiveSession('TEST_ORD_007', 49900);
     const rawValid = 'A/C XX1234 credited by Rs 499.00 CR. Ref 555666777888.';
     const pastTimestamp = new Date(Date.now() - 300000).toISOString();
 
@@ -286,7 +287,7 @@ describe('Section 12: Developer Test Mode Acceptance Tests (All 29 Points)', () 
   });
 
   test('19 & 20. Inject a duplicate observation & verify duplicate protection', async () => {
-    const s8 = createActiveSession('TEST_ORD_008', 35000);
+    const s8 = await createActiveSession('TEST_ORD_008', 35000);
     const fixedTime = new Date().toISOString();
     const rawMsg = 'A/C XX1234 credited by Rs 350.00 CR. Ref 777888999000.';
 
@@ -320,14 +321,14 @@ describe('Section 12: Developer Test Mode Acceptance Tests (All 29 Points)', () 
   });
 
   test('21 & 22. Inject suspicious message: verify fraud detection occurs and automatic banning is executed immediately', async () => {
-    const customer = customerRepo.create({
+    const customer = await customerRepo.create({
       name: 'Safe Developer Tester',
       email: 'safe_tester@youpi.local',
       mobileNumber: '9988776655',
       status: 'ACTIVE'
     });
 
-    const s9 = createActiveSession('TEST_ORD_009', 49900, customer.id);
+    const s9 = await createActiveSession('TEST_ORD_009', 49900, customer.id);
     const rawSuspicious = 'A/C XX1234 credited by Rs 499.00 CR. Ref 444333222111. <script>stealToken()</script> FRAUD_PAYLOAD';
 
     const res = await request('/api/v1/admin/dev/test-mode/inject', {
@@ -347,14 +348,14 @@ describe('Section 12: Developer Test Mode Acceptance Tests (All 29 Points)', () 
     assert.equal(res.body.stages.stage5.autoBanApplied, true);
     assert.equal(res.body.stages.stage5.reason, 'FRAUDULENT_PAYMENT_INJECTION');
 
-    const customerAfter = customerRepo.findById(customer.id);
+    const customerAfter = await customerRepo.findById(customer.id);
     assert.equal(customerAfter.status, 'BANNED');
     assert.equal(customerAfter.banReason, 'FRAUDULENT_PAYMENT_INJECTION');
   });
 
   test('23 & 24. Confirm raw test SMS and Gmail are preserved verbatim', async () => {
     const rawCustomSms = '   Custom SMS with exact spacing: A/C XX1234 credited by Rs 499.00 CR. Ref 888777666555.   ';
-    const s10 = createActiveSession('TEST_ORD_010', 49900);
+    const s10 = await createActiveSession('TEST_ORD_010', 49900);
 
     const smsRes = await request('/api/v1/admin/dev/test-mode/inject', {
       method: 'POST',
@@ -368,7 +369,7 @@ describe('Section 12: Developer Test Mode Acceptance Tests (All 29 Points)', () 
     assert.equal(smsRes.body.raw, rawCustomSms);
 
     const rawCustomGmail = '   Exact raw email body: Dear User, credited with Rs 499.00. Ref 112233445566.   ';
-    const s11 = createActiveSession('TEST_ORD_011', 49900);
+    const s11 = await createActiveSession('TEST_ORD_011', 49900);
 
     const gmailRes = await request('/api/v1/admin/dev/test-mode/inject', {
       method: 'POST',
@@ -383,8 +384,8 @@ describe('Section 12: Developer Test Mode Acceptance Tests (All 29 Points)', () 
   });
 
   test('25, 26 & 27. Wait until Test Mode expires: verify Test Mode = OFF & automatic banning is restored', async () => {
-    const merchant = merchantRepo.findById(merchantId);
-    merchantRepo.update(merchantId, {
+    const merchant = await merchantRepo.findById(merchantId);
+    await merchantRepo.update(merchantId, {
       branding: {
         ...merchant.branding,
         testModeUntil: Date.now() - 1000
@@ -396,17 +397,17 @@ describe('Section 12: Developer Test Mode Acceptance Tests (All 29 Points)', () 
     assert.equal(statusRes.body.autoBanDisabled, false);
     assert.equal(statusRes.body.remainingSeconds, 0);
 
-    const badCustomer = customerRepo.create({
+    const badCustomer = await customerRepo.create({
       name: 'Malicious Attacker',
       email: 'attacker@evil.com',
       mobileNumber: '9111222333',
       status: 'ACTIVE'
     });
 
-    const s12 = createActiveSession('ATTACK_ORD_012', 49900, badCustomer.id);
+    const s12 = await createActiveSession('ATTACK_ORD_012', 49900, badCustomer.id);
     const pipeline = apiInstance.app.context.pipeline;
 
-    const attackResult = pipeline.process({
+    const attackResult = await pipeline.process({
       source: 'SMS',
       rawText: 'A/C XX1234 credited by Rs 499.00 CR. Ref 999888777666.',
       sender: badCustomer.mobileNumber,
@@ -419,7 +420,7 @@ describe('Section 12: Developer Test Mode Acceptance Tests (All 29 Points)', () 
     assert.equal(attackResult.stages.stage5.status, 'FAILED');
     assert.equal(attackResult.stages.stage5.autoBanApplied, true);
 
-    const bannedCustomer = customerRepo.findById(badCustomer.id);
+    const bannedCustomer = await customerRepo.findById(badCustomer.id);
     assert.equal(bannedCustomer.status, 'BANNED');
   });
 

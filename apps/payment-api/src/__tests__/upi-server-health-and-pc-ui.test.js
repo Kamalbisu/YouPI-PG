@@ -1,4 +1,5 @@
 import { test, describe, before, after } from 'node:test';
+import { createTestDatabase } from '@youpi/db/testing';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { Database } from '@youpi/db';
@@ -17,7 +18,7 @@ describe('UPI Server Health Indicator & Checkout State Invariants', () => {
   before(async () => {
     process.env.SMS_OBSERVER_PORT = '6999';
     process.env.GMAIL_OBSERVER_PORT = '6998';
-    testDb = new Database({ inMemory: true });
+    testDb = await createTestDatabase();
     apiInstance = await startPaymentApi(6207, testDb);
     baseUrl = `http://localhost:${apiInstance.port}`;
   });
@@ -26,7 +27,7 @@ describe('UPI Server Health Indicator & Checkout State Invariants', () => {
     process.env.SMS_OBSERVER_PORT = origSmsPort;
     process.env.GMAIL_OBSERVER_PORT = origGmailPort;
     await apiInstance.close();
-    testDb.close();
+    await testDb.destroy();
   });
 
   function request(path, options = {}) {
@@ -67,7 +68,7 @@ describe('UPI Server Health Indicator & Checkout State Invariants', () => {
   });
 
   test('Server health indicator detects offline pollers and issues warning', async () => {
-    testDb.execute('DELETE FROM android_devices');
+    await testDb.execute('DELETE FROM android_devices');
 
     const createRes = await request('/api/v1/payments', {
       method: 'POST',
@@ -95,18 +96,18 @@ describe('UPI Server Health Indicator & Checkout State Invariants', () => {
   });
 
   test('Server health switches to WORKING when both Gmail OAuth and active SMS device are connected', async () => {
-    const merchant = testDb.queryOne(`SELECT branding FROM merchants WHERE id = '00000000-0000-0000-0000-000000000001'`);
+    const merchant = await testDb.queryOne(`SELECT branding FROM merchants WHERE id = '00000000-0000-0000-0000-000000000001'`);
     const branding = JSON.parse(merchant?.branding || '{}');
     branding.gmailConfig = {
       refreshToken: 'test-refresh-token',
       clientId: 'test-client-id',
       clientSecret: 'test-secret'
     };
-    testDb.execute(`UPDATE merchants SET branding = ? WHERE id = '00000000-0000-0000-0000-000000000001'`, [JSON.stringify(branding)]);
+    await testDb.execute(`UPDATE merchants SET branding = ? WHERE id = '00000000-0000-0000-0000-000000000001'`, [JSON.stringify(branding)]);
 
-    testDb.execute(`
+    await testDb.execute(`
       INSERT INTO android_devices (id, merchant_id, device_name, device_model, signing_key_hash, is_active, last_heartbeat_at, created_at)
-      VALUES ('dev-test-1', '00000000-0000-0000-0000-000000000001', 'Samsung Galaxy S22', 'SM-S901B', 'hash123', 1, datetime('now'), datetime('now'))
+      VALUES ('dev-test-1', '00000000-0000-0000-0000-000000000001', 'Samsung Galaxy S22', 'SM-S901B', 'hash123', true, now(), now())
     `);
 
     let mockGmailServer = null;
@@ -142,11 +143,11 @@ describe('UPI Server Health Indicator & Checkout State Invariants', () => {
   });
 
   test('Dev settings: False narrative switch enables 10-minute override and forces WORKING status', async () => {
-    testDb.execute('DELETE FROM android_devices');
-    const merchant = testDb.queryOne(`SELECT branding FROM merchants WHERE id = '00000000-0000-0000-0000-000000000001'`);
+    await testDb.execute('DELETE FROM android_devices');
+    const merchant = await testDb.queryOne(`SELECT branding FROM merchants WHERE id = '00000000-0000-0000-0000-000000000001'`);
     const branding = JSON.parse(merchant?.branding || '{}');
     delete branding.gmailConfig;
-    testDb.execute(`UPDATE merchants SET branding = ? WHERE id = '00000000-0000-0000-0000-000000000001'`, [JSON.stringify(branding)]);
+    await testDb.execute(`UPDATE merchants SET branding = ? WHERE id = '00000000-0000-0000-0000-000000000001'`, [JSON.stringify(branding)]);
 
     const enableRes = await request('/api/v1/admin/dev/false-narrative', {
       method: 'POST',
@@ -168,10 +169,10 @@ describe('UPI Server Health Indicator & Checkout State Invariants', () => {
   });
 
   test('Dev settings: False narrative automatically expires after 10 minutes and reverts to live status', async () => {
-    const merchant = testDb.queryOne(`SELECT branding FROM merchants WHERE id = '00000000-0000-0000-0000-000000000001'`);
+    const merchant = await testDb.queryOne(`SELECT branding FROM merchants WHERE id = '00000000-0000-0000-0000-000000000001'`);
     const branding = JSON.parse(merchant?.branding || '{}');
     branding.falseNarrativeUntil = Date.now() - 5000;
-    testDb.execute(`UPDATE merchants SET branding = ? WHERE id = '00000000-0000-0000-0000-000000000001'`, [JSON.stringify(branding)]);
+    await testDb.execute(`UPDATE merchants SET branding = ? WHERE id = '00000000-0000-0000-0000-000000000001'`, [JSON.stringify(branding)]);
 
     const adminRes = await request('/api/v1/admin/dev/false-narrative');
     assert.equal(adminRes.status, 200);

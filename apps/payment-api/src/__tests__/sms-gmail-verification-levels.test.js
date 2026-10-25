@@ -1,4 +1,5 @@
 import { test, describe, before, after } from 'node:test';
+import { createTestDatabase } from '@youpi/db/testing';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { Database } from '@youpi/db';
@@ -12,14 +13,14 @@ describe('2-Level Verification (SMS Gateway + Gmail) & Queue Management Tests', 
   let baseUrl;
 
   before(async () => {
-    testDb = new Database({ inMemory: true });
+    testDb = await createTestDatabase();
     apiInstance = await startServer(6208, testDb);
     baseUrl = `http://localhost:${apiInstance.port}`;
   });
 
   after(async () => {
     await apiInstance.close();
-    testDb.close();
+    await testDb.destroy();
   });
 
   test('POST /api/v1/admin/queue/clear expires all waiting UPI queue sessions', async () => {
@@ -27,29 +28,29 @@ describe('2-Level Verification (SMS Gateway + Gmail) & Queue Management Tests', 
     const receivingAccountId = '00000000-0000-0000-0000-000000000002';
     const merchantId = '00000000-0000-0000-0000-000000000001';
 
-    const sActive = sessionRepo.create({
+    const sActive = await sessionRepo.create({
       merchantId,
       receivingAccountId,
       orderId: 'ORD-ACTIVE-1',
       amountPaise: 10000n
     });
-    apiInstance.app.context.queueEngine.enqueueOrActivate(sActive.id, receivingAccountId);
+    await apiInstance.app.context.queueEngine.enqueueOrActivate(sActive.id, receivingAccountId);
 
-    const sQ1 = sessionRepo.create({
+    const sQ1 = await sessionRepo.create({
       merchantId,
       receivingAccountId,
       orderId: 'ORD-Q-1',
       amountPaise: 20000n
     });
-    apiInstance.app.context.queueEngine.enqueueOrActivate(sQ1.id, receivingAccountId);
+    await apiInstance.app.context.queueEngine.enqueueOrActivate(sQ1.id, receivingAccountId);
 
-    const sQ2 = sessionRepo.create({
+    const sQ2 = await sessionRepo.create({
       merchantId,
       receivingAccountId,
       orderId: 'ORD-Q-2',
       amountPaise: 30000n
     });
-    apiInstance.app.context.queueEngine.enqueueOrActivate(sQ2.id, receivingAccountId);
+    await apiInstance.app.context.queueEngine.enqueueOrActivate(sQ2.id, receivingAccountId);
 
     const clearRes = await authFetch(`${baseUrl}/api/v1/admin/queue/clear`, {
       method: 'POST'
@@ -59,12 +60,12 @@ describe('2-Level Verification (SMS Gateway + Gmail) & Queue Management Tests', 
     assert.equal(clearData.success, true);
     assert.ok(clearData.clearedCount >= 2);
 
-    const q1Updated = sessionRepo.findById(sQ1.id);
-    const q2Updated = sessionRepo.findById(sQ2.id);
+    const q1Updated = await sessionRepo.findById(sQ1.id);
+    const q2Updated = await sessionRepo.findById(sQ2.id);
     assert.equal(q1Updated.status, PaymentStatus.EXPIRED);
     assert.equal(q2Updated.status, PaymentStatus.EXPIRED);
 
-    sessionRepo.transitionToTerminal(sActive.id, PaymentStatus.SUCCESS);
+    await sessionRepo.transitionToTerminal(sActive.id, PaymentStatus.SUCCESS);
   });
 
   test('Detects active session conflict when customer already has an active session', async () => {
@@ -73,21 +74,21 @@ describe('2-Level Verification (SMS Gateway + Gmail) & Queue Management Tests', 
     const receivingAccountId = '00000000-0000-0000-0000-000000000002';
     const merchantId = '00000000-0000-0000-0000-000000000001';
 
-    const customer = customerRepo.create({
+    const customer = await customerRepo.create({
       phoneNumber: '9876543210',
       fullName: 'Conflict Test User'
     });
 
-    const session1 = sessionRepo.create({
+    const session1 = await sessionRepo.create({
       merchantId,
       receivingAccountId,
       customerId: customer.id,
       orderId: 'ORD-FIRST-ACTIVE',
       amountPaise: 50000n
     });
-    apiInstance.app.context.queueEngine.enqueueOrActivate(session1.id, receivingAccountId);
+    await apiInstance.app.context.queueEngine.enqueueOrActivate(session1.id, receivingAccountId);
 
-    const session2 = sessionRepo.create({
+    const session2 = await sessionRepo.create({
       merchantId,
       receivingAccountId,
       customerId: customer.id,
@@ -108,10 +109,10 @@ describe('2-Level Verification (SMS Gateway + Gmail) & Queue Management Tests', 
     });
     assert.equal(retryRes.status, 200);
 
-    const oldSession = sessionRepo.findById(session1.id);
+    const oldSession = await sessionRepo.findById(session1.id);
     assert.equal(oldSession.status, PaymentStatus.CANCELLED);
 
-    sessionRepo.transitionToTerminal(session2.id, PaymentStatus.CANCELLED);
+    await sessionRepo.transitionToTerminal(session2.id, PaymentStatus.CANCELLED);
   });
 
   test('Android SMS Gateway pairs via QR, sends HMAC-signed bank SMS and completes payment', async () => {
@@ -136,14 +137,14 @@ describe('2-Level Verification (SMS Gateway + Gmail) & Queue Management Tests', 
 
     const sessionRepo = apiInstance.app.context.sessionRepo;
     const receivingAccountId = '00000000-0000-0000-0000-000000000002';
-    const s450 = sessionRepo.create({
+    const s450 = await sessionRepo.create({
       merchantId: '00000000-0000-0000-0000-000000000001',
       receivingAccountId,
       orderId: 'ORD-SMS-450',
       amountPaise: 45000n
     });
-    testDb.execute("UPDATE payment_receiving_accounts SET is_slot_busy = 0, current_active_session_id = NULL WHERE id = ?", [receivingAccountId]);
-    apiInstance.app.context.queueEngine.enqueueOrActivate(s450.id, receivingAccountId);
+    await testDb.execute("UPDATE payment_receiving_accounts SET is_slot_busy = false, current_active_session_id = NULL WHERE id = ?", [receivingAccountId]);
+    await apiInstance.app.context.queueEngine.enqueueOrActivate(s450.id, receivingAccountId);
 
     const timestamp = Date.now();
     const smsPayload = {
@@ -194,7 +195,7 @@ describe('2-Level Verification (SMS Gateway + Gmail) & Queue Management Tests', 
     assert.equal(gmailResult.attribution.verificationLevel, 2);
     assert.ok(gmailResult.attribution.verificationTag.includes('Dual Verification'));
 
-    const sUpdated = sessionRepo.findById(s450.id);
+    const sUpdated = await sessionRepo.findById(s450.id);
     assert.equal(sUpdated.status, PaymentStatus.SUCCESS);
     assert.equal(sUpdated.verificationLevel, 2);
   });

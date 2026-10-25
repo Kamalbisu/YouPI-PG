@@ -1,4 +1,5 @@
 import { test, describe, before, after } from 'node:test';
+import { createTestDatabase } from '@youpi/db/testing';
 import assert from 'node:assert/strict';
 import { Database } from '@youpi/db';
 import { startServer as startPaymentApi } from '../../../../apps/payment-api/src/index.js';
@@ -12,10 +13,10 @@ describe('Merchant SDK Integration Tests', () => {
   const merchantSecret = 'sdk_test_webhook_secret_9988';
 
   before(async () => {
-    testDb = new Database({ inMemory: true });
+    testDb = await createTestDatabase();
     apiInstance = await startPaymentApi(6195, testDb);
 
-    testDb.execute('UPDATE merchants SET webhook_secret = ? WHERE id = ?', [
+    await testDb.execute('UPDATE merchants SET webhook_secret = ? WHERE id = ?', [
       merchantSecret,
       '00000000-0000-0000-0000-000000000001'
     ]);
@@ -29,7 +30,7 @@ describe('Merchant SDK Integration Tests', () => {
 
   after(async () => {
     await apiInstance.close();
-    testDb.close();
+    await testDb.destroy();
   });
 
   test('creates a payment session using SDK client', async () => {

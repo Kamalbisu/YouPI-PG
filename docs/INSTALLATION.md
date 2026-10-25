@@ -6,16 +6,16 @@ YOUPI PG is distributed as source code and is engineered to run directly as nati
 **Zero Docker Requirement:** Docker, Docker Compose, and external container engines are completely optional and not required. Standard `npm install` works out-of-the-box across all workspace packages.
 
 ### Prerequisites
-- **Node.js:** v24 or higher (matches `engines` in `package.json`) for native `node:sqlite` (`DatabaseSync`)
-- **Database:** Built-in zero-dependency SQLite WAL with automatic schema provisioning (or optional PostgreSQL v14+)
+- **Node.js:** v24 or higher (matches `engines` in `package.json`)
+- **Database:** PostgreSQL v14+ (local, Docker via `docker compose up -d postgres`, or hosted). Schema is applied with `npm run migrate`
 - **Java/JDK (Optional, for Android APK build):** OpenJDK 17+
 - **Docker & Docker Compose (Optional):** For containerized zero-setup execution
 
 ---
 
-## 2. Zero-Config Quickstart (All Platforms)
+## 2. Quickstart (All Platforms)
 
-Thanks to **Zero-Config Database Auto-Provisioning**, YOUPI PG automatically creates `data/youpi_pg.sqlite` and executes idempotent schema migrations and default seeds on first launch:
+YOUPI PG needs a PostgreSQL database. Put its URL in `DATABASE_URL`, apply the migrations once with `npm run migrate`, and the first start seeds the default merchant:
 
 ```bash
 # 1. Clone repository
@@ -25,10 +25,13 @@ cd youpi-pg
 # 2. Install dependencies (Standard NPM out-of-the-box)
 npm install
 
-# 3. Configure environment
+# 3. Configure environment (set DATABASE_URL)
 cp .env.example .env
 
-# 4. Start all services
+# 4. Apply database migrations (idempotent)
+npm run migrate
+
+# 5. Start all services
 npm start
 # or for live development:
 npm run dev
@@ -57,7 +60,10 @@ npm install
 cp .env.example .env
 nano .env
 
-# 6. Start production cluster (SQLite auto-initializes on boot)
+# 6. Apply database migrations
+npm run migrate
+
+# 7. Start production cluster
 npm start
 ```
 

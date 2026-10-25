@@ -8,9 +8,14 @@
     "test": "node --test src/__tests__/**/*.test.js"
   },
   "dependencies": {
-    "@youpi/common": "*"
+    "@youpi/common": "*",
+    "pg": "^8.23.1"
   },
   "devDependencies": {
     "@youpi/core": "*"
+  },
+  "exports": {
+    ".": "./src/index.js",
+    "./testing": "./src/testing.js"
   }
 }

@@ -67,9 +67,7 @@ function isFileExcluded(relPath, fileName) {
     return true;
   }
 
-  if (fileName.endsWith('.sqlite') || 
-      fileName.includes('.sqlite-') || 
-      fileName.endsWith('.db') || 
+  if (fileName.endsWith('.db') || 
       fileName.includes('.db-') ||
       fileName === 'berrysdk.db') {
     return true;
@@ -181,7 +179,6 @@ console.log('\n[→] Verifying package integrity and sanitation...');
 const forbiddenItems = [
   '.env',
   '.env.production',
-  'data/youpi_pg.sqlite',
   'berrysdk.db',
   '.berry-sessions',
   '.claude',
@@ -214,6 +211,8 @@ const requiredItems = [
   'apps/coin-wallet-store/src/order-suspicious.html',
   'apps/coin-wallet-store/src/order-expired.html',
   'apps/coin-wallet-store/src/order-cancelled.html',
+  'migrate.js',
+  'migrations/0001_init.sql',
   'scripts/init-db.cjs',
   'scripts/sync-package.cjs'
 ];

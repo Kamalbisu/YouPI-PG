@@ -1,4 +1,5 @@
 import { test, describe, before, after } from 'node:test';
+import { createTestDatabase } from '@youpi/db/testing';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { Database } from '@youpi/db';
@@ -15,7 +16,7 @@ describe('Gmail Payment Observer Integration Tests', () => {
   let testDb;
 
   before(async () => {
-    testDb = new Database({ inMemory: true });
+    testDb = await createTestDatabase();
     apiInstance = await startPaymentApi(6198, testDb);
     gmailInstance = await startGmailObserver(6099, {
       apiBaseUrl: `http://localhost:${apiInstance.port}`,
@@ -27,7 +28,7 @@ describe('Gmail Payment Observer Integration Tests', () => {
   after(async () => {
     await gmailInstance.close();
     await apiInstance.close();
-    testDb.close();
+    await testDb.destroy();
   });
 
   function get(path, headers = {}) {
@@ -120,15 +121,15 @@ describe('Gmail Payment Observer Integration Tests', () => {
     });
 
     test('End-to-End: processing bank email confirms active payment session in Payment API', async () => {
-      const session = apiInstance.app.context.sessionRepo.create({
+      const session = await apiInstance.app.context.sessionRepo.create({
         merchantId: '00000000-0000-0000-0000-000000000001',
         receivingAccountId: '00000000-0000-0000-0000-000000000002',
         orderId: 'GMAIL-ORD-777',
         amountPaise: 20000n
       });
 
-      apiInstance.app.context.queueEngine.enqueueOrActivate(session.id, '00000000-0000-0000-0000-000000000002');
-      apiInstance.app.context.timingEngine.handlePaymentDone(session.id);
+      await apiInstance.app.context.queueEngine.enqueueOrActivate(session.id, '00000000-0000-0000-0000-000000000002');
+      await apiInstance.app.context.timingEngine.handlePaymentDone(session.id);
 
       const result = await gmailInstance.poller.processEmail({
         subject: 'Credit alert: Rs 200.00 received',
@@ -141,7 +142,7 @@ describe('Gmail Payment Observer Integration Tests', () => {
       assert.equal(result.attribution.attributed, true);
       assert.equal(result.attribution.paymentSessionId, session.id);
 
-      const updated = apiInstance.app.context.sessionRepo.findById(session.id);
+      const updated = await apiInstance.app.context.sessionRepo.findById(session.id);
       assert.equal(updated.status, PaymentStatus.SUCCESS);
     });
   });

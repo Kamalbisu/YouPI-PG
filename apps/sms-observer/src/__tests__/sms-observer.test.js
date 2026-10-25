@@ -1,4 +1,5 @@
 import { test, describe, before, after } from 'node:test';
+import { createTestDatabase } from '@youpi/db/testing';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { Database } from '@youpi/db';
@@ -15,7 +16,7 @@ describe('Google Messages / SMS Payment Observer Integration Tests', () => {
   let testDb;
 
   before(async () => {
-    testDb = new Database({ inMemory: true });
+    testDb = await createTestDatabase();
     apiInstance = await startPaymentApi(6196, testDb);
     smsInstance = await startSmsObserver(6098, {
       apiBaseUrl: `http://localhost:${apiInstance.port}`,
@@ -27,7 +28,7 @@ describe('Google Messages / SMS Payment Observer Integration Tests', () => {
   after(async () => {
     await smsInstance.close();
     await apiInstance.close();
-    testDb.close();
+    await testDb.destroy();
   });
 
   function get(path) {
@@ -98,15 +99,15 @@ describe('Google Messages / SMS Payment Observer Integration Tests', () => {
     });
 
     test('End-to-End: processing bank SMS confirms active payment session in Payment API', async () => {
-      const session = apiInstance.app.context.sessionRepo.create({
+      const session = await apiInstance.app.context.sessionRepo.create({
         merchantId: '00000000-0000-0000-0000-000000000001',
         receivingAccountId: '00000000-0000-0000-0000-000000000002',
         orderId: 'SMS-ORD-499',
         amountPaise: 49900n
       });
 
-      apiInstance.app.context.queueEngine.enqueueOrActivate(session.id, '00000000-0000-0000-0000-000000000002');
-      apiInstance.app.context.timingEngine.handlePaymentDone(session.id);
+      await apiInstance.app.context.queueEngine.enqueueOrActivate(session.id, '00000000-0000-0000-0000-000000000002');
+      await apiInstance.app.context.timingEngine.handlePaymentDone(session.id);
 
       const result = await smsInstance.service.processSms({
         text: 'A/C 1234 credited with Rs. 499.00 on 08-Sep-2026. Ref: UTR-SMS-499 from payer@upi',
@@ -119,7 +120,7 @@ describe('Google Messages / SMS Payment Observer Integration Tests', () => {
       assert.equal(result.attribution.paymentSessionId, session.id);
       assert.equal(result.attribution.outcomeStatus, PaymentStatus.SUCCESS);
 
-      const updated = apiInstance.app.context.sessionRepo.findById(session.id);
+      const updated = await apiInstance.app.context.sessionRepo.findById(session.id);
       assert.equal(updated.status, PaymentStatus.SUCCESS);
     });
   });

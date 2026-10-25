@@ -1,4 +1,5 @@
 import '../../../../scripts/test-support.js';
+import { createTestDatabase } from '@youpi/db/testing';
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -23,14 +24,14 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
   let testDb;
 
   before(async () => {
-    testDb = new Database({ inMemory: true });
+    testDb = await createTestDatabase();
     apiInstance = await startPaymentApi(6291, testDb);
     baseUrl = `http://localhost:${apiInstance.port}`;
   });
 
   after(async () => {
     await apiInstance.close();
-    testDb.close();
+    await testDb.destroy();
   });
 
   function request(path, options = {}) {
@@ -76,7 +77,7 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
       adminToken: 'super-secret-admin-pass'
     };
 
-    testDb.execute('UPDATE merchants SET branding = ? WHERE id = ?', [
+    await testDb.execute('UPDATE merchants SET branding = ? WHERE id = ?', [
       JSON.stringify(dangerousBranding),
       merchantId
     ]);
@@ -109,7 +110,7 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
 
   test('Issue #26: COD is disabled by default and rejected unless merchant explicitly opted in', async () => {
     const merchantId = '00000000-0000-0000-0000-000000000001';
-    testDb.execute('UPDATE merchants SET branding = ? WHERE id = ?', [
+    await testDb.execute('UPDATE merchants SET branding = ? WHERE id = ?', [
       JSON.stringify({ appName: 'No COD Gateway', sellingMode: 'ONLINE' }),
       merchantId
     ]);
@@ -131,25 +132,25 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
     assert.ok(codRes.body.error.includes('disabled by merchant'));
   });
 
-  test('Issue #27: Receiving account blocks UPI ID mutation while slot is busy serving an active payment', () => {
+  test('Issue #27: Receiving account blocks UPI ID mutation while slot is busy serving an active payment', async () => {
     const accountRepo = apiInstance.app.context.accountRepo;
-    const account = accountRepo.findByMerchantId('00000000-0000-0000-0000-000000000001')[0];
+    const account = (await accountRepo.findByMerchantId('00000000-0000-0000-0000-000000000001'))[0];
     assert.ok(account);
 
-    testDb.execute('UPDATE payment_receiving_accounts SET is_slot_busy = 1, current_active_session_id = ? WHERE id = ?', [
+    await testDb.execute('UPDATE payment_receiving_accounts SET is_slot_busy = true, current_active_session_id = ? WHERE id = ?', [
       'session-active-123',
       account.id
     ]);
 
-    assert.doesNotThrow(() => {
-      accountRepo.updateAccount(account.id, { payeeName: 'Updated Name Safe' });
+    await assert.doesNotReject(async () => {
+      await accountRepo.updateAccount(account.id, { payeeName: 'Updated Name Safe' });
     });
 
-    assert.throws(() => {
-      accountRepo.updateAccount(account.id, { upiId: 'hijacked@upi' });
+    await assert.rejects(async () => {
+      await accountRepo.updateAccount(account.id, { upiId: 'hijacked@upi' });
     }, /Cannot change UPI ID while receiving account slot is currently busy/);
 
-    testDb.execute('UPDATE payment_receiving_accounts SET is_slot_busy = 0, current_active_session_id = NULL WHERE id = ?', [
+    await testDb.execute('UPDATE payment_receiving_accounts SET is_slot_busy = false, current_active_session_id = NULL WHERE id = ?', [
       account.id
     ]);
   });
@@ -171,7 +172,7 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
     assert.ok(originalVpa);
 
     const accountId = stateBefore.body.receivingAccountId;
-    testDb.execute('UPDATE payment_receiving_accounts SET upi_id = ? WHERE id = ?', [
+    await testDb.execute('UPDATE payment_receiving_accounts SET upi_id = ? WHERE id = ?', [
       'mutated-afterwards@upi',
       accountId
     ]);
@@ -197,7 +198,7 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
 
     const merchantRepo = apiInstance.app.context.merchantRepo;
     const sessionRepo = apiInstance.app.context.sessionRepo;
-    const testMerchant = merchantRepo.create({
+    const testMerchant = await merchantRepo.create({
       businessName: 'Webhook Hardening Store',
       slug: 'webhook-hardened',
       contactEmail: 'hardened@example.com',
@@ -206,7 +207,7 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
       webhookSecret: 'super-secret-key-999'
     });
 
-    const session = sessionRepo.create({
+    const session = await sessionRepo.create({
       merchantId: testMerchant.id,
       orderId: 'HOOK-VERIFY-01',
       amountPaise: 75000n,
@@ -215,11 +216,11 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
       verificationLevel: 2
     });
 
-    testDb.execute(
+    await testDb.execute(
       "UPDATE payment_sessions SET verification_tag = 'L2_SMS_GMAIL_DUAL_MATCH', verification_level = 2, method = 'UPI' WHERE id = ?",
       [session.id]
     );
-    const verifiedSession = sessionRepo.findById(session.id);
+    const verifiedSession = await sessionRepo.findById(session.id);
 
     const engine = new WebhookEngine({
       db: testDb,
@@ -243,16 +244,16 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
     const receivingAccountId = '00000000-0000-0000-0000-000000000002';
     const merchantId = '00000000-0000-0000-0000-000000000001';
 
-    testDb.execute("UPDATE payment_sessions SET status = 'EXPIRED' WHERE receiving_account_id = ? AND status IN ('ACTIVE', 'PROCESSING')", [receivingAccountId]);
-    testDb.execute('UPDATE payment_receiving_accounts SET is_slot_busy = 0, current_active_session_id = NULL WHERE id = ?', [receivingAccountId]);
+    await testDb.execute("UPDATE payment_sessions SET status = 'EXPIRED' WHERE receiving_account_id = ? AND status IN ('ACTIVE', 'PROCESSING')", [receivingAccountId]);
+    await testDb.execute('UPDATE payment_receiving_accounts SET is_slot_busy = false, current_active_session_id = NULL WHERE id = ?', [receivingAccountId]);
 
-    const session = sessionRepo.create({
+    const session = await sessionRepo.create({
       merchantId,
       receivingAccountId,
       orderId: 'FALLTHROUGH-GUARD-01',
       amountPaise: 50000n
     });
-    apiInstance.app.context.queueEngine.enqueueOrActivate(session.id, receivingAccountId);
+    await apiInstance.app.context.queueEngine.enqueueOrActivate(session.id, receivingAccountId);
 
     const res = await request('/api/v1/pollers/events', {
       method: 'POST',
@@ -271,7 +272,7 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
     assert.equal(res.body.status, 'REJECTED');
     assert.equal(res.body.reason, 'PERSONAL_SMS_REJECTED');
 
-    const freshSession = sessionRepo.findById(session.id);
+    const freshSession = await sessionRepo.findById(session.id);
     assert.equal(freshSession.status, PaymentStatus.ACTIVE);
   });
 
@@ -281,7 +282,7 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
     const receivingAccountId = '00000000-0000-0000-0000-000000000002';
     const merchantId = '00000000-0000-0000-0000-000000000001';
 
-    const priorObs = obsRepo.create({
+    const priorObs = await obsRepo.create({
       source: 'SMS',
       receivingAccountId,
       amountPaise: 10000n,
@@ -290,24 +291,24 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
       bankReferenceNumber: '123456123456',
       fingerprintHash: 'hash-utr-consumed-test-999'
     });
-    const s1 = sessionRepo.create({
+    const s1 = await sessionRepo.create({
       merchantId,
       receivingAccountId,
       orderId: 'PRIOR-ORDER-99',
       amountPaise: 10000n
     });
-    testDb.execute("UPDATE payment_sessions SET status = 'SUCCESS', attributed_observation_id = ? WHERE id = ?", [priorObs.id, s1.id]);
+    await testDb.execute("UPDATE payment_sessions SET status = 'SUCCESS', attributed_observation_id = ? WHERE id = ?", [priorObs.id, s1.id]);
 
-    testDb.execute("UPDATE payment_sessions SET status = 'EXPIRED' WHERE receiving_account_id = ? AND status IN ('ACTIVE', 'PROCESSING')", [receivingAccountId]);
-    testDb.execute('UPDATE payment_receiving_accounts SET is_slot_busy = 0, current_active_session_id = NULL WHERE id = ?', [receivingAccountId]);
+    await testDb.execute("UPDATE payment_sessions SET status = 'EXPIRED' WHERE receiving_account_id = ? AND status IN ('ACTIVE', 'PROCESSING')", [receivingAccountId]);
+    await testDb.execute('UPDATE payment_receiving_accounts SET is_slot_busy = false, current_active_session_id = NULL WHERE id = ?', [receivingAccountId]);
 
-    const s2 = sessionRepo.create({
+    const s2 = await sessionRepo.create({
       merchantId,
       receivingAccountId,
       orderId: 'NEW-ORDER-100',
       amountPaise: 10000n
     });
-    apiInstance.app.context.queueEngine.enqueueOrActivate(s2.id, receivingAccountId);
+    await apiInstance.app.context.queueEngine.enqueueOrActivate(s2.id, receivingAccountId);
 
     const res = await request('/api/v1/pollers/events', {
       method: 'POST',
@@ -327,19 +328,19 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
     assert.equal(res.body.status, 'REJECTED');
     assert.equal(res.body.reason, 'REFERENCE_ALREADY_USED');
 
-    const freshS2 = sessionRepo.findById(s2.id);
+    const freshS2 = await sessionRepo.findById(s2.id);
     assert.equal(freshS2.status, PaymentStatus.ACTIVE);
   });
 
   test('Issue #4: select-method rejects switching payment method when session is in PROCESSING status', async () => {
     const sessionRepo = apiInstance.app.context.sessionRepo;
     const merchantId = '00000000-0000-0000-0000-000000000001';
-    const s = sessionRepo.create({
+    const s = await sessionRepo.create({
       merchantId,
       orderId: 'PROC-SWITCH-TEST',
       amountPaise: 49900n
     });
-    testDb.execute("UPDATE payment_sessions SET status = 'PROCESSING' WHERE id = ?", [s.id]);
+    await testDb.execute("UPDATE payment_sessions SET status = 'PROCESSING' WHERE id = ?", [s.id]);
 
     const res = await request(`/api/v1/checkout/${s.id}/select-method`, {
       method: 'POST',
@@ -349,17 +350,17 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
     assert.equal(res.status, 400);
     assert.match(res.body.error, /Cannot switch payment method for session in status 'PROCESSING'/);
 
-    const fresh = sessionRepo.findById(s.id);
+    const fresh = await sessionRepo.findById(s.id);
     assert.equal(fresh.status, PaymentStatus.PROCESSING);
   });
 
   test('Issue #24: Android observer rejects observations from untrusted application package names', async () => {
     const deviceId = 'test-android-device-pkg-1';
     const signingKey = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
-    testDb.execute(`
-      INSERT OR REPLACE INTO android_devices (id, merchant_id, device_name, device_model, signing_key_hash, is_active, last_heartbeat_at, created_at)
-      VALUES (?, '00000000-0000-0000-0000-000000000001', 'Test Device', 'Test Model', ?, 1, datetime('now'), datetime('now'))
-    `, [deviceId, signingKey]);
+    await testDb.execute(`
+      INSERT INTO android_devices (id, merchant_id, device_name, device_model, signing_key_hash, is_active, last_heartbeat_at, created_at)
+      VALUES (?, '00000000-0000-0000-0000-000000000001', 'Test Device', 'Test Model', ?, true, now(), now())
+    ON CONFLICT (id) DO UPDATE SET signing_key_hash = EXCLUDED.signing_key_hash, is_active = true`, [deviceId, signingKey]);
 
     const timestamp = Date.now().toString();
     const payloadObj = {
@@ -424,22 +425,22 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
   test('Issue #9: findByMobile strictly matches exact numbers without unanchored LIKE injection', async () => {
     const customerRepo = apiInstance.app.context.customerRepo;
     const targetMobile = '9876500001';
-    customerRepo.create({
+    await customerRepo.create({
       id: 'cust-prefix-test-1',
       name: 'Prefix Target Customer',
       email: 'prefixtarget@example.com',
       mobileNumber: targetMobile
     });
 
-    const foundExact = customerRepo.findByMobile('9876500001');
+    const foundExact = await customerRepo.findByMobile('9876500001');
     assert.ok(foundExact);
     assert.equal(foundExact.id, 'cust-prefix-test-1');
 
-    const foundWithPrefix = customerRepo.findByMobile('+919876500001');
+    const foundWithPrefix = await customerRepo.findByMobile('+919876500001');
     assert.ok(foundWithPrefix);
     assert.equal(foundWithPrefix.id, 'cust-prefix-test-1');
 
-    const foundInvalid = customerRepo.findByMobile('009876500001');
+    const foundInvalid = await customerRepo.findByMobile('009876500001');
     assert.equal(foundInvalid?.id, 'cust-prefix-test-1');
   });
 
@@ -454,7 +455,7 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
     assert.equal(payRes1.status, 201);
     assert.equal(payRes1.body.orderId, 'ORDER-EXACT-RETRY-01');
 
-    testDb.execute("UPDATE payment_sessions SET status = 'EXPIRED' WHERE id = ?", [payRes1.body.paymentId]);
+    await testDb.execute("UPDATE payment_sessions SET status = 'EXPIRED' WHERE id = ?", [payRes1.body.paymentId]);
 
     const payRes2 = await request('/api/v1/payments', {
       method: 'POST',
@@ -490,7 +491,7 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
     const sessionRepo = apiInstance.app.context.sessionRepo;
     const secret = 'hook_sec_invariants_777';
 
-    const testMerch = merchantRepo.create({
+    const testMerch = await merchantRepo.create({
       businessName: 'Webhook UTR Test Store',
       slug: 'webhook-utr-store',
       contactEmail: 'utr@example.com',
@@ -499,7 +500,7 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
       webhookSecret: secret
     });
 
-    const session = sessionRepo.create({
+    const session = await sessionRepo.create({
       merchantId: testMerch.id,
       orderId: 'HOOK-UTR-ORD-01',
       amountPaise: 99900n,
@@ -507,13 +508,13 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
     });
 
     const obsId = crypto.randomUUID();
-    testDb.execute(`
+    await testDb.execute(`
       INSERT INTO payment_observations (id, receiving_account_id, source, amount_paise, bank_reference_number, fingerprint_hash, observed_at)
-      VALUES (?, '00000000-0000-0000-0000-000000000002', 'SMS', 99900, '429182736451', 'fp_test_hook_utr', datetime('now'))
+      VALUES (?, '00000000-0000-0000-0000-000000000002', 'SMS', 99900, '429182736451', 'fp_test_hook_utr', now())
     `, [obsId]);
-    testDb.execute("UPDATE payment_sessions SET status = 'SUCCESS', attributed_observation_id = ? WHERE id = ?", [obsId, session.id]);
+    await testDb.execute("UPDATE payment_sessions SET status = 'SUCCESS', attributed_observation_id = ? WHERE id = ?", [obsId, session.id]);
 
-    const updatedSession = sessionRepo.findById(session.id);
+    const updatedSession = await sessionRepo.findById(session.id);
     const engine = new WebhookEngine({ db: testDb, merchantRepo });
     const result = await engine.dispatch('SUCCESS', updatedSession);
 
@@ -553,7 +554,7 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
   test('Issue #2: POST /api/v1/customer/check-user masks customer email to prevent PII harvesting', async () => {
     const customerRepo = new CustomerRepository(testDb);
     const uniquePhone = `98${Math.floor(10000000 + Math.random() * 90000000)}`;
-    customerRepo.create({
+    await customerRepo.create({
       fullName: 'Secret User',
       email: 'sensitive.email@corporate.example.com',
       mobileNumber: uniquePhone
@@ -576,14 +577,14 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
     const merchantId = '00000000-0000-0000-0000-000000000001';
 
     const uniqueCodPhone = `97${Math.floor(10000000 + Math.random() * 90000000)}`;
-    const customer = customerRepo.create({
+    const customer = await customerRepo.create({
       fullName: 'Vikram Malhotra',
       email: 'vikram.malhotra@testmail.com',
       mobileNumber: uniqueCodPhone
     });
 
     const orderId = `COD-PII-${Date.now()}`;
-    sessionRepo.create({
+    await sessionRepo.create({
       merchantId,
       customerId: customer.id,
       orderId,
@@ -606,7 +607,7 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
     assert.equal(rawRes.status, 200);
     assert.equal(rawRes.body.customer, null);
 
-    const merchant = new MerchantRepository(testDb).findById(merchantId);
+    const merchant = await new MerchantRepository(testDb).findById(merchantId);
     const authRes = await new Promise((resolve, reject) => {
       const req = http.request(url, {
         method: 'GET',
@@ -629,7 +630,7 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
     const merchantRepo = new MerchantRepository(testDb);
     const merchantId = '00000000-0000-0000-0000-000000000001';
     const dedicatedApiKey = 'mk_live_dedicated_merchant_api_key_6369';
-    merchantRepo.update(merchantId, { apiKey: dedicatedApiKey });
+    await merchantRepo.update(merchantId, { apiKey: dedicatedApiKey });
 
     const url = new URL('/api/v1/payments', baseUrl);
     const unauthRes = await new Promise((resolve, reject) => {
@@ -647,7 +648,7 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
     });
     assert.equal(unauthRes.status, 201);
 
-    const otherMerchant = merchantRepo.create({
+    const otherMerchant = await merchantRepo.create({
       businessName: 'Other Tenant',
       slug: 'other-tenant',
       contactEmail: 'other@example.com',

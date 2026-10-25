@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { runMigrations } from '../packages/db/src/migrate.js';
+import { initDatabase } from '../packages/db/src/database.js';
 import { startControlCenter } from '../apps/control-center/src/index.js';
 import { startCloudflaredSafely } from '../packages/common/src/tunnel-command.js';
 
@@ -10,8 +10,11 @@ console.log('====================================================');
 console.log('🚀 Starting YOUPI PG (Development / Localhost Mode)');
 console.log('====================================================');
 
-console.log('[1/2] Checking and applying database migrations...');
-const migrationResult = runMigrations();
+console.log('[1/2] Verifying database migrations...');
+const migrationResult = await initDatabase().catch((err) => {
+  console.error('\n[-] ' + err.message);
+  process.exit(1);
+});
 console.log(`[✓] Database ready. Default merchant: ${migrationResult.defaultMerchant.businessName}`);
 
 let tunnelProcess = null;

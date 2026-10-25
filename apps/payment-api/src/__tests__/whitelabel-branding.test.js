@@ -1,4 +1,5 @@
 import { describe, it, before, after } from 'node:test';
+import { createTestDatabase } from '@youpi/db/testing';
 import assert from 'node:assert/strict';
 import { Database } from '@youpi/db';
 import { startServer as startPaymentApi } from '../index.js';
@@ -11,7 +12,7 @@ describe('White-Label Branding & Visual Gateway Customizer Test Suite', () => {
   let merchantId = '00000000-0000-0000-0000-000000000001';
 
   before(async () => {
-    testDb = new Database({ inMemory: true });
+    testDb = await createTestDatabase();
     apiInstance = await startPaymentApi(6209, testDb);
     baseUrl = 'http://localhost:6209';
   });
@@ -21,7 +22,7 @@ describe('White-Label Branding & Visual Gateway Customizer Test Suite', () => {
       await apiInstance.close();
     }
     if (testDb) {
-      testDb.close();
+      await testDb.destroy();
     }
   });
 

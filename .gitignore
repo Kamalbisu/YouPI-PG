@@ -5,16 +5,10 @@
 node_modules/
 /YouPI-PG-main/data/
 
-data/*.sqlite
-data/*.sqlite-*
 data/*.db
 data/*.db-*
-**/*.sqlite
-**/*.sqlite-*
 **/*.db
 **/*.db-*
-**/*.sqlite3
-**/*.sqlite3-*
 
 data/.secrets/
 **/data/.secrets/

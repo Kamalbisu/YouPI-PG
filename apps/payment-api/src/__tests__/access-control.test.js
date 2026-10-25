@@ -1,4 +1,5 @@
 import { TEST_ADMIN_TOKEN, TEST_OBSERVER_TOKEN } from '../../../../scripts/test-support.js';
+import { createTestDatabase } from '@youpi/db/testing';
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { Database, CustomerRepository, CustomerSessionRepository, DeviceRepository, runMigrations } from '@youpi/db';
@@ -14,7 +15,7 @@ describe('access control hardening', () => {
   let deviceRepo;
 
   before(async () => {
-    db = new Database({ inMemory: true });
+    db = await createTestDatabase();
     api = await startPaymentApi(6297, db);
     customerRepo = new CustomerRepository(db);
     sessionRepo = new CustomerSessionRepository(db, customerRepo);
@@ -23,7 +24,7 @@ describe('access control hardening', () => {
 
   after(async () => {
     await api.close();
-    db.close();
+    await db.destroy();
   });
 
   async function call(path, { method = 'GET', body, headers = {} } = {}) {
@@ -84,11 +85,11 @@ describe('access control hardening', () => {
   });
 
   test('M6: device lookups require the owner, the device itself or the admin', async () => {
-    const owner = customerRepo.create({ merchantId: MERCHANT_ID, name: 'Owner', email: 'owner@example.com', mobileNumber: '9000000001' });
-    const other = customerRepo.create({ merchantId: MERCHANT_ID, name: 'Other', email: 'other@example.com', mobileNumber: '9000000002' });
-    const ownerToken = sessionRepo.create({ customerId: owner.id }).token;
-    const otherToken = sessionRepo.create({ customerId: other.id }).token;
-    const device = deviceRepo.create({ customerId: owner.id, publicKey: 'pk-access-control-1', fingerprintHash: 'fp1', platform: 'web' });
+    const owner = await customerRepo.create({ merchantId: MERCHANT_ID, name: 'Owner', email: 'owner@example.com', mobileNumber: '9000000001' });
+    const other = await customerRepo.create({ merchantId: MERCHANT_ID, name: 'Other', email: 'other@example.com', mobileNumber: '9000000002' });
+    const ownerToken = (await sessionRepo.create({ customerId: owner.id })).token;
+    const otherToken = (await sessionRepo.create({ customerId: other.id })).token;
+    const device = await deviceRepo.create({ customerId: owner.id, publicKey: 'pk-access-control-1', fingerprintHash: 'fp1', platform: 'web' });
 
     assert.equal((await call(`/api/v1/devices/${device.id}`)).status, 404);
     assert.equal((await call(`/api/v1/devices/${device.id}`, { headers: { 'X-Customer-Token': otherToken } })).status, 404);
@@ -107,7 +108,7 @@ describe('access control hardening', () => {
   });
 
   test('M6: check-user no longer returns the internal customer id', async () => {
-    customerRepo.create({ merchantId: MERCHANT_ID, name: 'Checked', email: 'checked@example.com', mobileNumber: '9000000003' });
+    await customerRepo.create({ merchantId: MERCHANT_ID, name: 'Checked', email: 'checked@example.com', mobileNumber: '9000000003' });
     const res = await call('/api/v1/customer/check-user', { method: 'POST', body: { mobileNumber: '9000000003' } });
     assert.equal(res.status, 200);
     assert.equal(res.body.exists, true);
@@ -133,11 +134,11 @@ describe('access control hardening', () => {
     });
     assert.equal(hook.status, 200);
     assert.equal(hook.body.action, 'ACTION');
-    const rows = db.query(`SELECT action, details FROM audit_logs WHERE entity_id = ? AND action LIKE 'HOOK_%'`, [id]);
+    const rows = await db.query(`SELECT action, details FROM audit_logs WHERE entity_id = ? AND action LIKE 'HOOK_%'`, [id]);
     assert.ok(rows.length >= 1);
     assert.ok(rows.every(r => !r.action.includes('FAKE_AUDIT_LINE') && r.details.length < 600));
 
-    db.execute(`UPDATE payment_sessions SET expires_at = ? WHERE id = ?`, [new Date(Date.now() - 1000).toISOString(), id]);
+    await db.execute(`UPDATE payment_sessions SET expires_at = ? WHERE id = ?`, [new Date(Date.now() - 1000).toISOString(), id]);
     const late = await call(`/api/v1/checkout/${id}/expire`, { method: 'POST' });
     assert.equal(late.status, 200);
     assert.equal(late.body.status, 'EXPIRED');

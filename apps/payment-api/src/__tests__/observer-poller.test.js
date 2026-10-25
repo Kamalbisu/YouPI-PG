@@ -1,7 +1,8 @@
 import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { getDatabase, ensureDatabaseInitialized, runMigrations, PaymentSessionRepository, ObservationRepository } from '@youpi/db';
+import { PaymentSessionRepository, ObservationRepository } from '@youpi/db';
+import { createTestDatabase } from '@youpi/db/testing';
 import { AttributionEngine } from '@youpi/core';
 import { ObserverPollerService } from '../services/observer-poller.service.js';
 
@@ -13,10 +14,8 @@ describe('ObserverPollerService Hardening & Concurrency Protection', () => {
   let attributionEngine;
   let pollerService;
 
-  beforeEach(() => {
-    db = getDatabase(':memory:');
-    ensureDatabaseInitialized(db);
-    runMigrations(db);
+  beforeEach(async () => {
+    db = await createTestDatabase({ seed: true });
 
     eventEmitter = new EventEmitter();
     sessionRepo = new PaymentSessionRepository(db);
@@ -28,11 +27,12 @@ describe('ObserverPollerService Hardening & Concurrency Protection', () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     if (pollerService) {
       pollerService.destroy();
       pollerService = null;
     }
+    await db.destroy();
   });
 
   test('Requirement 5: Daemon automatically idles when no active or processing sessions exist', async () => {
@@ -89,7 +89,7 @@ describe('ObserverPollerService Hardening & Concurrency Protection', () => {
     assert.equal(gmail3, false, 'Gmail sweep within cooldown window must be dropped');
   });
 
-  test('Requirement 4: Mutex and deduplication prevent concurrent attribution and SQLite contention', async () => {
+  test('Requirement 4: Mutex and deduplication prevent concurrent attribution and database contention', async () => {
     pollerService = new ObserverPollerService({
       db,
       sessionRepo,
@@ -109,9 +109,9 @@ describe('ObserverPollerService Hardening & Concurrency Protection', () => {
 
     let queryCount = 0;
     const originalFindUnattributed = obsRepo.findUnattributed.bind(obsRepo);
-    obsRepo.findUnattributed = (accId) => {
+    obsRepo.findUnattributed = async (accId) => {
       queryCount++;
-      return originalFindUnattributed(accId);
+      return await originalFindUnattributed(accId);
     };
 
     await pollerService.processPendingAttributions(activeSessions);
