@@ -32,6 +32,7 @@ const testFiles = [
   'apps/payment-api/src/__tests__/fraud-ban-pipeline.test.js',
   'apps/payment-api/src/__tests__/sms-gmail-verification-levels.test.js',
   'apps/payment-api/src/__tests__/verification-fallthrough.test.js',
+  'apps/payment-api/src/__tests__/verification-hardening.test.js',
   'apps/payment-api/src/__tests__/upi-server-health-and-pc-ui.test.js',
   'apps/payment-api/src/__tests__/whatsapp-berry-auth.test.js',
   'apps/payment-api/src/__tests__/whitelabel-branding.test.js',
