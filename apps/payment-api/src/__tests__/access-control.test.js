@@ -154,4 +154,33 @@ describe('access control hardening', () => {
       process.env.YOUPI_MODE = prevMode;
     }
   });
+
+  test('L2/L9: CORS preflight allows the credential headers, 404 does not echo the path, server-health tolerates a bad merchantId', async () => {
+    const pre = await fetch(`http://localhost:${api.port}/api/v1/checkout/server-health`, { method: 'OPTIONS' });
+    const allowed = pre.headers.get('access-control-allow-headers');
+    for (const h of ['X-Merchant-Key', 'X-Customer-Token', 'X-Device-Token']) {
+      assert.ok(allowed.includes(h), `${h} missing from allow-headers`);
+    }
+
+    const missing = await call('/api/v1/nope/<script>');
+    assert.equal(missing.status, 404);
+    assert.ok(!JSON.stringify(missing.body).includes('script'));
+
+    const health = await call('/api/v1/checkout/server-health?merchantId=' + encodeURIComponent("x' OR '1'='1"));
+    assert.equal(health.status, 200);
+  });
+
+  test('L3: logout clears the session cookie with Secure in production', async () => {
+    const prev = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      const res = await fetch(`http://localhost:${api.port}/api/v1/customer/logout`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      const cookie = res.headers.get('set-cookie') || '';
+      assert.match(cookie, /youpi_session=;/);
+      assert.match(cookie, /Max-Age=0/);
+      assert.match(cookie, /Secure/);
+    } finally {
+      process.env.NODE_ENV = prev;
+    }
+  });
 });

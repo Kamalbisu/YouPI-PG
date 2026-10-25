@@ -248,6 +248,12 @@ describe('2-Level Verification (SMS Gateway + Gmail) & Queue Management Tests', 
 
   test('Downloads standalone Android APK binary from Payment API', async () => {
     const res = await authFetch(`${baseUrl}/api/v1/admin/sms-gateway/download-apk`);
+    // The server no longer writes a stub APK: it serves a real build when present, else 404.
+    if (res.status === 404) {
+      const body = await res.json();
+      assert.equal(body.error, 'APK_NOT_BUILT');
+      return;
+    }
     assert.equal(res.status, 200);
     assert.equal(res.headers.get('content-type'), 'application/vnd.android.package-archive');
     const buf = await res.arrayBuffer();

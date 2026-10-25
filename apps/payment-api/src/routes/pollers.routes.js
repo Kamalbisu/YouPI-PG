@@ -734,13 +734,9 @@ export function registerPollerRoutes(server, ctx) {
     }
 
     if (!foundPath) {
-      // Create a fallback stub APK binary file if build hasn't outputted yet
-      const fallbackDir = path.resolve(__dirname, '../../public');
-      if (!fs.existsSync(fallbackDir)) fs.mkdirSync(fallbackDir, { recursive: true });
-      foundPath = path.join(fallbackDir, 'youpi-sms-gateway.apk');
-      if (!fs.existsSync(foundPath)) {
-        fs.writeFileSync(foundPath, Buffer.from('PK\x03\x04YOUPI_SMS_GATEWAY_STANDALONE_APK_PACKAGE'));
-      }
+      // Never fabricate a package on disk: report that the build output is missing.
+      HttpServer.json(res, 404, { error: 'APK_NOT_BUILT', message: 'The Android observer APK has not been built or installed on this server.' });
+      return;
     }
 
     const stat = fs.statSync(foundPath);

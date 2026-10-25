@@ -73,7 +73,7 @@ export class ProcessManager extends EventEmitter {
         id: 'coin-wallet-store',
         name: 'YOUPI Showcase Store (Demo)',
         script: path.join(rootDir, 'apps/coin-wallet-store/src/index.js'),
-        port: Number(process.env.COIN_STORE_PORT || 5000),
+        port: Number(process.env.COIN_WALLET_STORE_PORT || process.env.COIN_STORE_PORT || 5000),
         healthPath: '/health',
         child: null,
         status: 'STOPPED',

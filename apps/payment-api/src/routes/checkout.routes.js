@@ -688,7 +688,8 @@ export function registerCheckoutRoutes(server, ctx) {
 
   // GET /api/v1/checkout/server-health
   server.get('/api/v1/checkout/server-health', async (req, res) => {
-    const merchantId = req.query?.merchantId || '00000000-0000-0000-0000-000000000001';
+    const requestedMerchantId = String(req.query?.merchantId || '');
+    const merchantId = /^[A-Za-z0-9_-]{1,64}$/.test(requestedMerchantId) ? requestedMerchantId : '00000000-0000-0000-0000-000000000001';
     const health = await checkUpiServerHealth(ctx, [], 'OFFLINE', merchantId);
     HttpServer.json(res, 200, health);
   });

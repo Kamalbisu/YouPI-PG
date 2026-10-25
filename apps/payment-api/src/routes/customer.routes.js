@@ -619,7 +619,7 @@ export function registerCustomerRoutes(server, ctx) {
       ctx.customerSessionRepo.revokeToken(token);
     }
 
-    res.setHeader('Set-Cookie', 'youpi_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax');
+    res.setHeader('Set-Cookie', buildSessionCookie('', 0));
     HttpServer.json(res, 200, { success: true, message: 'Logged out successfully.' });
   });
 
