@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Database } from '@youpi/db';
 import { startServer as startPaymentApi } from '../../../apps/payment-api/src/index.js';
 import { AndroidObserverDriver } from '../driver.js';
-import { PaymentStatus, resolveSecret } from '@youpi/common';
+import { PaymentStatus, resolveSecret, getAdminToken, generateHmac } from '@youpi/common';
 
 describe('Android Payment Observer Integration Tests', () => {
   let apiInstance;
@@ -119,5 +119,81 @@ describe('Android Payment Observer Integration Tests', () => {
 
     assert.equal(resUntrusted.status, 400);
     assert.match(resUntrusted.body.error, /Untrusted Android notification package/);
+  });
+
+  describe('device ingestion hardening', () => {
+    const signedPost = async (bodyObj, { timestamp = Date.now().toString(), key } = {}) => {
+      const body = typeof bodyObj === 'string' ? bodyObj : JSON.stringify(bodyObj);
+      const signature = generateHmac(`${body}:${timestamp}`, key || driver.signingKey);
+      const res = await fetch(`${driver.apiBaseUrl}/api/v1/observers/sms`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Device-Id': driver.deviceId,
+          'X-Timestamp': timestamp,
+          'X-Signature': signature
+        },
+        body
+      });
+      return { status: res.status, body: await res.json().catch(() => ({})) };
+    };
+
+    test('rejects a replayed signed request even inside the drift window', async () => {
+      const payload = { body: 'not a bank message', receivingAccountId: '00000000-0000-0000-0000-000000000002' };
+      const timestamp = Date.now().toString();
+      const first = await signedPost(payload, { timestamp });
+      assert.notEqual(first.status, 401, 'first delivery must pass authentication');
+      const second = await signedPost(payload, { timestamp });
+      assert.equal(second.status, 401);
+      assert.match(second.body.error, /replay/i);
+    });
+
+    test('rejects a receivingAccountId that does not belong to the device merchant', async () => {
+      const res = await signedPost({
+        body: 'Rs 10 credited UTR 123456789012',
+        receivingAccountId: crypto.randomUUID()
+      });
+      assert.equal(res.status, 403);
+      assert.match(res.body.error, /merchant/);
+    });
+
+    test('rejects a non-numeric amountPaise with 400 instead of crashing', async () => {
+      const res = await signedPost({
+        body: 'Rs 10 credited UTR 123456789012',
+        receivingAccountId: '00000000-0000-0000-0000-000000000002',
+        amountPaise: 'not-a-number'
+      });
+      assert.equal(res.status, 400);
+      assert.match(res.body.error, /amountPaise/);
+    });
+
+    test('rejects an oversized body before parsing it', async () => {
+      const res = await fetch(`${driver.apiBaseUrl}/api/v1/observers/sms`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Device-Id': driver.deviceId },
+        body: JSON.stringify({ body: 'x'.repeat(200 * 1024) })
+      });
+      assert.equal(res.status, 413);
+    });
+  });
+
+  describe('one-time pairing token', () => {
+    test('QR carries a one-time token, not the enrollment secret, and it works once', async () => {
+      const enrollmentSecret = resolveSecret('android_enrollment_secret', 'ANDROID_ENROLLMENT_SECRET');
+      const qr = await (await fetch(`${driver.apiBaseUrl}/api/v1/admin/sms-gateway/pair-qr`, {
+        headers: { Authorization: `Bearer ${getAdminToken()}` }
+      })).json();
+      assert.ok(qr.enrollmentToken);
+      assert.notEqual(qr.enrollmentToken, enrollmentSecret);
+      assert.ok(!JSON.stringify(qr).includes(enrollmentSecret), 'QR response must not contain the enrollment secret');
+
+      const pair = () => fetch(`${driver.apiBaseUrl}/api/v1/pollers/android/pair`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enrollmentToken: qr.enrollmentToken, deviceName: 'One-time test' })
+      });
+      assert.equal((await pair()).status, 200);
+      assert.equal((await pair()).status, 401);
+    });
   });
 });
