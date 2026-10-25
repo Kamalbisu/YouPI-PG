@@ -1,4 +1,5 @@
 import { test, describe, before, after } from 'node:test';
+import { createTestDatabase } from '@youpi/db/testing';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { Database } from '@youpi/db';
@@ -12,14 +13,14 @@ describe('Phase 15: Counter Payments (Cash & Card at Counter)', () => {
   let testDb;
 
   before(async () => {
-    testDb = new Database({ inMemory: true });
+    testDb = await createTestDatabase();
     apiInstance = await startPaymentApi(6194, testDb);
     baseUrl = `http://localhost:${apiInstance.port}`;
   });
 
   after(async () => {
     await apiInstance.close();
-    testDb.close();
+    await testDb.destroy();
   });
 
   function request(path, options = {}) {
@@ -90,7 +91,7 @@ describe('Phase 15: Counter Payments (Cash & Card at Counter)', () => {
     assert.equal(confirmRes.body.confirmed, true);
     assert.equal(confirmRes.body.status, PaymentStatus.SUCCESS);
 
-    const auditLogs = testDb.query(
+    const auditLogs = await testDb.query(
       'SELECT * FROM audit_logs WHERE entity_id = ? AND action = ?',
       [cashPaymentId, 'COUNTER_MANUAL_PAYMENT_CONFIRMED']
     );
@@ -131,14 +132,14 @@ describe('Phase 15: Counter Payments (Cash & Card at Counter)', () => {
   });
 
   test('Customer switches from UPI to Cash at Counter via /select-method: unblocks UPI queue and reflects instructions', async () => {
-    testDb.execute(`
+    await testDb.execute(`
       UPDATE payment_sessions
       SET status = 'CANCELLED'
       WHERE receiving_account_id = ? AND status IN ('ACTIVE', 'PROCESSING', 'QUEUED')
     `, ['00000000-0000-0000-0000-000000000002']);
-    testDb.execute(`
+    await testDb.execute(`
       UPDATE payment_receiving_accounts
-      SET is_slot_busy = 0, current_active_session_id = NULL
+      SET is_slot_busy = false, current_active_session_id = NULL
       WHERE id = ?
     `, ['00000000-0000-0000-0000-000000000002']);
 
@@ -236,7 +237,7 @@ describe('Phase 15: Counter Payments (Cash & Card at Counter)', () => {
     const checkState = await request(`/api/v1/checkout/${paymentId}/state`);
     assert.equal(checkState.body.status, PaymentStatus.FAILED);
 
-    const auditLogs = testDb.query(
+    const auditLogs = await testDb.query(
       'SELECT * FROM audit_logs WHERE entity_id = ? AND action = ?',
       [paymentId, 'COUNTER_MANUAL_PAYMENT_DECLINED']
     );

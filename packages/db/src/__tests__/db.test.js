@@ -1,4 +1,5 @@
 import { test, describe, beforeEach, afterEach } from 'node:test';
+import { createTestDatabase } from '@youpi/db/testing';
 import assert from 'node:assert/strict';
 import {
   Database,
@@ -25,9 +26,9 @@ describe('@youpi/db Unit & Integration Tests', () => {
   let testMerchant;
   let testAccount;
 
-  beforeEach(() => {
-    db = new Database({ inMemory: true });
-    const { defaultMerchant } = runMigrations(db);
+  beforeEach(async () => {
+    db = await createTestDatabase();
+    const { defaultMerchant } = await runMigrations(db);
     testMerchant = defaultMerchant;
 
     merchantRepo = new MerchantRepository(db);
@@ -38,11 +39,11 @@ describe('@youpi/db Unit & Integration Tests', () => {
     ticketRepo = new SupportTicketRepository(db);
     auditRepo = new AuditLogRepository(db);
 
-    testAccount = accountRepo.findActiveForMerchant(testMerchant.id);
+    testAccount = await accountRepo.findActiveForMerchant(testMerchant.id);
   });
 
-  afterEach(() => {
-    db.close();
+  afterEach(async () => {
+    await db.destroy();
   });
 
   test('migrations seed default merchant and active UPI receiving account', () => {
@@ -54,8 +55,8 @@ describe('@youpi/db Unit & Integration Tests', () => {
     assert.equal(testAccount.isSlotBusy, false);
   });
 
-  test('customer registration and password verification', () => {
-    const customer = customerRepo.create({
+  test('customer registration and password verification', async () => {
+    const customer = await customerRepo.create({
       merchantId: testMerchant.id,
       phoneNumber: '9876543210',
       fullName: 'Gaurav Sharma',
@@ -66,7 +67,7 @@ describe('@youpi/db Unit & Integration Tests', () => {
     assert.equal(customer.phoneNumber, '9876543210');
     assert.equal(customer.fullName, 'Gaurav Sharma');
 
-    const verified = customerRepo.verifyCredentials(
+    const verified = await customerRepo.verifyCredentials(
       testMerchant.id,
       '9876543210',
       'SecurePassword123!'
@@ -74,7 +75,7 @@ describe('@youpi/db Unit & Integration Tests', () => {
     assert.ok(verified);
     assert.equal(verified.id, customer.id);
 
-    const failed = customerRepo.verifyCredentials(
+    const failed = await customerRepo.verifyCredentials(
       testMerchant.id,
       '9876543210',
       'WrongPassword'
@@ -83,98 +84,98 @@ describe('@youpi/db Unit & Integration Tests', () => {
   });
 
   describe('Queue Engine & Concurrency Slot Invariants', () => {
-    test('enforces ONE active slot at one time and queues subsequent sessions', () => {
-      const sessionA = sessionRepo.create({
+    test('enforces ONE active slot at one time and queues subsequent sessions', async () => {
+      const sessionA = await sessionRepo.create({
         merchantId: testMerchant.id,
         receivingAccountId: testAccount.id,
         orderId: 'ORDER-A',
         amountPaise: 20000n
       });
 
-      const sessionB = sessionRepo.create({
+      const sessionB = await sessionRepo.create({
         merchantId: testMerchant.id,
         receivingAccountId: testAccount.id,
         orderId: 'ORDER-B',
         amountPaise: 20000n
       });
 
-      const sessionC = sessionRepo.create({
+      const sessionC = await sessionRepo.create({
         merchantId: testMerchant.id,
         receivingAccountId: testAccount.id,
         orderId: 'ORDER-C',
         amountPaise: 20000n
       });
 
-      const resA = sessionRepo.acquireSlotAtomic(sessionA.id, testAccount.id, 300000);
+      const resA = await sessionRepo.acquireSlotAtomic(sessionA.id, testAccount.id, 300000);
       assert.equal(resA.status, PaymentStatus.ACTIVE);
       assert.equal(resA.queuePosition, 0);
       assert.ok(resA.expiresAt instanceof Date);
 
-      const acctAfterA = accountRepo.findById(testAccount.id);
+      const acctAfterA = await accountRepo.findById(testAccount.id);
       assert.equal(acctAfterA.isSlotBusy, true);
       assert.equal(acctAfterA.currentActiveSessionId, sessionA.id);
 
-      const resB = sessionRepo.acquireSlotAtomic(sessionB.id, testAccount.id, 300000);
+      const resB = await sessionRepo.acquireSlotAtomic(sessionB.id, testAccount.id, 300000);
       assert.equal(resB.status, PaymentStatus.QUEUED);
       assert.equal(resB.queuePosition, 1);
       assert.equal(resB.expiresAt, null);
 
-      const resC = sessionRepo.acquireSlotAtomic(sessionC.id, testAccount.id, 300000);
+      const resC = await sessionRepo.acquireSlotAtomic(sessionC.id, testAccount.id, 300000);
       assert.equal(resC.status, PaymentStatus.QUEUED);
       assert.equal(resC.queuePosition, 2);
 
-      const procA = sessionRepo.transitionToProcessing(sessionA.id, 30000);
+      const procA = await sessionRepo.transitionToProcessing(sessionA.id, 30000);
       assert.equal(procA.status, PaymentStatus.PROCESSING);
       assert.ok(procA.processingStartedAt instanceof Date);
       assert.ok(procA.processingExpiresAt instanceof Date);
 
-      const acctDuringProc = accountRepo.findById(testAccount.id);
+      const acctDuringProc = await accountRepo.findById(testAccount.id);
       assert.equal(acctDuringProc.isSlotBusy, true);
       assert.equal(acctDuringProc.currentActiveSessionId, sessionA.id);
 
-      const successA = sessionRepo.transitionToTerminal(sessionA.id, PaymentStatus.SUCCESS);
+      const successA = await sessionRepo.transitionToTerminal(sessionA.id, PaymentStatus.SUCCESS);
       assert.equal(successA.status, PaymentStatus.SUCCESS);
       assert.ok(successA.completedAt instanceof Date);
 
-      const acctAfterSuccess = accountRepo.findById(testAccount.id);
+      const acctAfterSuccess = await accountRepo.findById(testAccount.id);
       assert.equal(acctAfterSuccess.isSlotBusy, false);
       assert.equal(acctAfterSuccess.currentActiveSessionId, null);
 
-      const nextQueued = sessionRepo.getNextQueuedSession(testAccount.id);
+      const nextQueued = await sessionRepo.getNextQueuedSession(testAccount.id);
       assert.equal(nextQueued.id, sessionB.id);
 
-      const resBAfterPromo = sessionRepo.acquireSlotAtomic(sessionB.id, testAccount.id, 300000);
+      const resBAfterPromo = await sessionRepo.acquireSlotAtomic(sessionB.id, testAccount.id, 300000);
       assert.equal(resBAfterPromo.status, PaymentStatus.ACTIVE);
       assert.equal(resBAfterPromo.queuePosition, 0);
 
-      sessionRepo.reindexQueue(testAccount.id);
-      const updatedC = sessionRepo.findById(sessionC.id);
+      await sessionRepo.reindexQueue(testAccount.id);
+      const updatedC = await sessionRepo.findById(sessionC.id);
       assert.equal(updatedC.queuePosition, 1);
     });
 
-    test('transitions to CANCELLED and immediately releases slot', () => {
-      const session = sessionRepo.create({
+    test('transitions to CANCELLED and immediately releases slot', async () => {
+      const session = await sessionRepo.create({
         merchantId: testMerchant.id,
         receivingAccountId: testAccount.id,
         orderId: 'ORDER-CANCEL',
         amountPaise: 50000n
       });
 
-      sessionRepo.acquireSlotAtomic(session.id, testAccount.id, 300000);
-      let acct = accountRepo.findById(testAccount.id);
+      await sessionRepo.acquireSlotAtomic(session.id, testAccount.id, 300000);
+      let acct = await accountRepo.findById(testAccount.id);
       assert.equal(acct.isSlotBusy, true);
 
-      sessionRepo.transitionToTerminal(session.id, PaymentStatus.CANCELLED);
-      acct = accountRepo.findById(testAccount.id);
+      await sessionRepo.transitionToTerminal(session.id, PaymentStatus.CANCELLED);
+      acct = await accountRepo.findById(testAccount.id);
       assert.equal(acct.isSlotBusy, false);
       assert.equal(acct.currentActiveSessionId, null);
     });
   });
 
   describe('Observation Deduplication & Storage', () => {
-    test('records observations and retrieves by fingerprint for deduplication', () => {
+    test('records observations and retrieves by fingerprint for deduplication', async () => {
       const now = new Date();
-      const obs = obsRepo.create({
+      const obs = await obsRepo.create({
         receivingAccountId: testAccount.id,
         source: ObserverSource.GOOGLE_MESSAGES,
         amountPaise: 20000n,
@@ -187,22 +188,22 @@ describe('@youpi/db Unit & Integration Tests', () => {
       assert.ok(obs.id);
       assert.equal(obs.bankReferenceNumber, 'UTR998877');
 
-      const found = obsRepo.findByFingerprint('hash_abc_123');
+      const found = await obsRepo.findByFingerprint('hash_abc_123');
       assert.ok(found);
       assert.equal(found.id, obs.id);
     });
   });
 
   describe('Support Tickets & Live Messages', () => {
-    test('creates tickets, links payments, and records bidirectional chat', () => {
-      const customer = customerRepo.create({
+    test('creates tickets, links payments, and records bidirectional chat', async () => {
+      const customer = await customerRepo.create({
         merchantId: testMerchant.id,
         phoneNumber: '9123456780',
         fullName: 'Anita Roy',
         password: 'PassWord123!'
       });
 
-      const ticket = ticketRepo.createTicket({
+      const ticket = await ticketRepo.createTicket({
         merchantId: testMerchant.id,
         customerId: customer.id,
         subject: 'Payment failed but money deducted',
@@ -216,7 +217,7 @@ describe('@youpi/db Unit & Integration Tests', () => {
       assert.ok(ticket.id);
       assert.equal(ticket.status, TicketStatus.OPEN);
 
-      const adminMsg = ticketRepo.addMessage({
+      const adminMsg = await ticketRepo.addMessage({
         ticketId: ticket.id,
         senderType: SenderType.ADMIN,
         senderId: testMerchant.id,
@@ -225,7 +226,7 @@ describe('@youpi/db Unit & Integration Tests', () => {
 
       assert.ok(adminMsg.id);
 
-      const messages = ticketRepo.findMessagesByTicket(ticket.id);
+      const messages = await ticketRepo.findMessagesByTicket(ticket.id);
       assert.equal(messages.length, 2);
       assert.equal(messages[0].senderType, SenderType.CUSTOMER);
       assert.equal(messages[1].senderType, SenderType.ADMIN);
@@ -233,8 +234,8 @@ describe('@youpi/db Unit & Integration Tests', () => {
   });
 
   describe('Audit Logging', () => {
-    test('records and queries audit trail', () => {
-      auditRepo.log({
+    test('records and queries audit trail', async () => {
+      await auditRepo.log({
         merchantId: testMerchant.id,
         entityType: 'PAYMENT_SESSION',
         entityId: 'pay_123',
@@ -242,7 +243,7 @@ describe('@youpi/db Unit & Integration Tests', () => {
         details: { queuePosition: 0 }
       });
 
-      const logs = auditRepo.findByEntity('PAYMENT_SESSION', 'pay_123');
+      const logs = await auditRepo.findByEntity('PAYMENT_SESSION', 'pay_123');
       assert.equal(logs.length, 1);
       assert.equal(logs[0].action, 'SLOT_ACQUIRED');
       assert.equal(logs[0].details.queuePosition, 0);

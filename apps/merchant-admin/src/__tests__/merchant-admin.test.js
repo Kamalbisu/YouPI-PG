@@ -1,4 +1,5 @@
 import { test, describe, before, after } from 'node:test';
+import { createTestDatabase } from '@youpi/db/testing';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { Database } from '@youpi/db';
@@ -11,14 +12,14 @@ describe('Merchant Admin Integration Tests', () => {
   let testDb;
 
   before(async () => {
-    testDb = new Database({ inMemory: true });
+    testDb = await createTestDatabase();
     serverInstance = await startAdminServer(6101, { db: testDb });
     baseUrl = `http://localhost:${serverInstance.port}`;
   });
 
   after(async () => {
     await serverInstance.close();
-    testDb.close();
+    await testDb.destroy();
   });
 
   function get(path, headers = {}) {

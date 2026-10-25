@@ -1,4 +1,5 @@
 import '../../../../scripts/test-support.js';
+import { createTestDatabase } from '@youpi/db/testing';
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -56,13 +57,13 @@ describe('route rate limits', () => {
       saved[k] = process.env[k];
       process.env[k] = v;
     }
-    db = new Database({ inMemory: true });
+    db = await createTestDatabase();
     api = await startPaymentApi(6296, db);
   });
 
   after(async () => {
     await api.close();
-    db.close();
+    await db.destroy();
     for (const [k, v] of Object.entries(saved)) {
       if (v === undefined) delete process.env[k];
       else process.env[k] = v;
@@ -145,26 +146,26 @@ describe('route rate limits', () => {
 });
 
 describe('OTP resend does not refill the guess budget', () => {
-  test('setOtp keeps otp_attempts while the previous code is live and resets it once expired', () => {
-    const db = new Database({ inMemory: true });
-    runMigrations(db);
+  test('setOtp keeps otp_attempts while the previous code is live and resets it once expired', async () => {
+    const db = await createTestDatabase();
+    await runMigrations(db);
     try {
       const repo = new CustomerRepository(db);
-      repo.create({ name: 'Otp Tester', email: 'otp@example.com', mobileNumber: '9000000001', password: 'secret123' });
+      await repo.create({ name: 'Otp Tester', email: 'otp@example.com', mobileNumber: '9000000001', password: 'secret123' });
       const future = new Date(Date.now() + 5 * 60 * 1000).toISOString();
-      repo.setOtp('9000000001', '111111', future);
-      for (let i = 0; i < 3; i++) assert.equal(repo.verifyOtp('9000000001', '000000'), null);
-      assert.equal(repo.findByMobile('9000000001').otpAttempts, 3);
+      await repo.setOtp('9000000001', '111111', future);
+      for (let i = 0; i < 3; i++) assert.equal(await repo.verifyOtp('9000000001', '000000'), null);
+      assert.equal((await repo.findByMobile('9000000001')).otpAttempts, 3);
 
-      repo.setOtp('9000000001', '222222', future);
-      assert.equal(repo.findByMobile('9000000001').otpAttempts, 3);
+      await repo.setOtp('9000000001', '222222', future);
+      assert.equal((await repo.findByMobile('9000000001')).otpAttempts, 3);
 
       const past = new Date(Date.now() - 1000).toISOString();
-      db.execute('UPDATE customers SET otp_expires_at = ? WHERE mobile_number = ?', [past, '9000000001']);
-      repo.setOtp('9000000001', '333333', future);
-      assert.equal(repo.findByMobile('9000000001').otpAttempts, 0);
+      await db.execute('UPDATE customers SET otp_expires_at = ? WHERE mobile_number = ?', [past, '9000000001']);
+      await repo.setOtp('9000000001', '333333', future);
+      assert.equal((await repo.findByMobile('9000000001')).otpAttempts, 0);
     } finally {
-      db.close();
+      await db.destroy();
     }
   });
 });

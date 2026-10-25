@@ -1,4 +1,5 @@
 import { test, describe, before, after } from 'node:test';
+import { createTestDatabase } from '@youpi/db/testing';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { Database, CustomerRepository, PaymentSessionRepository, MerchantRepository, AuditLogRepository, ObservationRepository } from '@youpi/db';
@@ -22,7 +23,7 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
   const receivingAccountId = '00000000-0000-0000-0000-000000000002';
 
   before(async () => {
-    testDb = new Database({ inMemory: true });
+    testDb = await createTestDatabase();
     customerRepo = new CustomerRepository(testDb);
     sessionRepo = new PaymentSessionRepository(testDb);
     merchantRepo = new MerchantRepository(testDb);
@@ -44,7 +45,7 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
 
   after(async () => {
     await apiInstance.close();
-    testDb.close();
+    await testDb.destroy();
   });
 
   function request(path, options = {}) {
@@ -79,15 +80,15 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     });
   }
 
-  function createActiveSession(orderId, amountPaise, customerId = null, slotOffsetMs = 0, accountId = receivingAccountId) {
-    testDb.execute(
+  async function createActiveSession(orderId, amountPaise, customerId = null, slotOffsetMs = 0, accountId = receivingAccountId) {
+    await testDb.execute(
       `UPDATE payment_sessions SET status = ?, updated_at = ?
        WHERE receiving_account_id = ? AND status IN ('ACTIVE', 'PROCESSING')`,
       [PaymentStatus.CANCELLED, new Date().toISOString(), accountId]
     );
 
     const now = Date.now() + slotOffsetMs;
-    const session = sessionRepo.create({
+    const session = await sessionRepo.create({
       merchantId,
       customerId,
       receivingAccountId: accountId,
@@ -102,12 +103,13 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     return session;
   }
 
-  function createAdditionalReceivingAccount(suffix) {
+  async function createAdditionalReceivingAccount(suffix) {
     const id = `00000000-0000-0000-0000-0000000000${String(suffix).padStart(2, '0')}`;
-    testDb.execute(
-      `INSERT OR IGNORE INTO payment_receiving_accounts
+    await testDb.execute(
+      `INSERT INTO payment_receiving_accounts
         (id, merchant_id, upi_id, payee_name, is_merchant_enabled, is_active, is_slot_busy, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 1, 0, 0, ?, ?)`,
+       VALUES (?, ?, ?, ?, true, false, false, ?, ?)
+       ON CONFLICT (id) DO NOTHING`,
       [id, merchantId, `merchant${suffix}@upi`, 'Fraud Test Merchant', new Date().toISOString(), new Date().toISOString()]
     );
     return id;
@@ -155,16 +157,16 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     }
   });
 
-  test('6. Message with no currency indicator ("credited with 499") fails Stage 3 with MISSING_CURRENCY_INDICATOR. NO ban is applied.', () => {
-    const cust = customerRepo.create({
+  test('6. Message with no currency indicator ("credited with 499") fails Stage 3 with MISSING_CURRENCY_INDICATOR. NO ban is applied.', async () => {
+    const cust = await customerRepo.create({
       merchantId,
       name: 'Test No Currency',
       email: 'nocurrency@test.com',
       mobileNumber: '+919999000001'
     });
-    const session = createActiveSession('ORD-NOCURR-1', 49900n, cust.id);
+    const session = await createActiveSession('ORD-NOCURR-1', 49900n, cust.id);
 
-    const result = pipeline.process({
+    const result = await pipeline.process({
       source: 'SMS',
       sender: 'VM-HDFCBK',
       rawText: 'credited with 499 ref 123456789012',
@@ -176,20 +178,20 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     assert.equal(result.failingStage, 3);
     assert.equal(result.failingCondition, 'MISSING_CURRENCY_INDICATOR');
 
-    const reloadedCust = customerRepo.findById(cust.id);
+    const reloadedCust = await customerRepo.findById(cust.id);
     assert.equal(reloadedCust.status, 'ACTIVE');
   });
 
-  test('7. Message from unknown personal number (NOT matching customer\'s phone): Rejected at Stage 2. NO ban applied.', () => {
-    const cust = customerRepo.create({
+  test('7. Message from unknown personal number (NOT matching customer\'s phone): Rejected at Stage 2. NO ban applied.', async () => {
+    const cust = await customerRepo.create({
       merchantId,
       name: 'Customer Seven',
       email: 'seven@test.com',
       mobileNumber: '+919876543207'
     });
-    const session = createActiveSession('ORD-SEVEN-1', 49900n, cust.id);
+    const session = await createActiveSession('ORD-SEVEN-1', 49900n, cust.id);
 
-    const result = pipeline.process({
+    const result = await pipeline.process({
       source: 'SMS',
       sender: '+918888888888',
       rawText: 'A/C credited with Rs 499.00 ref 123456789012',
@@ -201,20 +203,20 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     assert.equal(result.failingStage, 2);
     assert.equal(result.failingCondition, 'PERSONAL_SMS_REJECTED');
 
-    const reloaded = customerRepo.findById(cust.id);
+    const reloaded = await customerRepo.findById(cust.id);
     assert.equal(reloaded.status, 'ACTIVE', 'Customer must remain ACTIVE');
   });
 
-  test('8. Message from personal email (NOT matching customer\'s email): Rejected at Stage 2. NO ban applied.', () => {
-    const cust = customerRepo.create({
+  test('8. Message from personal email (NOT matching customer\'s email): Rejected at Stage 2. NO ban applied.', async () => {
+    const cust = await customerRepo.create({
       merchantId,
       name: 'Customer Eight',
       email: 'eight@test.com',
       mobileNumber: '+919876543211'
     });
-    const session = createActiveSession('ORD-EIGHT-1', 49900n, cust.id);
+    const session = await createActiveSession('ORD-EIGHT-1', 49900n, cust.id);
 
-    const result = pipeline.process({
+    const result = await pipeline.process({
       source: 'GMAIL',
       sender: 'randomstranger@gmail.com',
       rawText: 'Payment credited with Rs 499.00 ref 123456789012',
@@ -226,20 +228,20 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     assert.equal(result.failingStage, 2);
     assert.equal(result.failingCondition, 'INVALID_EMAIL_DOMAIN');
 
-    const reloaded = customerRepo.findById(cust.id);
+    const reloaded = await customerRepo.findById(cust.id);
     assert.equal(reloaded.status, 'ACTIVE', 'Customer must remain ACTIVE');
   });
 
-  test('9. Valid bank SMS with wrong amount: Rejected at Stage 4. NO ban applied.', () => {
-    const cust = customerRepo.create({
+  test('9. Valid bank SMS with wrong amount: Rejected at Stage 4. NO ban applied.', async () => {
+    const cust = await customerRepo.create({
       merchantId,
       name: 'Customer Nine',
       email: 'nine@test.com',
       mobileNumber: '+919876543212'
     });
-    const session = createActiveSession('ORD-NINE-1', 49900n, cust.id);
+    const session = await createActiveSession('ORD-NINE-1', 49900n, cust.id);
 
-    const result = pipeline.process({
+    const result = await pipeline.process({
       source: 'SMS',
       sender: 'VM-HDFCBK',
       rawText: 'A/C credited with Rs 100.00 ref 123456789012',
@@ -251,20 +253,20 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     assert.equal(result.failingStage, 4);
     assert.equal(result.failingCondition, 'AMOUNT_MISMATCH');
 
-    const reloaded = customerRepo.findById(cust.id);
+    const reloaded = await customerRepo.findById(cust.id);
     assert.equal(reloaded.status, 'ACTIVE', 'Customer must remain ACTIVE');
   });
 
-  test('10. Valid bank SMS with missing credit indicator: Rejected at Stage 3. NO ban applied.', () => {
-    const cust = customerRepo.create({
+  test('10. Valid bank SMS with missing credit indicator: Rejected at Stage 3. NO ban applied.', async () => {
+    const cust = await customerRepo.create({
       merchantId,
       name: 'Customer Ten',
       email: 'ten@test.com',
       mobileNumber: '+919876543213'
     });
-    const session = createActiveSession('ORD-TEN-1', 49900n, cust.id);
+    const session = await createActiveSession('ORD-TEN-1', 49900n, cust.id);
 
-    const result = pipeline.process({
+    const result = await pipeline.process({
       source: 'SMS',
       sender: 'VM-HDFCBK',
       rawText: 'Your account balance is Rs 499.00 ref 123456789012',
@@ -276,20 +278,20 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     assert.equal(result.failingStage, 3);
     assert.equal(result.failingCondition, 'MISSING_CREDIT_INDICATOR');
 
-    const reloaded = customerRepo.findById(cust.id);
+    const reloaded = await customerRepo.findById(cust.id);
     assert.equal(reloaded.status, 'ACTIVE', 'Customer must remain ACTIVE');
   });
 
-  test('11. Malformed text / random string: Rejected at Stage 3. NO ban applied.', () => {
-    const cust = customerRepo.create({
+  test('11. Malformed text / random string: Rejected at Stage 3. NO ban applied.', async () => {
+    const cust = await customerRepo.create({
       merchantId,
       name: 'Customer Eleven',
       email: 'eleven@test.com',
       mobileNumber: '+919876543214'
     });
-    const session = createActiveSession('ORD-ELEVEN-1', 49900n, cust.id);
+    const session = await createActiveSession('ORD-ELEVEN-1', 49900n, cust.id);
 
-    const result = pipeline.process({
+    const result = await pipeline.process({
       source: 'SMS',
       sender: 'VM-HDFCBK',
       rawText: 'asdfqwerty12345randomgarbledtext',
@@ -300,20 +302,20 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     assert.equal(result.status, 'REJECTED');
     assert.equal(result.failingStage, 3);
 
-    const reloaded = customerRepo.findById(cust.id);
+    const reloaded = await customerRepo.findById(cust.id);
     assert.equal(reloaded.status, 'ACTIVE', 'Customer must remain ACTIVE');
   });
 
-  test('12. Message containing "<script>" or "DROP TABLE": Rejected by parser/sanitizer. NO ban applied.', () => {
-    const cust = customerRepo.create({
+  test('12. Message containing "<script>" or "DROP TABLE": Rejected by parser/sanitizer. NO ban applied.', async () => {
+    const cust = await customerRepo.create({
       merchantId,
       name: 'Customer Twelve',
       email: 'twelve@test.com',
       mobileNumber: '+919876543215'
     });
-    const session = createActiveSession('ORD-TWELVE-1', 49900n, cust.id);
+    const session = await createActiveSession('ORD-TWELVE-1', 49900n, cust.id);
 
-    const result = pipeline.process({
+    const result = await pipeline.process({
       source: 'SMS',
       sender: 'VM-HDFCBK',
       rawText: '<script>alert("xss")</script> DROP TABLE customers; --',
@@ -323,20 +325,20 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     assert.equal(result.success, false);
     assert.equal(result.status, 'REJECTED');
 
-    const reloaded = customerRepo.findById(cust.id);
+    const reloaded = await customerRepo.findById(cust.id);
     assert.equal(reloaded.status, 'ACTIVE', 'Generic injection strings must NOT trigger automatic banning');
   });
 
-  test('13. Message containing "suspicious", "hack", "test": Processed normally. NO ban applied.', () => {
-    const cust = customerRepo.create({
+  test('13. Message containing "suspicious", "hack", "test": Processed normally. NO ban applied.', async () => {
+    const cust = await customerRepo.create({
       merchantId,
       name: 'Customer Thirteen',
       email: 'thirteen@test.com',
       mobileNumber: '+919876543216'
     });
-    const session = createActiveSession('ORD-THIRTEEN-1', 49900n, cust.id);
+    const session = await createActiveSession('ORD-THIRTEEN-1', 49900n, cust.id);
 
-    const result = pipeline.process({
+    const result = await pipeline.process({
       source: 'SMS',
       sender: 'VM-HDFCBK',
       rawText: 'Account credited with Rs 499.00 ref 987654321098 note: suspicious hack test order',
@@ -346,21 +348,21 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     assert.equal(result.success, true);
     assert.equal(result.status, 'VERIFIED');
 
-    const reloaded = customerRepo.findById(cust.id);
+    const reloaded = await customerRepo.findById(cust.id);
     assert.equal(reloaded.status, 'ACTIVE', 'Legitimate bank message must remain ACTIVE');
   });
 
-  test('14. Customer with phone +919876543210 has active payment session. Observation arrives from SMS sender "+919876543210". Content contains valid credit format matching session amount.', () => {
-    const cust = customerRepo.create({
+  test('14. Customer with phone +919876543210 has active payment session. Observation arrives from SMS sender "+919876543210". Content contains valid credit format matching session amount.', async () => {
+    const cust = await customerRepo.create({
       merchantId,
       name: 'Fraud Suspect 14',
       email: 'fraud14@test.com',
       mobileNumber: '+919876543210'
     });
-    const session = createActiveSession('ORD-FRAUD-14', 49900n, cust.id);
+    const session = await createActiveSession('ORD-FRAUD-14', 49900n, cust.id);
     const rawFakeMessage = 'A/C credited with Rs 499.00 UPI Ref 112233445566 to YOUPI STORE';
 
-    const result = pipeline.process({
+    const result = await pipeline.process({
       source: 'SMS',
       sender: '+919876543210',
       rawText: rawFakeMessage,
@@ -370,27 +372,27 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     assert.equal(result.success, false, 'Payment must NOT be confirmed (DO NOT PAY)');
     assert.equal(result.status, 'REJECTED');
 
-    const updatedCust = customerRepo.findById(cust.id);
+    const updatedCust = await customerRepo.findById(cust.id);
     assert.equal(updatedCust.status, 'BANNED', 'Customer status must become BANNED');
     assert.equal(updatedCust.banReason, 'FRAUDULENT_PAYMENT_INJECTION');
 
-    const secEvents = customerRepo.getSecurityEvents(cust.id);
+    const secEvents = await customerRepo.getSecurityEvents(cust.id);
     assert.ok(secEvents.length > 0, 'Security event must be recorded');
     assert.equal(secEvents[0].eventType, 'FRAUDULENT_PAYMENT_INJECTION');
 
     assert.equal(secEvents[0].rawMessage, rawFakeMessage, 'Raw message must be preserved verbatim word-for-word');
   });
 
-  test('15. Customer with phone 9876543210 has active payment session. Observation arrives from SMS sender "+91 98765 43210". Result: Auto-ban applied (phone format normalized).', () => {
-    const cust = customerRepo.create({
+  test('15. Customer with phone 9876543210 has active payment session. Observation arrives from SMS sender "+91 98765 43210". Result: Auto-ban applied (phone format normalized).', async () => {
+    const cust = await customerRepo.create({
       merchantId,
       name: 'Fraud Suspect 15',
       email: 'fraud15@test.com',
       mobileNumber: '9876543255'
     });
-    const session = createActiveSession('ORD-FRAUD-15', 50000n, cust.id);
+    const session = await createActiveSession('ORD-FRAUD-15', 50000n, cust.id);
 
-    const result = pipeline.process({
+    const result = await pipeline.process({
       source: 'SMS',
       sender: '+91 98765 43255',
       rawText: '₹500.00 credited to a/c via UPI/CR/123456789099',
@@ -398,20 +400,20 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     });
 
     assert.equal(result.success, false);
-    const updatedCust = customerRepo.findById(cust.id);
+    const updatedCust = await customerRepo.findById(cust.id);
     assert.equal(updatedCust.status, 'BANNED', 'Phone format must normalize and trigger auto-ban');
   });
 
-  test('16. Customer with email user@gmail.com has active payment session. Observation arrives from email sender "user@gmail.com". Result: Auto-ban applied.', () => {
-    const cust = customerRepo.create({
+  test('16. Customer with email user@gmail.com has active payment session. Observation arrives from email sender "user@gmail.com". Result: Auto-ban applied.', async () => {
+    const cust = await customerRepo.create({
       merchantId,
       name: 'Fraud Suspect 16',
       email: 'user16@gmail.com',
       mobileNumber: '+919876543219'
     });
-    const session = createActiveSession('ORD-FRAUD-16', 75000n, cust.id);
+    const session = await createActiveSession('ORD-FRAUD-16', 75000n, cust.id);
 
-    const result = pipeline.process({
+    const result = await pipeline.process({
       source: 'GMAIL',
       sender: 'user16@gmail.com',
       rawText: 'Payment received: INR 750.00 ref: 998877665544 credited to merchant account',
@@ -419,18 +421,18 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     });
 
     assert.equal(result.success, false);
-    const updatedCust = customerRepo.findById(cust.id);
+    const updatedCust = await customerRepo.findById(cust.id);
     assert.equal(updatedCust.status, 'BANNED', 'Personal email match must trigger auto-ban');
   });
 
   test('17. Banned customer attempts to initiate new payment session: Rejected with 403 / BLOCKED status.', async () => {
-    const bannedCust = customerRepo.create({
+    const bannedCust = await customerRepo.create({
       merchantId,
       name: 'Blocked User 17',
       email: 'blocked17@test.com',
       mobileNumber: '+919876543220'
     });
-    customerRepo.banCustomer(bannedCust.id, 'FRAUDULENT_PAYMENT_INJECTION');
+    await customerRepo.banCustomer(bannedCust.id, 'FRAUDULENT_PAYMENT_INJECTION');
 
     const res = await request('/api/v1/payments', {
       method: 'POST',
@@ -446,33 +448,33 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     assert.ok(res.body.error.includes('ACCESS BLOCKED'));
   });
 
-  test('18. Banned customer\'s existing active sessions: Immediately transitioned to EXPIRED.', () => {
-    const cust = customerRepo.create({
+  test('18. Banned customer\'s existing active sessions: Immediately transitioned to EXPIRED.', async () => {
+    const cust = await customerRepo.create({
       merchantId,
       name: 'Active Session User 18',
       email: 'user18@test.com',
       mobileNumber: '+919876543221'
     });
-    const s1 = createActiveSession('ORD-18-A', 49900n, cust.id);
-    const s2 = createActiveSession('ORD-18-B', 99900n, cust.id, 0, createAdditionalReceivingAccount(91));
+    const s1 = await createActiveSession('ORD-18-A', 49900n, cust.id);
+    const s2 = await createActiveSession('ORD-18-B', 99900n, cust.id, 0, await createAdditionalReceivingAccount(91));
 
-    assert.equal(sessionRepo.findById(s1.id).status, PaymentStatus.ACTIVE);
-    assert.equal(sessionRepo.findById(s2.id).status, PaymentStatus.ACTIVE);
+    assert.equal((await sessionRepo.findById(s1.id)).status, PaymentStatus.ACTIVE);
+    assert.equal((await sessionRepo.findById(s2.id)).status, PaymentStatus.ACTIVE);
 
-    customerRepo.banCustomer(cust.id, 'FRAUDULENT_PAYMENT_INJECTION');
+    await customerRepo.banCustomer(cust.id, 'FRAUDULENT_PAYMENT_INJECTION');
 
-    assert.equal(sessionRepo.findById(s1.id).status, PaymentStatus.EXPIRED);
-    assert.equal(sessionRepo.findById(s2.id).status, PaymentStatus.EXPIRED);
+    assert.equal((await sessionRepo.findById(s1.id)).status, PaymentStatus.EXPIRED);
+    assert.equal((await sessionRepo.findById(s2.id)).status, PaymentStatus.EXPIRED);
   });
 
   test('19. Banned customer appears in Merchant Panel Banned Users list.', async () => {
-    const cust = customerRepo.create({
+    const cust = await customerRepo.create({
       merchantId,
       name: 'Listed Banned User 19',
       email: 'user19@test.com',
       mobileNumber: '+919876543222'
     });
-    customerRepo.banCustomer(cust.id, 'FRAUDULENT_PAYMENT_INJECTION');
+    await customerRepo.banCustomer(cust.id, 'FRAUDULENT_PAYMENT_INJECTION');
 
     const res = await request('/api/v1/admin/security/banned-users');
     assert.equal(res.status, 200);
@@ -483,16 +485,16 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
   });
 
   test('20. Merchant can view complete evidence dossier in Merchant Panel including the EXACT raw message text.', async () => {
-    const cust = customerRepo.create({
+    const cust = await customerRepo.create({
       merchantId,
       name: 'Evidence Dossier User 20',
       email: 'user20@test.com',
       mobileNumber: '+919876543223'
     });
-    const session = createActiveSession('ORD-20', 49900n, cust.id);
+    const session = await createActiveSession('ORD-20', 49900n, cust.id);
     const exactRaw = 'VERBATIM_RAW_TEST_PAYLOAD_98765: Rs 499 credited ref 123456789012';
 
-    pipeline.process({
+    await pipeline.process({
       source: 'SMS',
       sender: '+919876543223',
       rawText: exactRaw,
@@ -510,13 +512,13 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
   });
 
   test('21. Merchant can unban customer with mandatory reason.', async () => {
-    const cust = customerRepo.create({
+    const cust = await customerRepo.create({
       merchantId,
       name: 'Unban Target 21',
       email: 'user21@test.com',
       mobileNumber: '+919876543224'
     });
-    customerRepo.banCustomer(cust.id, 'FRAUDULENT_PAYMENT_INJECTION');
+    await customerRepo.banCustomer(cust.id, 'FRAUDULENT_PAYMENT_INJECTION');
 
     const res = await request('/api/v1/admin/security/unban', {
       method: 'POST',
@@ -529,18 +531,18 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     assert.equal(res.status, 200);
     assert.equal(res.body.success, true);
 
-    const updated = customerRepo.findById(cust.id);
+    const updated = await customerRepo.findById(cust.id);
     assert.equal(updated.status, 'ACTIVE', 'Customer status must become ACTIVE after unban');
   });
 
   test('22. After unban: customer can initiate payments again.', async () => {
-    const cust = customerRepo.create({
+    const cust = await customerRepo.create({
       merchantId,
       name: 'Restored User 22',
       email: 'user22@test.com',
       mobileNumber: '+919876543225'
     });
-    customerRepo.banCustomer(cust.id, 'FRAUDULENT_PAYMENT_INJECTION');
+    await customerRepo.banCustomer(cust.id, 'FRAUDULENT_PAYMENT_INJECTION');
 
     await request('/api/v1/admin/security/unban', {
       method: 'POST',
@@ -561,7 +563,7 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
   });
 
   test('23. Merchant can manually ban customer with mandatory reason.', async () => {
-    const cust = customerRepo.create({
+    const cust = await customerRepo.create({
       merchantId,
       name: 'Manual Ban Target 23',
       email: 'user23@test.com',
@@ -580,35 +582,35 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     assert.equal(res.status, 200);
     assert.equal(res.body.success, true);
 
-    const updated = customerRepo.findById(cust.id);
+    const updated = await customerRepo.findById(cust.id);
     assert.equal(updated.status, 'BANNED');
     assert.equal(updated.banReason, 'MANUAL_BAN');
   });
 
-  test('24. Manual ban records MANUAL_BAN event in audit log.', () => {
-    const logs = testDb.query(`
+  test('24. Manual ban records MANUAL_BAN event in audit log.', async () => {
+    const logs = await testDb.query(`
       SELECT * FROM audit_logs WHERE action = 'CUSTOMER_MANUALLY_BANNED' ORDER BY created_at DESC LIMIT 1
     `);
     assert.ok(logs.length > 0, 'Audit log must contain CUSTOMER_MANUALLY_BANNED');
   });
 
-  test('25. Auto-ban records FRAUDULENT_PAYMENT_INJECTION event in audit log.', () => {
-    const logs = testDb.query(`
+  test('25. Auto-ban records FRAUDULENT_PAYMENT_INJECTION event in audit log.', async () => {
+    const logs = await testDb.query(`
       SELECT * FROM audit_logs WHERE action = 'CUSTOMER_AUTOMATICALLY_BANNED' ORDER BY created_at DESC LIMIT 1
     `);
     assert.ok(logs.length > 0, 'Audit log must contain CUSTOMER_AUTOMATICALLY_BANNED');
   });
 
-  test('26. When defined fraud scenario occurs: triggers FRAUDULENT_PAYMENT_INJECTION detection, payment is NOT confirmed, customer IS automatically banned, and security event is recorded.', () => {
-    const cust = customerRepo.create({
+  test('26. When defined fraud scenario occurs: triggers FRAUDULENT_PAYMENT_INJECTION detection, payment is NOT confirmed, customer IS automatically banned, and security event is recorded.', async () => {
+    const cust = await customerRepo.create({
       merchantId,
       name: 'Test Mode Customer 26',
       email: 'testmode26@test.com',
       mobileNumber: '+919876543227'
     });
-    const session = createActiveSession('ORD-TESTMODE-26', 49900n, cust.id);
+    const session = await createActiveSession('ORD-TESTMODE-26', 49900n, cust.id);
 
-    const result = pipeline.process({
+    const result = await pipeline.process({
       source: 'SMS',
       sender: '+919876543227',
       rawText: 'Rs 499.00 credited ref 123456789012 to merchant',
@@ -621,17 +623,17 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     assert.equal(result.status, 'REJECTED', 'Status is REJECTED');
     assert.equal(result.failingCondition, 'FRAUDULENT_PAYMENT_INJECTION');
 
-    const reloaded = customerRepo.findById(cust.id);
+    const reloaded = await customerRepo.findById(cust.id);
     assert.equal(reloaded.status, 'BANNED', 'Customer must be automatically banned');
     assert.equal(reloaded.banReason, 'FRAUDULENT_PAYMENT_INJECTION');
 
-    const secEvents = customerRepo.getSecurityEvents(cust.id);
+    const secEvents = await customerRepo.getSecurityEvents(cust.id);
     assert.ok(secEvents.length > 0, 'Security event must be recorded');
   });
 
-  test('27. Fraud security event has autoBanApplied = true and records verbatim details.', () => {
-    const cust = customerRepo.findByMobile('+919876543227');
-    const secEvents = customerRepo.getSecurityEvents(cust.id);
+  test('27. Fraud security event has autoBanApplied = true and records verbatim details.', async () => {
+    const cust = await customerRepo.findByMobile('+919876543227');
+    const secEvents = await customerRepo.getSecurityEvents(cust.id);
     assert.ok(secEvents.length > 0);
     const ev = secEvents[0];
     assert.equal(ev.autoBanApplied, true, 'autoBanApplied must be true');
@@ -672,8 +674,8 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     const durationMs = until - enabledAt;
     assert.equal(durationMs, 10 * 60 * 1000, 'Test mode window must be exactly 10 minutes (600,000 ms)');
 
-    const merchant = merchantRepo.findById(merchantId);
-    merchantRepo.update(merchantId, {
+    const merchant = await merchantRepo.findById(merchantId);
+    await merchantRepo.update(merchantId, {
       branding: {
         ...(merchant.branding || {}),
         testModeUntil: Date.now() - 5000
@@ -687,16 +689,16 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
   });
 
   test('30. When user pushes fake SMS: server detects fraud instantly, auto-bans customer, terminates ongoing session, and checkout state reports BLOCKED under-investigation screen', async () => {
-    const cust = customerRepo.create({
+    const cust = await customerRepo.create({
       merchantId,
       name: 'Realtime Fake SMS Pusher',
       email: 'fakesms30@test.com',
       mobileNumber: '+919876543230'
     });
-    const session = createActiveSession('ORD-REALTIME-30', 49900n, cust.id);
+    const session = await createActiveSession('ORD-REALTIME-30', 49900n, cust.id);
 
-    assert.equal(sessionRepo.findById(session.id).status, PaymentStatus.ACTIVE);
-    assert.equal(customerRepo.findById(cust.id).status, 'ACTIVE');
+    assert.equal((await sessionRepo.findById(session.id)).status, PaymentStatus.ACTIVE);
+    assert.equal((await customerRepo.findById(cust.id)).status, 'ACTIVE');
 
     const pushRes = await request(`/api/v1/checkout/${session.id}/simulate-observation`, {
       method: 'POST',
@@ -712,11 +714,11 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     assert.equal(pushRes.body.isBanned, true);
     assert.equal(pushRes.body.reason, 'FRAUDULENT_PAYMENT_INJECTION');
 
-    const reloadedCust = customerRepo.findById(cust.id);
+    const reloadedCust = await customerRepo.findById(cust.id);
     assert.equal(reloadedCust.status, 'BANNED');
     assert.equal(reloadedCust.banReason, 'FRAUDULENT_PAYMENT_INJECTION');
 
-    const reloadedSession = sessionRepo.findById(session.id);
+    const reloadedSession = await sessionRepo.findById(session.id);
     assert.equal(reloadedSession.status, PaymentStatus.EXPIRED);
 
     const stateRes = await request(`/api/v1/checkout/${session.id}/state`);
@@ -731,13 +733,13 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
   });
 
   test('31. When user pushes fake email: server detects fraud instantly, auto-bans customer, terminates ongoing session, and checkout state reports BLOCKED under-investigation screen', async () => {
-    const cust = customerRepo.create({
+    const cust = await customerRepo.create({
       merchantId,
       name: 'Realtime Fake Email Pusher',
       email: 'fakeemail31@test.com',
       mobileNumber: '+919876543231'
     });
-    const session = createActiveSession('ORD-REALTIME-31', 99900n, cust.id);
+    const session = await createActiveSession('ORD-REALTIME-31', 99900n, cust.id);
 
     const pushRes = await request(`/api/v1/checkout/${session.id}/simulate-observation`, {
       method: 'POST',
@@ -752,8 +754,8 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     assert.equal(pushRes.body.status, 'BLOCKED');
     assert.equal(pushRes.body.isBanned, true);
 
-    assert.equal(customerRepo.findById(cust.id).status, 'BANNED');
-    assert.equal(sessionRepo.findById(session.id).status, PaymentStatus.EXPIRED);
+    assert.equal((await customerRepo.findById(cust.id)).status, 'BANNED');
+    assert.equal((await sessionRepo.findById(session.id)).status, PaymentStatus.EXPIRED);
 
     const stateRes = await request(`/api/v1/checkout/${session.id}/state`);
     assert.equal(stateRes.status, 200);

@@ -1,4 +1,5 @@
 import { test, describe, beforeEach, afterEach } from 'node:test';
+import { createTestDatabase } from '@youpi/db/testing';
 import assert from 'node:assert/strict';
 import {
   Database,
@@ -26,9 +27,9 @@ describe('@youpi/core Queue & Timing Engine Tests', () => {
   let defaultMerchant;
   let events;
 
-  beforeEach(() => {
-    db = new Database({ inMemory: true });
-    const seed = runMigrations(db);
+  beforeEach(async () => {
+    db = await createTestDatabase();
+    const seed = await runMigrations(db);
     defaultMerchant = seed.defaultMerchant;
     testAccount = { id: '00000000-0000-0000-0000-000000000002' };
 
@@ -67,118 +68,118 @@ describe('@youpi/core Queue & Timing Engine Tests', () => {
     });
   });
 
-  afterEach(() => {
-    timingEngine.destroy();
-    db.close();
+  afterEach(async () => {
+    await timingEngine.destroy();
+    await db.destroy();
   });
 
-  test('Queue Engine correctly assigns active slot and queued positions with wait estimates', () => {
-    const s1 = sessionRepo.create({
+  test('Queue Engine correctly assigns active slot and queued positions with wait estimates', async () => {
+    const s1 = await sessionRepo.create({
       merchantId: defaultMerchant.id,
       receivingAccountId: testAccount.id,
       orderId: 'Q-ORD-1',
       amountPaise: 20000n
     });
-    const s2 = sessionRepo.create({
+    const s2 = await sessionRepo.create({
       merchantId: defaultMerchant.id,
       receivingAccountId: testAccount.id,
       orderId: 'Q-ORD-2',
       amountPaise: 20000n
     });
-    const s3 = sessionRepo.create({
+    const s3 = await sessionRepo.create({
       merchantId: defaultMerchant.id,
       receivingAccountId: testAccount.id,
       orderId: 'Q-ORD-3',
       amountPaise: 20000n
     });
 
-    const res1 = queueEngine.enqueueOrActivate(s1.id, testAccount.id, 300000);
+    const res1 = await queueEngine.enqueueOrActivate(s1.id, testAccount.id, 300000);
     assert.equal(res1.status, PaymentStatus.ACTIVE);
     assert.equal(res1.queuePosition, 0);
 
-    const res2 = queueEngine.enqueueOrActivate(s2.id, testAccount.id, 300000);
+    const res2 = await queueEngine.enqueueOrActivate(s2.id, testAccount.id, 300000);
     assert.equal(res2.status, PaymentStatus.QUEUED);
     assert.equal(res2.queuePosition, 1);
 
-    const res3 = queueEngine.enqueueOrActivate(s3.id, testAccount.id, 300000);
+    const res3 = await queueEngine.enqueueOrActivate(s3.id, testAccount.id, 300000);
     assert.equal(res3.status, PaymentStatus.QUEUED);
     assert.equal(res3.queuePosition, 2);
 
-    const wait2 = queueEngine.calculateEstimatedWaitSeconds(testAccount.id, 1);
-    const wait3 = queueEngine.calculateEstimatedWaitSeconds(testAccount.id, 2);
+    const wait2 = await queueEngine.calculateEstimatedWaitSeconds(testAccount.id, 1);
+    const wait3 = await queueEngine.calculateEstimatedWaitSeconds(testAccount.id, 2);
     assert.ok(wait2 > 0);
     assert.ok(wait3 > wait2);
   });
 
   test('Timing Engine: 5-minute active window expires and auto-promotes next in queue', async () => {
-    const s1 = sessionRepo.create({
+    const s1 = await sessionRepo.create({
       merchantId: defaultMerchant.id,
       receivingAccountId: testAccount.id,
       orderId: 'TIM-ORD-1',
       amountPaise: 20000n
     });
-    const s2 = sessionRepo.create({
+    const s2 = await sessionRepo.create({
       merchantId: defaultMerchant.id,
       receivingAccountId: testAccount.id,
       orderId: 'TIM-ORD-2',
       amountPaise: 20000n
     });
 
-    const res1 = queueEngine.enqueueOrActivate(s1.id, testAccount.id, 50);
-    queueEngine.enqueueOrActivate(s2.id, testAccount.id, 50);
+    const res1 = await queueEngine.enqueueOrActivate(s1.id, testAccount.id, 50);
+    await queueEngine.enqueueOrActivate(s2.id, testAccount.id, 50);
 
-    timingEngine.startActiveTimer(s1.id, res1.expiresAt);
+    await timingEngine.startActiveTimer(s1.id, res1.expiresAt);
 
     await new Promise(resolve => setTimeout(resolve, 70));
 
-    const updatedS1 = sessionRepo.findById(s1.id);
+    const updatedS1 = await sessionRepo.findById(s1.id);
     assert.equal(updatedS1.status, PaymentStatus.EXPIRED);
 
-    const updatedS2 = sessionRepo.findById(s2.id);
+    const updatedS2 = await sessionRepo.findById(s2.id);
     assert.equal(updatedS2.status, PaymentStatus.ACTIVE);
     assert.equal(updatedS2.queuePosition, 0);
   });
 
   test('Timing Engine: Payment Done starts 30-sec processing window, fails if no observation', async () => {
-    const s1 = sessionRepo.create({
+    const s1 = await sessionRepo.create({
       merchantId: defaultMerchant.id,
       receivingAccountId: testAccount.id,
       orderId: 'PROC-ORD-1',
       amountPaise: 20000n
     });
 
-    queueEngine.enqueueOrActivate(s1.id, testAccount.id, 300000);
+    await queueEngine.enqueueOrActivate(s1.id, testAccount.id, 300000);
 
-    const procSession = timingEngine.handlePaymentDone(s1.id);
+    const procSession = await timingEngine.handlePaymentDone(s1.id);
     assert.equal(procSession.status, PaymentStatus.PROCESSING);
     assert.ok(procSession.processingExpiresAt);
 
     await new Promise(resolve => setTimeout(resolve, 70));
 
-    const updatedS1 = sessionRepo.findById(s1.id);
+    const updatedS1 = await sessionRepo.findById(s1.id);
     assert.equal(updatedS1.status, PaymentStatus.FAILED);
   });
 
-  test('Recovery Engine: crash recovery cleans up overdue sessions and promotes queued', () => {
+  test('Recovery Engine: crash recovery cleans up overdue sessions and promotes queued', async () => {
     const pastDate = new Date(Date.now() - 600000).toISOString();
-    const s1 = sessionRepo.create({
+    const s1 = await sessionRepo.create({
       merchantId: defaultMerchant.id,
       receivingAccountId: testAccount.id,
       orderId: 'CRASH-ORD-1',
       amountPaise: 20000n
     });
-    db.execute(`
+    await db.execute(`
       UPDATE payment_sessions
       SET status = ?, expires_at = ?, slot_acquired_at = ?
       WHERE id = ?
     `, [PaymentStatus.ACTIVE, pastDate, pastDate, s1.id]);
-    db.execute(`
+    await db.execute(`
       UPDATE payment_receiving_accounts
-      SET is_slot_busy = 1, current_active_session_id = ?
+      SET is_slot_busy = true, current_active_session_id = ?
       WHERE id = ?
     `, [s1.id, testAccount.id]);
 
-    const s2 = sessionRepo.create({
+    const s2 = await sessionRepo.create({
       merchantId: defaultMerchant.id,
       receivingAccountId: testAccount.id,
       orderId: 'CRASH-ORD-2',
@@ -187,33 +188,33 @@ describe('@youpi/core Queue & Timing Engine Tests', () => {
       queuePosition: 1
     });
 
-    const stats = recoveryEngine.recover();
+    const stats = await recoveryEngine.recover();
     assert.equal(stats.expiredCount, 1);
     assert.equal(stats.promotedCount, 1);
 
-    const checkS1 = sessionRepo.findById(s1.id);
+    const checkS1 = await sessionRepo.findById(s1.id);
     assert.equal(checkS1.status, PaymentStatus.EXPIRED);
 
-    const checkS2 = sessionRepo.findById(s2.id);
+    const checkS2 = await sessionRepo.findById(s2.id);
     assert.equal(checkS2.status, PaymentStatus.ACTIVE);
     assert.equal(checkS2.queuePosition, 0);
   });
-  test('uses the configured payment window (PAYMENT_ACTIVE_WINDOW_MS) for activation and promotion', () => {
+  test('uses the configured payment window (PAYMENT_ACTIVE_WINDOW_MS) for activation and promotion', async () => {
     const engine = new QueueEngine({ sessionRepo, accountRepo, activeDurationMs: 60000 });
-    const mk = (orderId) => sessionRepo.create({ merchantId: defaultMerchant.id, receivingAccountId: testAccount.id, orderId, amountPaise: 20000n });
-    const a = mk('WIN-ORD-1');
-    const b = mk('WIN-ORD-2');
+    const mk = async (orderId) => await sessionRepo.create({ merchantId: defaultMerchant.id, receivingAccountId: testAccount.id, orderId, amountPaise: 20000n });
+    const a = await mk('WIN-ORD-1');
+    const b = await mk('WIN-ORD-2');
 
     const t0 = Date.now();
-    const first = engine.enqueueOrActivate(a.id, testAccount.id);
+    const first = await engine.enqueueOrActivate(a.id, testAccount.id);
     assert.equal(first.status, PaymentStatus.ACTIVE);
-    const firstWindow = sessionRepo.findById(a.id).expiresAt.getTime() - t0;
+    const firstWindow = (await sessionRepo.findById(a.id)).expiresAt.getTime() - t0;
     assert.ok(firstWindow > 55000 && firstWindow < 65000, `first slot should get 60s, got ${firstWindow}ms`);
 
-    assert.equal(engine.enqueueOrActivate(b.id, testAccount.id).status, PaymentStatus.QUEUED);
-    sessionRepo.transitionToTerminal(a.id, PaymentStatus.EXPIRED);
+    assert.equal((await engine.enqueueOrActivate(b.id, testAccount.id)).status, PaymentStatus.QUEUED);
+    await sessionRepo.transitionToTerminal(a.id, PaymentStatus.EXPIRED);
     const t1 = Date.now();
-    const promoted = engine.promoteNext(testAccount.id);
+    const promoted = await engine.promoteNext(testAccount.id);
     assert.ok(promoted, 'queued session was not promoted');
     const promotedWindow = promoted.expiresAt.getTime() - t1;
     assert.ok(promotedWindow > 55000 && promotedWindow < 65000, `promoted slot should get 60s, got ${promotedWindow}ms`);

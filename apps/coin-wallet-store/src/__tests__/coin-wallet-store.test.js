@@ -1,4 +1,5 @@
 import { test, describe, before, after } from 'node:test';
+import { createTestDatabase } from '@youpi/db/testing';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import http from 'node:http';
@@ -15,10 +16,10 @@ describe('Coin Top-Up Wallet Demo Store Integration Tests', () => {
   const storeSecret = 'wallet_store_secret_9988';
 
   before(async () => {
-    testDb = new Database({ inMemory: true });
+    testDb = await createTestDatabase();
     apiInstance = await startPaymentApi(6193, testDb);
 
-    testDb.execute('UPDATE merchants SET webhook_secret = ?, webhook_url = ? WHERE id = ?', [
+    await testDb.execute('UPDATE merchants SET webhook_secret = ?, webhook_url = ? WHERE id = ?', [
       storeSecret,
       'http://localhost:5099/api/webhook',
       '00000000-0000-0000-0000-000000000001'
@@ -45,7 +46,7 @@ describe('Coin Top-Up Wallet Demo Store Integration Tests', () => {
   after(async () => {
     await storeInstance.close();
     await apiInstance.close();
-    testDb.close();
+    await testDb.destroy();
   });
 
   function request(path, options = {}) {
@@ -374,7 +375,7 @@ describe('Coin Top-Up Wallet Demo Store Integration Tests', () => {
     assert.equal(checkout.status, 200);
     const { orderId, paymentId } = checkout.body;
 
-    testDb.execute("UPDATE payment_sessions SET status = 'SUCCESS', method = 'UPI' WHERE id = ?", [paymentId]);
+    await testDb.execute("UPDATE payment_sessions SET status = 'SUCCESS', method = 'UPI' WHERE id = ?", [paymentId]);
 
     const verifyRes = await request('/api/verify-payment', {
       method: 'POST',

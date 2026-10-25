@@ -1,4 +1,5 @@
 import { test, describe, before, after } from 'node:test';
+import { createTestDatabase } from '@youpi/db/testing';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import '../../../../scripts/test-support.js';
@@ -17,8 +18,8 @@ describe('Webhook Engine Integration Tests', () => {
   let shouldReceiverFail = false;
 
   before(async () => {
-    db = new Database({ inMemory: true });
-    runMigrations(db);
+    db = await createTestDatabase();
+    await runMigrations(db);
     merchantRepo = new MerchantRepository(db);
     sessionRepo = new PaymentSessionRepository(db);
 
@@ -57,11 +58,11 @@ describe('Webhook Engine Integration Tests', () => {
 
   after(async () => {
     await new Promise(cb => receiverServer.close(cb));
-    db.close();
+    await db.destroy();
   });
 
   test('successfully dispatches HMAC-SHA256 signed webhook on payment event', async () => {
-    const merchant = merchantRepo.create({
+    const merchant = await merchantRepo.create({
       businessName: 'Webhook Test Store',
       slug: 'webhook-store',
       contactEmail: 'store@example.com',
@@ -70,7 +71,7 @@ describe('Webhook Engine Integration Tests', () => {
       webhookSecret: 'test_secret_for_merchant_signatures_123'
     });
 
-    const session = sessionRepo.create({
+    const session = await sessionRepo.create({
       merchantId: merchant.id,
       orderId: 'HOOK-ORD-001',
       amountPaise: 20000n
@@ -102,14 +103,14 @@ describe('Webhook Engine Integration Tests', () => {
     assert.equal(isValid, true);
     assert.ok('utr' in hook.body);
 
-    const delivery = db.queryOne('SELECT * FROM webhook_deliveries WHERE id = ?', [result.deliveryId]);
+    const delivery = await db.queryOne('SELECT * FROM webhook_deliveries WHERE id = ?', [result.deliveryId]);
     assert.ok(delivery);
-    assert.equal(delivery.is_successful, 1);
+    assert.equal(delivery.is_successful, true);
     assert.equal(delivery.response_status, 200);
   });
 
   test('carries the bank reference (UTR) from the attributed observation', async () => {
-    const merchant = merchantRepo.create({
+    const merchant = await merchantRepo.create({
       businessName: 'UTR Store',
       slug: 'utr-store',
       contactEmail: 'utr@example.com',
@@ -118,14 +119,14 @@ describe('Webhook Engine Integration Tests', () => {
       webhookSecret: 'test_secret_for_utr_signatures_123'
     });
 
-    const session = sessionRepo.create({
+    const session = await sessionRepo.create({
       merchantId: merchant.id,
       orderId: 'HOOK-ORD-UTR',
       amountPaise: 20000n,
       receivingAccountId: '00000000-0000-0000-0000-000000000002'
     });
 
-    const observation = new ObservationRepository(db).create({
+    const observation = await new ObservationRepository(db).create({
       receivingAccountId: session.receivingAccountId,
       source: 'GOOGLE_MESSAGES',
       rawText: 'Rs 200.00 credited UPI ref 412345678901',
@@ -134,12 +135,12 @@ describe('Webhook Engine Integration Tests', () => {
       observedAt: new Date(),
       fingerprintHash: 'fp_utr_test'
     });
-    db.execute('UPDATE payment_sessions SET attributed_observation_id = ? WHERE id = ?', [observation.id, session.id]);
+    await db.execute('UPDATE payment_sessions SET attributed_observation_id = ? WHERE id = ?', [observation.id, session.id]);
 
     receivedWebhooks = [];
     shouldReceiverFail = false;
 
-    const result = await webhookEngine.dispatch('SUCCESS', sessionRepo.findById(session.id));
+    const result = await webhookEngine.dispatch('SUCCESS', await sessionRepo.findById(session.id));
     assert.equal(result.delivered, true);
 
     const hook = receivedWebhooks.find(h => h.body.orderId === 'HOOK-ORD-UTR');
@@ -155,7 +156,7 @@ describe('Webhook Engine Integration Tests', () => {
   });
 
   test('records failure and supports retry on merchant HTTP 500 error', async () => {
-    const merchant = merchantRepo.create({
+    const merchant = await merchantRepo.create({
       businessName: 'Failing Store',
       slug: 'failing-store',
       contactEmail: 'fail@example.com',
@@ -164,7 +165,7 @@ describe('Webhook Engine Integration Tests', () => {
       webhookSecret: 'secret_abc_123'
     });
 
-    const session = sessionRepo.create({
+    const session = await sessionRepo.create({
       merchantId: merchant.id,
       orderId: 'HOOK-ORD-FAIL',
       amountPaise: 50000n
@@ -176,22 +177,22 @@ describe('Webhook Engine Integration Tests', () => {
     assert.equal(result.delivered, false);
     assert.equal(result.status, 500);
 
-    const delivery = db.queryOne('SELECT * FROM webhook_deliveries WHERE id = ?', [result.deliveryId]);
-    assert.equal(delivery.is_successful, 0);
+    const delivery = await db.queryOne('SELECT * FROM webhook_deliveries WHERE id = ?', [result.deliveryId]);
+    assert.equal(delivery.is_successful, false);
     assert.equal(delivery.attempt_count, 1);
     assert.ok(delivery.next_retry_at);
 
     shouldReceiverFail = false;
     const pastIso = new Date(Date.now() - 60000).toISOString();
-    db.execute('UPDATE webhook_deliveries SET next_retry_at = ? WHERE id = ?', [pastIso, result.deliveryId]);
+    await db.execute('UPDATE webhook_deliveries SET next_retry_at = ? WHERE id = ?', [pastIso, result.deliveryId]);
 
     const retryResults = await webhookEngine.retryPending();
     assert.equal(retryResults.length, 1);
     assert.equal(retryResults[0].success, true);
     assert.equal(retryResults[0].attempt, 2);
 
-    const updatedDelivery = db.queryOne('SELECT * FROM webhook_deliveries WHERE id = ?', [result.deliveryId]);
-    assert.equal(updatedDelivery.is_successful, 1);
+    const updatedDelivery = await db.queryOne('SELECT * FROM webhook_deliveries WHERE id = ?', [result.deliveryId]);
+    assert.equal(updatedDelivery.is_successful, true);
 
     const retried = receivedWebhooks.filter(h => h.body && h.body.orderId === 'HOOK-ORD-FAIL').pop();
     assert.ok(retried, 'retried webhook not received');
@@ -200,7 +201,7 @@ describe('Webhook Engine Integration Tests', () => {
   });
 
   test('a retried delivery keeps the timestamp and delivery id of the original body', async () => {
-    const merchant = merchantRepo.create({
+    const merchant = await merchantRepo.create({
       businessName: 'Retry Consistency Store',
       slug: 'retry-consistency-store',
       contactEmail: 'retry@example.com',
@@ -209,7 +210,7 @@ describe('Webhook Engine Integration Tests', () => {
       webhookSecret: 'test_secret_for_retry_consistency_123'
     });
 
-    const session = sessionRepo.create({
+    const session = await sessionRepo.create({
       merchantId: merchant.id,
       orderId: 'HOOK-ORD-RETRY-CONSISTENCY',
       amountPaise: 70000n
@@ -225,7 +226,7 @@ describe('Webhook Engine Integration Tests', () => {
     assert.ok(firstBody.timestamp, 'payload must carry a timestamp');
     assert.ok(firstBody.deliveryId, 'payload must carry a delivery id');
 
-    db.execute('UPDATE webhook_deliveries SET next_retry_at = ? WHERE id = ?', [
+    await db.execute('UPDATE webhook_deliveries SET next_retry_at = ? WHERE id = ?', [
       new Date(Date.now() - 60000).toISOString(), result.deliveryId
     ]);
     await webhookEngine.retryPending();
@@ -242,7 +243,7 @@ describe('Webhook Engine Integration Tests', () => {
   });
 
   test('persists delivery failure record when merchant webhookSecret is missing', async () => {
-    const merchantNoSecret = merchantRepo.create({
+    const merchantNoSecret = await merchantRepo.create({
       businessName: 'No Secret Store',
       slug: 'no-secret-store',
       contactEmail: 'nosecret@example.com',
@@ -250,9 +251,9 @@ describe('Webhook Engine Integration Tests', () => {
       webhookUrl: `http://localhost:${receiverPort}/webhook-no-secret`,
       webhookSecret: 'temp_secret'
     });
-    db.execute("UPDATE merchants SET webhook_secret = '' WHERE id = ?", [merchantNoSecret.id]);
+    await db.execute("UPDATE merchants SET webhook_secret = '' WHERE id = ?", [merchantNoSecret.id]);
 
-    const session = sessionRepo.create({
+    const session = await sessionRepo.create({
       merchantId: merchantNoSecret.id,
       orderId: 'HOOK-ORD-NO-SEC',
       amountPaise: 10000n
@@ -263,9 +264,9 @@ describe('Webhook Engine Integration Tests', () => {
     assert.equal(res.status, 500);
     assert.ok(res.deliveryId);
 
-    const recorded = db.queryOne('SELECT * FROM webhook_deliveries WHERE id = ?', [res.deliveryId]);
+    const recorded = await db.queryOne('SELECT * FROM webhook_deliveries WHERE id = ?', [res.deliveryId]);
     assert.ok(recorded);
-    assert.equal(recorded.is_successful, 0);
+    assert.equal(recorded.is_successful, false);
     assert.equal(recorded.response_status, 500);
     assert.match(recorded.response_body, /webhookSecret is not configured/);
   });

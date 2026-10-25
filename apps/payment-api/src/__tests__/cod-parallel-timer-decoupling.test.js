@@ -1,4 +1,5 @@
 import { test, describe, before, after } from 'node:test';
+import { createTestDatabase } from '@youpi/db/testing';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { Database } from '@youpi/db';
@@ -12,12 +13,12 @@ describe('COD Parallel Timer & UPI Queue Decoupling Suite', () => {
   let testDb;
 
   before(async () => {
-    testDb = new Database({ inMemory: true });
+    testDb = await createTestDatabase();
     apiInstance = await startPaymentApi(6196, testDb);
     baseUrl = `http://localhost:${apiInstance.port}`;
 
     const merchantId = '00000000-0000-0000-0000-000000000001';
-    testDb.execute(
+    await testDb.execute(
       `UPDATE merchants
        SET branding = ?
        WHERE id = ?`,
@@ -30,14 +31,14 @@ describe('COD Parallel Timer & UPI Queue Decoupling Suite', () => {
       ]
     );
 
-    testDb.execute(`
+    await testDb.execute(`
       UPDATE payment_receiving_accounts
-      SET is_slot_busy = 0, current_active_session_id = NULL
+      SET is_slot_busy = false, current_active_session_id = NULL
     `);
 
-    testDb.execute(
+    await testDb.execute(
       `INSERT INTO customers (id, name, mobile_number, email, created_at, updated_at)
-       VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))`,
+       VALUES (?, ?, ?, ?, now(), now())`,
       ['00000000-0000-0000-0000-000000000099', 'Rohan Verma', '9123456789', 'rohan@example.com']
     );
   });
@@ -47,7 +48,7 @@ describe('COD Parallel Timer & UPI Queue Decoupling Suite', () => {
       await apiInstance.close();
     }
     if (testDb?.close) {
-      testDb.close();
+      await testDb.destroy();
     }
   });
 
@@ -99,7 +100,7 @@ describe('COD Parallel Timer & UPI Queue Decoupling Suite', () => {
     const sessionAId = payA.body.paymentId;
 
     const expiringSoon = new Date(Date.now() + 30000);
-    testDb.execute(`UPDATE payment_sessions SET expires_at = ? WHERE id = ?`, [expiringSoon.toISOString(), sessionAId]);
+    await testDb.execute(`UPDATE payment_sessions SET expires_at = ? WHERE id = ?`, [expiringSoon.toISOString(), sessionAId]);
 
     const payB = await request('/api/v1/payments', {
       method: 'POST',
@@ -129,7 +130,7 @@ describe('COD Parallel Timer & UPI Queue Decoupling Suite', () => {
     assert.equal(stateA.body.method, 'COD');
     assert.equal(stateA.body.queuePosition, 0);
 
-    const rowA = testDb.queryOne(`SELECT * FROM payment_sessions WHERE id = ?`, [sessionAId]);
+    const rowA = await testDb.queryOne(`SELECT * FROM payment_sessions WHERE id = ?`, [sessionAId]);
     assert.equal(rowA.receiving_account_id, null);
     assert.equal(rowA.method, 'COD');
 
@@ -167,14 +168,14 @@ describe('COD Parallel Timer & UPI Queue Decoupling Suite', () => {
     assert.equal(switchRes.status, 200);
     assert.equal(switchRes.body.timeRemainingSeconds, 300);
 
-    testDb.execute(`UPDATE payment_sessions SET expires_at = ? WHERE id = ? AND expires_at IS NOT NULL`, [new Date(Date.now() - 1000).toISOString(), codSessionId]);
+    await testDb.execute(`UPDATE payment_sessions SET expires_at = ? WHERE id = ? AND expires_at IS NOT NULL`, [new Date(Date.now() - 1000).toISOString(), codSessionId]);
     const expireRes = await request(`/api/v1/checkout/${codSessionId}/expire`, {
       method: 'POST'
     });
     assert.equal(expireRes.status, 200);
     assert.equal(expireRes.body.status, PaymentStatus.EXPIRED);
 
-    const row = testDb.queryOne(`SELECT * FROM payment_sessions WHERE id = ?`, [codSessionId]);
+    const row = await testDb.queryOne(`SELECT * FROM payment_sessions WHERE id = ?`, [codSessionId]);
     assert.equal(row.status, PaymentStatus.EXPIRED);
     assert.equal(row.receiving_account_id, null);
   });

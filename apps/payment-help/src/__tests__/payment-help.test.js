@@ -1,4 +1,5 @@
 import { test, describe, before, after } from 'node:test';
+import { createTestDatabase } from '@youpi/db/testing';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { Database, CustomerRepository, SupportTicketRepository, runMigrations } from '@youpi/db';
@@ -13,19 +14,19 @@ describe('Customer Payment Help Portal Integration Tests', () => {
   let testCustomer;
 
   before(async () => {
-    testDb = new Database({ inMemory: true });
-    runMigrations(testDb);
+    testDb = await createTestDatabase();
+    await runMigrations(testDb);
     customerRepo = new CustomerRepository(testDb);
     ticketRepo = new SupportTicketRepository(testDb);
 
-    testCustomer = customerRepo.create({
+    testCustomer = await customerRepo.create({
       merchantId: '00000000-0000-0000-0000-000000000001',
       phoneNumber: '9123491234',
       fullName: 'Customer Test',
       password: 'Password123!'
     });
 
-    ticketRepo.createTicket({
+    await ticketRepo.createTicket({
       merchantId: '00000000-0000-0000-0000-000000000001',
       customerId: testCustomer.id,
       subject: 'UPI money debited but page timed out',
@@ -42,7 +43,7 @@ describe('Customer Payment Help Portal Integration Tests', () => {
 
   after(async () => {
     await serverInstance.close();
-    testDb.close();
+    await testDb.destroy();
   });
 
   function get(path) {
