@@ -9,7 +9,7 @@ export class CustomerSessionRepository {
     this.customerRepo = customerRepo;
   }
 
-  create(data) {
+  async create(data) {
     const id = crypto.randomUUID();
     const token = `csess_${crypto.randomBytes(32).toString('hex')}`;
     const ttlHours = data.ttlHours || 720;
@@ -18,10 +18,10 @@ export class CustomerSessionRepository {
 
     const sql = `
       INSERT INTO customer_sessions (id, customer_id, token, expires_at, is_active, ip_address, user_agent, created_at, updated_at)
-      VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, true, ?, ?, ?, ?)
     `;
 
-    this.db.execute(sql, [
+    await this.db.execute(sql, [
       id,
       data.customerId,
       blindIndex(token, INDEX_NS),
@@ -42,24 +42,24 @@ export class CustomerSessionRepository {
     };
   }
 
-  findByToken(token) {
+  async findByToken(token) {
     if (!token || typeof token !== 'string') return null;
 
-    const row = this.db.queryOne(
-      'SELECT * FROM customer_sessions WHERE token = ? AND is_active = 1',
+    const row = await this.db.queryOne(
+      'SELECT * FROM customer_sessions WHERE token = ? AND is_active = true',
       [blindIndex(token, INDEX_NS)]
     );
 
     if (!row && typeof token === 'string' && token.startsWith('csess_') && token.length < 100) {
-      const legacy = this.db.queryOne(
-        'SELECT * FROM customer_sessions WHERE token = ? AND is_active = 1',
+      const legacy = await this.db.queryOne(
+        'SELECT * FROM customer_sessions WHERE token = ? AND is_active = true',
         [token]
       );
       if (legacy) {
         try {
-          this.db.execute('UPDATE customer_sessions SET token = ? WHERE id = ?', [blindIndex(token, INDEX_NS), legacy.id]);
+          await this.db.execute('UPDATE customer_sessions SET token = ? WHERE id = ?', [blindIndex(token, INDEX_NS), legacy.id]);
         } catch {}
-        return this.findByToken(token);
+        return await this.findByToken(token);
       }
     }
 
@@ -68,7 +68,7 @@ export class CustomerSessionRepository {
     const expiresAt = new Date(row.expires_at);
     if (expiresAt.getTime() <= Date.now()) {
       try {
-        this.db.execute('UPDATE customer_sessions SET is_active = 0, updated_at = ? WHERE id = ?', [
+        await this.db.execute('UPDATE customer_sessions SET is_active = false, updated_at = ? WHERE id = ?', [
           new Date().toISOString(),
           row.id
         ]);
@@ -86,9 +86,9 @@ export class CustomerSessionRepository {
 
     let customer = null;
     if (this.customerRepo) {
-      customer = this.customerRepo.findById(row.customer_id);
+      customer = await this.customerRepo.findById(row.customer_id);
     } else {
-      const custRow = this.db.queryOne('SELECT * FROM customers WHERE id = ?', [row.customer_id]);
+      const custRow = await this.db.queryOne('SELECT * FROM customers WHERE id = ?', [row.customer_id]);
       if (custRow) {
         customer = {
           id: custRow.id,
@@ -109,32 +109,32 @@ export class CustomerSessionRepository {
     return { session, customer };
   }
 
-  revokeToken(token) {
+  async revokeToken(token) {
     if (!token) return false;
     const now = new Date().toISOString();
-    this.db.execute(
-      'UPDATE customer_sessions SET is_active = 0, updated_at = ? WHERE token = ?',
+    await this.db.execute(
+      'UPDATE customer_sessions SET is_active = false, updated_at = ? WHERE token = ?',
       [now, blindIndex(token, INDEX_NS)]
     );
-    this.db.execute(
-      'UPDATE customer_sessions SET is_active = 0, updated_at = ? WHERE token = ?',
+    await this.db.execute(
+      'UPDATE customer_sessions SET is_active = false, updated_at = ? WHERE token = ?',
       [now, token]
     );
     return true;
   }
 
-  revokeAllForCustomer(customerId) {
+  async revokeAllForCustomer(customerId) {
     if (!customerId) return;
     const now = new Date().toISOString();
-    this.db.execute(
-      'UPDATE customer_sessions SET is_active = 0, updated_at = ? WHERE customer_id = ?',
+    await this.db.execute(
+      'UPDATE customer_sessions SET is_active = false, updated_at = ? WHERE customer_id = ?',
       [now, customerId]
     );
   }
 
-  countActive() {
-    const row = this.db.queryOne(
-      'SELECT COUNT(*) as c FROM customer_sessions WHERE is_active = 1 AND expires_at > ?',
+  async countActive() {
+    const row = await this.db.queryOne(
+      'SELECT COUNT(*) as c FROM customer_sessions WHERE is_active = true AND expires_at > ?',
       [new Date().toISOString()]
     );
     return row?.c || 0;
