@@ -6,6 +6,8 @@ import {
   createDeviceChallenge,
   consumeDeviceChallenge
 } from '@youpi/core';
+import { isAdminRequest } from '../auth-guard.js';
+import { createRateLimiter, envLimit, getClientIp } from '../rate-limit.js';
 
 /**
  * Resolves a verified customer ID strictly from a valid customer session token.
@@ -25,6 +27,19 @@ function resolveAuthenticatedCustomerId(req, body, ctx) {
 }
 
 /**
+ * True when the caller may read device metadata: the gateway admin, the owning customer
+ * (valid customer session token) or the device itself (its own device token).
+ */
+function canReadDevice(req, ctx, { customerId, device }) {
+  if (isAdminRequest(req)) return true;
+  const authCustomerId = resolveAuthenticatedCustomerId(req, null, ctx);
+  const ownerId = customerId ?? device?.customerId;
+  if (authCustomerId && ownerId && authCustomerId === ownerId) return true;
+  const deviceToken = req.headers['x-device-token'];
+  return Boolean(device && typeof deviceToken === 'string' && deviceToken.trim() && ctx.deviceRepo.verifyToken(device.id, deviceToken.trim()));
+}
+
+/**
  * Registers device identity and cryptographic binding routes.
  * @param {HttpServer} server
  * @param {{
@@ -35,8 +50,22 @@ function resolveAuthenticatedCustomerId(req, body, ctx) {
  * }} ctx
  */
 export function registerDeviceRoutes(server, ctx) {
+  // Registration and challenge issuing are open to anonymous browsers and write state
+  // (device rows, in-memory challenges), so they are throttled per client address.
+  const deviceRateMax = envLimit('YOUPI_RATE_LIMIT_DEVICE_PER_MIN', 60);
+  const deviceRateLimiter = createRateLimiter({ windowMs: 60 * 1000, max: deviceRateMax });
+  function deviceRateLimited(req, res) {
+    if (deviceRateMax > 0 && !deviceRateLimiter.allow(getClientIp(req))) {
+      res.setHeader('Retry-After', '60');
+      HttpServer.json(res, 429, { error: 'Too many device requests. Please try again in a minute.', code: 'RATE_LIMITED' });
+      return true;
+    }
+    return false;
+  }
+
   // 0. POST /api/v1/devices/challenge
   server.post('/api/v1/devices/challenge', async (req, res) => {
+    if (deviceRateLimited(req, res)) return;
     const body = await HttpServer.parseBody(req).catch(() => ({}));
     const { publicKey, deviceId } = body;
 
@@ -64,6 +93,7 @@ export function registerDeviceRoutes(server, ctx) {
 
   // 1. POST /api/v1/devices/register
   server.post('/api/v1/devices/register', async (req, res) => {
+    if (deviceRateLimited(req, res)) return;
     const body = await HttpServer.parseBody(req).catch(() => ({}));
     const { publicKey, signals, challenge, signature, payload } = body;
 
@@ -259,7 +289,8 @@ export function registerDeviceRoutes(server, ctx) {
   // 3. GET /api/v1/devices/:id
   server.get('/api/v1/devices/:id', async (req, res, params) => {
     const device = ctx.deviceRepo.findById(params.id);
-    if (!device) {
+    // Same response for unknown and foreign devices so ids cannot be enumerated.
+    if (!device || !canReadDevice(req, ctx, { device })) {
       HttpServer.json(res, 404, { error: 'Device not found' });
       return;
     }
@@ -279,6 +310,10 @@ export function registerDeviceRoutes(server, ctx) {
 
   // 4. GET /api/v1/devices/customer/:customerId
   server.get('/api/v1/devices/customer/:customerId', async (req, res, params) => {
+    if (!canReadDevice(req, ctx, { customerId: params.customerId })) {
+      HttpServer.json(res, 401, { error: 'Customer session required', code: 'AUTH_REQUIRED' });
+      return;
+    }
     const devices = ctx.deviceRepo.findByCustomerId(params.customerId);
     HttpServer.json(res, 200, {
       customerId: params.customerId,

@@ -2,6 +2,7 @@ import { HttpServer } from '../server.js';
 import { toPaise, toRupeesString, resolveRuntimeUrls, PaymentStatus, safeEqual, verifyHmac } from '@youpi/common';
 import { isTerminalStatus, toPublicOutcome, verifyRegisteredDeviceCredentials } from '@youpi/core';
 import { isAdminRequest, isPaymentOwner } from '../auth-guard.js';
+import { createRateLimiter, envLimit, getClientIp } from '../rate-limit.js';
 
 /**
  * Registers merchant-facing payment routes.
@@ -17,6 +18,11 @@ import { isAdminRequest, isPaymentOwner } from '../auth-guard.js';
  * }} ctx
  */
 export function registerPaymentRoutes(server, ctx) {
+  // Anonymous (credential-less) payment creation is open by design for the browser SDK, so it
+  // is throttled per client address. Requests carrying a merchant key or order token are not.
+  const anonymousCreateMax = envLimit('YOUPI_RATE_LIMIT_ANON_PAYMENTS_PER_MIN', 60);
+  const anonymousCreateLimiter = createRateLimiter({ windowMs: 60 * 1000, max: anonymousCreateMax });
+
   function resolveCheckoutBaseUrl(merchant) {
     if (merchant?.branding) {
       try {
@@ -72,6 +78,11 @@ export function registerPaymentRoutes(server, ctx) {
         return;
       }
     } else if (!isAdminRequest(req)) {
+      if (anonymousCreateMax > 0 && !anonymousCreateLimiter.allow(getClientIp(req))) {
+        res.setHeader('Retry-After', '60');
+        HttpServer.json(res, 429, { error: 'Too many payment requests. Please try again in a minute.', code: 'RATE_LIMITED' });
+        return;
+      }
       // No credential was presented. The public one-script integration (the browser SDK)
       // cannot carry a merchant secret, so this path stays open - but only for the
       // gateway's own default merchant. Naming a different merchant requires that

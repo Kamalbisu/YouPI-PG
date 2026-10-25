@@ -134,7 +134,7 @@ export class HttpServer {
       'Content-Type': 'application/json',
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization, Idempotency-Key, X-Device-Id, X-Timestamp, X-Signature',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, Idempotency-Key, X-Device-Id, X-Timestamp, X-Signature, X-Merchant-Key, X-Customer-Token, X-Device-Token',
       ...BASE_SECURITY_HEADERS
     });
     res.end(jsonStr);
@@ -182,7 +182,7 @@ export class HttpServer {
         res.writeHead(204, {
           'Access-Control-Allow-Origin': '*',
           'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type, Authorization, Idempotency-Key, X-Device-Id, X-Timestamp, X-Signature',
+          'Access-Control-Allow-Headers': 'Content-Type, Authorization, Idempotency-Key, X-Device-Id, X-Timestamp, X-Signature, X-Merchant-Key, X-Customer-Token, X-Device-Token',
           ...BASE_SECURITY_HEADERS
         });
         res.end();
@@ -234,7 +234,7 @@ export class HttpServer {
       }
 
       // Not found
-      HttpServer.json(res, 404, { error: `Route not found: ${method} ${pathname}` });
+      HttpServer.json(res, 404, { error: 'Route not found' });
     });
   }
 }

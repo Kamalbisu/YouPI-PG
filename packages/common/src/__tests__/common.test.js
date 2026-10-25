@@ -21,7 +21,9 @@ import {
   findUpiProviderById,
   ALLOWED_NOTIFICATION_PACKAGES,
   isAllowedNotificationPackage,
-  calculateObservationFingerprint
+  calculateObservationFingerprint,
+  validateOutboundWebhookUrl,
+  assertWebhookHostResolvesPublic
 } from '../index.js';
 
 describe('@youpi/common Unit Tests', () => {
@@ -293,5 +295,61 @@ describe('safeEqual', () => {
     assert.equal(safeEqual('abc', 'abd'), false);
     assert.equal(safeEqual('abc', 'abcd'), false);
     assert.equal(safeEqual(undefined, 'abc'), false);
+  });
+});
+
+describe('placeholder secrets', async () => {
+  const { isPlaceholderSecret, resolveSecret } = await import('../secrets.js');
+
+  test('recognises template values but not real random secrets', () => {
+    assert.equal(isPlaceholderSecret('android_pairing_enrollment_secret_key_32_chars'), true);
+    assert.equal(isPlaceholderSecret('REPLACE_WITH_64_RANDOM_HEX_CHARS_GENERATED_BY_crypto_randomBytes_32'), true);
+    assert.equal(isPlaceholderSecret('change_me'), true);
+    assert.equal(isPlaceholderSecret('a1'.repeat(32)), false);
+    assert.equal(isPlaceholderSecret(''), false);
+  });
+
+  test('resolveSecret ignores a placeholder env value and generates a real secret', () => {
+    const prev = process.env.YOUPI_TEST_PLACEHOLDER_SECRET;
+    process.env.YOUPI_TEST_PLACEHOLDER_SECRET = 'android_pairing_enrollment_secret_key_32_chars';
+    try {
+      const value = resolveSecret('youpi_test_placeholder_secret', 'YOUPI_TEST_PLACEHOLDER_SECRET');
+      assert.notEqual(value, 'android_pairing_enrollment_secret_key_32_chars');
+      assert.match(value, /^[0-9a-f]{64}$/);
+    } finally {
+      if (prev === undefined) delete process.env.YOUPI_TEST_PLACEHOLDER_SECRET;
+      else process.env.YOUPI_TEST_PLACEHOLDER_SECRET = prev;
+    }
+  });
+});
+
+describe('webhook SSRF guard', () => {
+  async function withPrivateWebhooksBlocked(fn) {
+    const prev = process.env.YOUPI_ALLOW_PRIVATE_WEBHOOKS;
+    delete process.env.YOUPI_ALLOW_PRIVATE_WEBHOOKS;
+    try { return await fn(); } finally {
+      if (prev === undefined) delete process.env.YOUPI_ALLOW_PRIVATE_WEBHOOKS;
+      else process.env.YOUPI_ALLOW_PRIVATE_WEBHOOKS = prev;
+    }
+  }
+
+  test('rejects IPv4-mapped, compatible, NAT64 and 6to4 forms of private addresses', async () => {
+    await withPrivateWebhooksBlocked(() => {
+      for (const host of ['[::ffff:127.0.0.1]', '[::ffff:169.254.169.254]', '[::ffff:10.0.0.1]', '[::127.0.0.1]', '[64:ff9b::7f00:1]', '[2002:7f00:1::]', '127.0.0.1', '[::1]', 'localhost']) {
+        assert.equal(validateOutboundWebhookUrl(`http://${host}/hook`).valid, false, host);
+      }
+      for (const host of ['[::ffff:8.8.8.8]', '8.8.8.8', 'example.com']) {
+        assert.equal(validateOutboundWebhookUrl(`https://${host}/hook`).valid, true, host);
+      }
+    });
+  });
+
+  test('rejects a public hostname that resolves to a private address', async () => {
+    await withPrivateWebhooksBlocked(async () => {
+      const bad = await assertWebhookHostResolvesPublic(new URL('https://hook.example/x'), { lookup: async () => [{ address: '93.184.216.34' }, { address: '10.0.0.5' }] });
+      assert.equal(bad.valid, false);
+      const good = await assertWebhookHostResolvesPublic(new URL('https://hook.example/x'), { lookup: async () => [{ address: '93.184.216.34' }] });
+      assert.equal(good.valid, true);
+    });
   });
 });

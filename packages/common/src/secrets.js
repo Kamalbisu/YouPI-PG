@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import dns from 'node:dns';
 import { fileURLToPath } from 'node:url';
 import { encrypt, decrypt } from './crypto.js';
 
@@ -9,6 +10,25 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SECRETS_DIR = path.resolve(__dirname, '../../../data/.secrets');
 
 const cache = new Map();
+const warnedPlaceholders = new Set();
+
+/** Template/example values that shipped in .env.example or docs and are therefore publicly known. */
+const KNOWN_PLACEHOLDER_SECRETS = new Set([
+  'android_pairing_enrollment_secret_key_32_chars',
+  'super_secret_jwt_key_change_in_production_min_32_chars',
+  'merchant_webhook_secret_for_wallet_store'
+]);
+
+/**
+ * True when a configured secret is an obvious template value (REPLACE_WITH_..., change_me,
+ * a value from .env.example) rather than something an operator generated.
+ */
+export function isPlaceholderSecret(value) {
+  const v = String(value || '').trim().toLowerCase();
+  if (!v) return false;
+  if (KNOWN_PLACEHOLDER_SECRETS.has(v)) return true;
+  return /^(replace[_-]?with|changeme|change[_-]me|your[_-]|<.*>$)/.test(v);
+}
 
 /**
  * Resolves a service secret: explicit env var first, else a random value
@@ -18,7 +38,16 @@ const cache = new Map();
  * @returns {string}
  */
 export function resolveSecret(name, envVar) {
-  const fromEnv = envVar ? (process.env[envVar] || '').trim() : '';
+  let fromEnv = envVar ? (process.env[envVar] || '').trim() : '';
+  if (fromEnv && isPlaceholderSecret(fromEnv)) {
+    // A copied template value is public knowledge, so it must never act as a secret. Fall
+    // through to the generated per-install secret instead of trusting it.
+    if (!warnedPlaceholders.has(envVar)) {
+      warnedPlaceholders.add(envVar);
+      console.warn(`[secrets] ${envVar} is set to a placeholder/default value and was ignored; using a generated secret instead. Set a real random value to silence this warning.`);
+    }
+    fromEnv = '';
+  }
   if (fromEnv) return fromEnv;
   if (cache.has(name)) return cache.get(name);
 
@@ -198,7 +227,14 @@ export const LEGACY_DEFAULT_WEBHOOK_SECRET = 'merchant_webhook_secret_for_wallet
  * Master key for encrypting data at rest (merchant webhook secrets, OTPs).
  * Generated once and persisted alongside the other local secrets.
  */
-export const getEncryptionMasterKey = () => resolveSecret('encryption_master_key', 'ENCRYPTION_MASTER_KEY');
+export const getEncryptionMasterKey = () => {
+  const key = resolveSecret('encryption_master_key', 'ENCRYPTION_MASTER_KEY');
+  // Fail at the source with a clear message instead of a short-key crash deep inside encrypt().
+  if (!/^[0-9a-fA-F]{64}$/.test(key)) {
+    throw new Error('ENCRYPTION_MASTER_KEY must be exactly 64 hex characters (32 bytes). Generate one with: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
+  }
+  return key;
+};
 
 /** Envelope prefix marking a stored value as AES-256-GCM ciphertext. */
 const ENC_PREFIX = 'enc:v1:';
@@ -276,10 +312,35 @@ export function hasBearer(req, ...tokens) {
 
 const BLOCKED_HOSTNAMES = new Set(['localhost', 'localhost.localdomain', 'ip6-localhost', 'ip6-loopback']);
 
+function hexPairToIPv4(hi, lo) {
+  const h = parseInt(hi, 16);
+  const l = parseInt(lo, 16);
+  return `${h >> 8}.${h & 255}.${l >> 8}.${l & 255}`;
+}
+
+/** Returns the embedded IPv4 address of a mapped/compatible/NAT64 IPv6 literal, or null. */
+function embeddedIPv4(lower) {
+  const dotted = lower.match(/^(?:::ffff:|::|64:ff9b::)(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+  if (dotted) return dotted[1];
+  const mapped = lower.match(/^(?:::ffff:|::)([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (mapped) return hexPairToIPv4(mapped[1], mapped[2]);
+  const nat64 = lower.match(/^64:ff9b::([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (nat64) return hexPairToIPv4(nat64[1], nat64[2]);
+  return null;
+}
+
 /** True for loopback, RFC1918, link-local, CGNAT, multicast and reserved IPv4/IPv6 ranges. */
 function isPrivateAddress(hostname) {
   const lower = hostname.toLowerCase().replace(/^\[|\]$/g, '');
   if (lower === '::1' || lower === '::' || lower === '0.0.0.0') return true;
+
+  // IPv4-mapped (::ffff:a.b.c.d or ::ffff:xxxx:xxxx), IPv4-compatible and NAT64 (64:ff9b::/96)
+  // forms embed an IPv4 address: judge that embedded address instead.
+  const embedded = embeddedIPv4(lower);
+  if (embedded) return isPrivateAddress(embedded);
+  // 6to4 (2002::/16) carries an IPv4 address in bits 16-48.
+  const sixToFour = lower.match(/^2002:([0-9a-f]{1,4}):([0-9a-f]{1,4})(?::|$)/);
+  if (sixToFour) return isPrivateAddress(hexPairToIPv4(sixToFour[1], sixToFour[2]));
   if (lower.endsWith('.local') || lower.endsWith('.internal') || lower.endsWith('.localhost')) return true;
 
   const v4 = lower.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
@@ -340,6 +401,32 @@ export function validateOutboundWebhookUrl(value) {
     };
   }
   return { valid: true, url };
+}
+
+/**
+ * Resolves the webhook hostname and refuses it when ANY resolved address is private, so a public
+ * name that points at an internal address is rejected. Literal IPs need no lookup. This narrows but
+ * does not eliminate DNS rebinding (the later fetch resolves again); closing that fully needs the
+ * request to connect to the checked address.
+ * @param {URL} url
+ * @param {{ lookup?: Function }} [options]
+ * @returns {Promise<{ valid: boolean, error?: string }>}
+ */
+export async function assertWebhookHostResolvesPublic(url, options = {}) {
+  if (privateWebhooksAllowed()) return { valid: true };
+  const hostname = (url.hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
+  if (!hostname || /^[\d.]+$/.test(hostname) || hostname.includes(':')) return { valid: true };
+  const lookup = options.lookup || dns.promises.lookup.bind(dns.promises);
+  try {
+    const records = await lookup(hostname, { all: true, verbatim: true });
+    const list = Array.isArray(records) ? records : [records];
+    if (list.some(r => isPrivateAddress(String(r.address || '')))) {
+      return { valid: false, error: 'Webhook hostname resolves to a loopback or private network address.' };
+    }
+  } catch {
+    // An unresolvable host cannot be reached either; delivery will fail on its own.
+  }
+  return { valid: true };
 }
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;

@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { generateHmac, toRupeesString, validateOutboundWebhookUrl } from '@youpi/common';
+import { generateHmac, toRupeesString, validateOutboundWebhookUrl, assertWebhookHostResolvesPublic } from '@youpi/common';
 import { isTerminalStatus, toPublicOutcome } from './state-machine.js';
 
 export class WebhookEngine {
@@ -52,7 +52,12 @@ export class WebhookEngine {
     }
 
     // 2. Re-validate at dispatch time (SSRF guard)
-    const endpointCheck = validateOutboundWebhookUrl(merchant.webhookUrl);
+    let endpointCheck = validateOutboundWebhookUrl(merchant.webhookUrl);
+    if (endpointCheck.valid) {
+      // Also refuse public names that resolve to private addresses.
+      const resolved = await assertWebhookHostResolvesPublic(endpointCheck.url);
+      if (!resolved.valid) endpointCheck = resolved;
+    }
     if (!endpointCheck.valid) {
       const deliveryId = crypto.randomUUID();
       this.db.execute(`
@@ -224,7 +229,11 @@ export class WebhookEngine {
       }
 
       // Re-validate the stored endpoint before every retry (SSRF guard).
-      const retryEndpoint = validateOutboundWebhookUrl(item.endpoint_url);
+      let retryEndpoint = validateOutboundWebhookUrl(item.endpoint_url);
+      if (retryEndpoint.valid) {
+        const resolved = await assertWebhookHostResolvesPublic(retryEndpoint.url);
+        if (!resolved.valid) retryEndpoint = resolved;
+      }
       if (!retryEndpoint.valid) {
         this.db.execute(`
           UPDATE webhook_deliveries

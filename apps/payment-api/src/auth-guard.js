@@ -41,7 +41,7 @@ export function authGuard(req, res, pathname, url) {
   const method = req.method.toUpperCase();
 
   // Developer simulators push synthetic bank messages into the real pipeline and can settle live sessions.
-  if (method !== 'GET' && isDevTool(pathname) && process.env.NODE_ENV === 'production' && process.env.YOUPI_ALLOW_DEV_TOOLS !== 'true') {
+  if (method !== 'GET' && isDevTool(pathname) && (process.env.NODE_ENV === 'production' || process.env.YOUPI_MODE === 'production') && process.env.YOUPI_ALLOW_DEV_TOOLS !== 'true') {
     HttpServer.json(res, 403, { error: 'Developer tools are disabled in production.', code: 'DEV_TOOLS_DISABLED' });
     return true;
   }
@@ -69,6 +69,12 @@ export function authGuard(req, res, pathname, url) {
 export function isAdminRequest(req) {
   const presented = bearerToken(req);
   return Boolean(presented) && safeEqual(presented, getAdminToken());
+}
+
+/** True only when the request carries the observer token and is not the admin token. */
+export function isObserverRequest(req) {
+  const presented = bearerToken(req);
+  return Boolean(presented) && safeEqual(presented, getObserverToken()) && !safeEqual(presented, getAdminToken());
 }
 
 /**

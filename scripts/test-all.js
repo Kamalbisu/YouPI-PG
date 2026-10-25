@@ -32,12 +32,15 @@ const testFiles = [
   'apps/payment-api/src/__tests__/fraud-ban-pipeline.test.js',
   'apps/payment-api/src/__tests__/sms-gmail-verification-levels.test.js',
   'apps/payment-api/src/__tests__/verification-fallthrough.test.js',
+  'apps/payment-api/src/__tests__/verification-hardening.test.js',
   'apps/payment-api/src/__tests__/upi-server-health-and-pc-ui.test.js',
   'apps/payment-api/src/__tests__/whatsapp-berry-auth.test.js',
   'apps/payment-api/src/__tests__/whitelabel-branding.test.js',
   'apps/payment-api/src/__tests__/cod-parallel-timer-decoupling.test.js',
   'apps/payment-api/src/__tests__/gateway-hardening-invariants.test.js',
   'apps/payment-api/src/__tests__/observer-poller.test.js',
+  'apps/payment-api/src/__tests__/rate-limiting.test.js',
+  'apps/payment-api/src/__tests__/access-control.test.js',
   'scripts/chaos-concurrency.test.js',
   'scripts/production-infrastructure.test.js'
 ];

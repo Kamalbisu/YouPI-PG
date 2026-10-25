@@ -15,8 +15,7 @@
 | `DATABASE_URL` | `postgresql://...` | PostgreSQL connection URL |
 | `USE_SQLITE_FALLBACK` | `true` | When true, uses embedded SQLite if PostgreSQL is unreachable |
 | `SQLITE_DB_PATH` | `./data/youpi_pg.sqlite`| Path to local SQLite database file |
-| `ENCRYPTION_MASTER_KEY` | `64-hex chars` | 256-bit key for encrypting OAuth credentials and device keys |
-| `JWT_SECRET` | `32+ chars` | Secret key for customer and admin session tokens |
+| `ENCRYPTION_MASTER_KEY` | auto-generated (`64-hex chars` if set) | 256-bit key for encrypting OAuth credentials and device keys |
 | `PAYMENT_ACTIVE_WINDOW_MS` | `300000` | Duration of active payment slot (5 minutes = 300,000ms) |
 | `PAYMENT_PROCESSING_WINDOW_MS` | `30000` | Duration of verification slot (30 seconds = 30,000ms) |
 | `LATE_OBSERVATION_WINDOW_MS` | `1800000` | Safety window for matching late observations (30 minutes) |
@@ -30,6 +29,14 @@
 | `ANDROID_HEARTBEAT_TIMEOUT_MS` | `180000` | Inactivity window before Android device is marked DISCONNECTED |
 | `CHECKOUT_FRAME_ANCESTORS` | unset (any origin in development, `'self'` in production) | Merchant origins (comma or space separated, e.g. `https://shop.example.com`) allowed to embed `/checkout/:id`. The `youpi.js` modal is an iframe, so a store on a different origin than the checkout portal must be listed here or the browser blocks the modal. When unset, any site may frame the checkout page in development, while a production deployment (either `NODE_ENV=production` or `YOUPI_MODE=production`) fences the page to its own origin. Only bare `http(s)` origins are accepted — a path, query, embedded credential or wildcard is ignored, so the value cannot widen the CSP or inject another directive |
 | `YOUPI_ALLOW_PRIVATE_WEBHOOKS` | unset | Set to `true` to permit merchant webhook URLs on loopback/private networks. Required for self-hosted LAN targets; blocked by default as an SSRF guard |
+| `YOUPI_TRUST_PROXY_HEADERS` | unset | Set to `true` only when the API is reachable solely through a trusted proxy or the Cloudflare tunnel. Rate limits then key on `CF-Connecting-IP` (falling back to the first `X-Forwarded-For` hop). Unset, the socket address is used, so behind a proxy all clients share one limit. Never enable it when the API port is directly reachable: clients could spoof the header |
+| `YOUPI_RATE_LIMIT_ANON_PAYMENTS_PER_MIN` | `60` | Per-client limit on credential-less `POST /api/v1/payments` (the default-merchant browser SDK path). Requests with `X-Merchant-Key` or `X-Order-Token` are not limited. `0` disables |
+| `YOUPI_RATE_LIMIT_DEVICE_PER_MIN` | `60` | Per-client limit on `POST /api/v1/devices/register` and `/devices/challenge`. `0` disables |
+| `YOUPI_RATE_LIMIT_CHECK_USER_PER_MIN` | `60` | Per-client limit on `POST /api/v1/customer/check-user`. `0` disables |
+| `YOUPI_RATE_LIMIT_OTP_PER_MOBILE_PER_HOUR` | `5` | Maximum `send-otp` requests per mobile number per hour, on top of the resend cooldown. `0` disables |
+| `YOUPI_RATE_LIMIT_OTP_PER_IP_PER_HOUR` | `30` | Maximum `send-otp` requests per client per hour. `0` disables |
+| `YOUPI_RATE_LIMIT_AUTH_PER_IP_PER_15MIN` | `30` | Per-client limit on customer `login`, `register` and `verify-otp` per 15 minutes. `0` disables |
+| `YOUPI_RATE_LIMIT_LOGIN_FAILURES_PER_15MIN` | `10` | Failed customer logins per account identifier before that identifier is locked for the rest of the 15 minute window. `0` disables |
 
 ---
 

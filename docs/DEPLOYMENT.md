@@ -34,10 +34,9 @@ Copy the clean template to `.env`:
 cp .env.example .env
 ```
 Open `.env` in your editor and configure:
-1. `ENCRYPTION_MASTER_KEY`: Generate a 64-character hex key (e.g. `node -e "console.log(crypto.randomBytes(32).toString('hex'))"`).
-2. `JWT_SECRET`: Random string at least 32 characters.
-3. `INITIAL_ADMIN_EMAIL` and `INITIAL_ADMIN_PASSWORD`: Credentials for your Merchant Admin dashboard.
-4. `BASE_PAYMENT_API_URL` and `BASE_CHECKOUT_URL`: Your public domain or localhost URLs.
+1. `ENCRYPTION_MASTER_KEY` (optional): a 64-character hex key (e.g. `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`). If unset, one is generated into `data/.secrets/`. Placeholder values are ignored.
+2. Admin access uses the `ADMIN_API_TOKEN` bearer token (auto-generated into `data/.secrets/admin_api_token` when unset). `JWT_SECRET` and `INITIAL_ADMIN_*` are no longer used.
+3. `BASE_PAYMENT_API_URL` and `BASE_CHECKOUT_URL`: Your public domain or localhost URLs.
 
 ### Step 3: Install Dependencies
 ```bash

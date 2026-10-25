@@ -21,7 +21,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
   actions: read
 
 # Cancel in-progress runs for PRs to save runner minutes, but queue safely on main branch

@@ -507,7 +507,8 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
     assert.equal(payB.body.status, PaymentStatus.QUEUED);
     assert.equal(payB.body.queuePosition, 1);
 
-    // 3. User A expires (via client expiry trigger / endpoint)
+    // 3. User A expires (via client expiry trigger / endpoint) once the server-side window has elapsed
+    testDb.execute(`UPDATE payment_sessions SET expires_at = ? WHERE id = ?`, [new Date(Date.now() - 1000).toISOString(), payA.body.paymentId]);
     const expireRes = await request(`/api/v1/checkout/${payA.body.paymentId}/expire`, {
       method: 'POST'
     });

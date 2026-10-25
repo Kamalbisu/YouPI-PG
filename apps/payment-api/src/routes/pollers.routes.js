@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { HttpServer } from '../server.js';
 import { ObservationNormalizer, BankSmsParser, BankEmailParser, generateQrSvg } from '@youpi/core';
-import { toRupeesString, toPaise, verifyHmac, resolveRuntimeUrls, resolveSecret, safeEqual, hasBearer, getObserverToken, isAllowedNotificationPackage } from '@youpi/common';
+import { toRupeesString, toPaise, verifyHmac, resolveRuntimeUrls, resolveSecret, safeEqual, hasBearer, getObserverToken, isAllowedNotificationPackage, encryptAtRest, decryptAtRest } from '@youpi/common';
 import { isAdminRequest } from '../auth-guard.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -12,6 +12,40 @@ const __dirname = path.dirname(__filename);
 
 /** Upper bound on a single bank notification body accepted by the verification pipeline. */
 const MAX_OBSERVATION_TEXT_CHARS = 64 * 1024;
+
+/** Upper bound on a signed device request body, enforced while reading, before JSON parsing. */
+const MAX_DEVICE_BODY_BYTES = 64 * 1024;
+
+/** Lifetime of a one-time pairing token issued with the pairing QR. */
+const PAIRING_TOKEN_TTL_MS = 10 * 60 * 1000;
+const MAX_PENDING_PAIRING_TOKENS = 1000;
+
+/** Device request signatures seen inside the drift window (replay cache). */
+const SIGNATURE_REPLAY_WINDOW_MS = 120 * 1000;
+const seenSignatures = new Map();
+const MAX_SEEN_SIGNATURES = 10000;
+
+/**
+ * Records a signature and reports whether it was already seen. Entries expire after the
+ * replay window (twice the 60 s drift allowance), so the cache stays bounded.
+ */
+function isReplayedSignature(deviceId, signature) {
+  const now = Date.now();
+  if (seenSignatures.size >= MAX_SEEN_SIGNATURES) {
+    for (const [key, at] of seenSignatures) {
+      if (now - at > SIGNATURE_REPLAY_WINDOW_MS) seenSignatures.delete(key);
+    }
+    // Still full of live entries: drop the oldest rather than grow without bound.
+    while (seenSignatures.size >= MAX_SEEN_SIGNATURES) {
+      seenSignatures.delete(seenSignatures.keys().next().value);
+    }
+  }
+  const key = `${deviceId}:${signature}`;
+  const previous = seenSignatures.get(key);
+  if (previous !== undefined && now - previous <= SIGNATURE_REPLAY_WINDOW_MS) return true;
+  seenSignatures.set(key, now);
+  return false;
+}
 
 /**
  * Registers observation intake routes for SMS Gateway (Android Native Observer)
@@ -29,6 +63,28 @@ const MAX_OBSERVATION_TEXT_CHARS = 64 * 1024;
 export function registerPollerRoutes(server, ctx) {
   // No public fallback: env value, else a random secret persisted in data/.secrets/.
   const enrollmentSecret = resolveSecret('android_enrollment_secret', 'ANDROID_ENROLLMENT_SECRET');
+
+  // One-time pairing tokens handed out in the pairing QR: merchant-bound, single use and
+  // expired server-side. They replace the long-lived enrollment secret inside the QR.
+  const pairingTokens = new Map(); // token -> { merchantId, expiresAt }
+  const issuePairingToken = (merchantId) => {
+    const now = Date.now();
+    for (const [t, v] of pairingTokens) if (v.expiresAt <= now) pairingTokens.delete(t);
+    while (pairingTokens.size >= MAX_PENDING_PAIRING_TOKENS) {
+      pairingTokens.delete(pairingTokens.keys().next().value);
+    }
+    const token = crypto.randomBytes(24).toString('hex');
+    const expiresAt = now + PAIRING_TOKEN_TTL_MS;
+    pairingTokens.set(token, { merchantId, expiresAt });
+    return { token, expiresAt };
+  };
+  /** Returns the entry and consumes it when the token is a live one-time pairing token. */
+  const consumePairingToken = (token) => {
+    const entry = pairingTokens.get(token);
+    if (!entry) return null;
+    pairingTokens.delete(token);
+    return entry.expiresAt > Date.now() ? entry : null;
+  };
 
   // GET /api/v1/pollers/active-window (Enables deep intelligent DOM scanning for active amounts and dual-layer verification)
   server.get('/api/v1/pollers/active-window', async (req, res) => {
@@ -206,12 +262,17 @@ export function registerPollerRoutes(server, ctx) {
   const handleAndroidPair = async (req, res) => {
     const body = await HttpServer.parseBody(req);
     const token = body.enrollmentToken || body.token;
-    const merchantId = body.merchantId || '00000000-0000-0000-0000-000000000001';
+    let merchantId = body.merchantId || '00000000-0000-0000-0000-000000000001';
     const deviceName = body.deviceName || 'Android SMS Gateway';
     const deviceModel = body.deviceModel || 'Android Device';
 
-    // Verify enrollment token against system secret or merchant token
-    if (!token || !safeEqual(String(token), enrollmentSecret)) {
+    // A one-time token from the pairing QR fixes the merchant server-side and is consumed.
+    // The long-lived enrollment secret is still accepted (manual pairing, simulators), in
+    // which case the merchant comes from the request as before.
+    const oneTime = token ? consumePairingToken(String(token)) : null;
+    if (oneTime) {
+      merchantId = oneTime.merchantId;
+    } else if (!token || !safeEqual(String(token), enrollmentSecret)) {
       HttpServer.json(res, 401, { error: 'Invalid or expired device pairing enrollment token.' });
       return;
     }
@@ -234,7 +295,7 @@ export function registerPollerRoutes(server, ctx) {
       ctx.db.execute(`
         INSERT INTO android_devices (id, merchant_id, device_name, device_model, signing_key_hash, is_active, last_heartbeat_at, created_at)
         VALUES (?, ?, ?, ?, ?, 1, ?, ?)
-      `, [deviceId, merchantId, deviceName, deviceModel, signingKey, nowIso, nowIso]);
+      `, [deviceId, merchantId, deviceName, deviceModel, encryptAtRest(signingKey), nowIso, nowIso]);
 
       if (ctx.auditRepo) {
         ctx.auditRepo.log({
@@ -264,11 +325,32 @@ export function registerPollerRoutes(server, ctx) {
 
   // --- ANDROID SMS GATEWAY OBSERVATION INGESTION ---
   const handleAndroidSmsEvents = async (req, res, { requirePackage = false } = {}) => {
-    const rawBodyText = await new Promise(resolve => {
-      let data = '';
-      req.on('data', chunk => { data += chunk; });
-      req.on('end', () => resolve(data));
-    });
+    // Cap the body while reading: the HMAC is checked only after the whole body is buffered,
+    // so an unbounded read would let an unauthenticated caller exhaust memory.
+    let rawBodyText;
+    try {
+      rawBodyText = await new Promise((resolve, reject) => {
+        let data = '';
+        let size = 0;
+        let exceeded = false;
+        req.on('data', chunk => {
+          if (exceeded) return;
+          size += chunk.length;
+          if (size > MAX_DEVICE_BODY_BYTES) {
+            exceeded = true;
+            data = '';
+            reject(new Error('Payload Too Large'));
+            return;
+          }
+          data += chunk;
+        });
+        req.on('end', () => { if (!exceeded) resolve(data); });
+        req.on('error', reject);
+      });
+    } catch {
+      HttpServer.json(res, 413, { error: 'Payload too large.' });
+      return;
+    }
 
     let body = {};
     try {
@@ -310,16 +392,31 @@ export function registerPollerRoutes(server, ctx) {
       }
 
       const sigPayload = `${rawBodyText}:${timestampStr}`;
-      const isValid = verifyHmac(sigPayload, device.signing_key_hash, signature);
+      const signingKey = decryptAtRest(device.signing_key_hash);
+      const isValid = signingKey ? verifyHmac(sigPayload, signingKey, String(signature)) : false;
       if (!isValid) {
         HttpServer.json(res, 401, { error: 'Invalid cryptographic HMAC signature.' });
+        return;
+      }
+      if (isReplayedSignature(device.id, String(signature))) {
+        HttpServer.json(res, 401, { error: 'Request signature already used (replay protection triggered).' });
         return;
       }
     }
 
     // Resolve Receiving Account for this merchant
     let receivingAccountId = body.receivingAccountId;
-    if (!receivingAccountId) {
+    if (receivingAccountId) {
+      // A paired device may only attribute observations to its own merchant's accounts.
+      const owned = ctx.db.queryOne(
+        'SELECT id FROM payment_receiving_accounts WHERE id = ? AND merchant_id = ?',
+        [String(receivingAccountId), device.merchant_id]
+      );
+      if (!owned) {
+        HttpServer.json(res, 403, { accepted: false, error: 'receivingAccountId does not belong to this device\'s merchant.' });
+        return;
+      }
+    } else {
       const activeAccount = ctx.accountRepo
         ? ctx.accountRepo.findActiveForMerchant(device.merchant_id)
         : ctx.db.queryOne('SELECT id FROM payment_receiving_accounts WHERE merchant_id = ? AND is_active = 1 LIMIT 1', [device.merchant_id]);
@@ -327,7 +424,19 @@ export function registerPollerRoutes(server, ctx) {
     }
 
     // Extract amount and details: either pre-parsed or from raw bank SMS
-    let amountPaise = body.amountPaise ? BigInt(body.amountPaise) : undefined;
+    let amountPaise;
+    if (body.amountPaise) {
+      try {
+        amountPaise = BigInt(body.amountPaise);
+      } catch {
+        HttpServer.json(res, 400, { accepted: false, error: 'amountPaise must be an integer number of paise.' });
+        return;
+      }
+      if (amountPaise <= 0n) {
+        HttpServer.json(res, 400, { accepted: false, error: 'amountPaise must be positive.' });
+        return;
+      }
+    }
     let bankRef = body.bankReferenceNumber || body.utr;
     let senderVpa = body.senderVpa;
     let observedAt = body.observedAt ? new Date(body.observedAt) : new Date();
@@ -481,7 +590,7 @@ export function registerPollerRoutes(server, ctx) {
     const body = await HttpServer.parseBody(req);
     const deviceId = req.headers['x-device-id'] || body.deviceId;
 
-    if (deviceId) {
+    if (deviceId && typeof deviceId === 'string') {
       ctx.db.execute('UPDATE android_devices SET last_heartbeat_at = datetime(\'now\') WHERE id = ?', [deviceId]);
     }
 
@@ -504,9 +613,9 @@ export function registerPollerRoutes(server, ctx) {
     // Canonical runtime URL derivation (Part C2)
     const runtime = resolveRuntimeUrls(merchant?.branding || {});
     const baseUrl = runtime.apiUrl;
-    const token = enrollmentSecret;
+    // Short-lived one-time token; the long-lived enrollment secret never leaves the server.
+    const { token, expiresAt } = issuePairingToken(merchantId);
     const sessionId = crypto.randomUUID();
-    const expiresAt = Date.now() + (10 * 60 * 1000); // 10 minutes
 
     const pairingPayloadObj = {
       version: 'v1',
@@ -625,13 +734,9 @@ export function registerPollerRoutes(server, ctx) {
     }
 
     if (!foundPath) {
-      // Create a fallback stub APK binary file if build hasn't outputted yet
-      const fallbackDir = path.resolve(__dirname, '../../public');
-      if (!fs.existsSync(fallbackDir)) fs.mkdirSync(fallbackDir, { recursive: true });
-      foundPath = path.join(fallbackDir, 'youpi-sms-gateway.apk');
-      if (!fs.existsSync(foundPath)) {
-        fs.writeFileSync(foundPath, Buffer.from('PK\x03\x04YOUPI_SMS_GATEWAY_STANDALONE_APK_PACKAGE'));
-      }
+      // Never fabricate a package on disk: report that the build output is missing.
+      HttpServer.json(res, 404, { error: 'APK_NOT_BUILT', message: 'The Android observer APK has not been built or installed on this server.' });
+      return;
     }
 
     const stat = fs.statSync(foundPath);

@@ -18,31 +18,6 @@ import { ObservationNormalizer } from './normalizer.js';
 
 
 /**
- * Known malicious, synthetic, or defined fake injection patterns.
- */
-const FRAUD_PATTERNS = [
-  /<script[\s>]/i,
-  /<iframe[\s>]/i,
-  /javascript:/i,
-  /onerror\s*=/i,
-  /onload\s*=/i,
-  /union\s+select/i,
-  /drop\s+table/i,
-  /exec\s*\(/i,
-  /eval\s*\(/i,
-  /fraud_payload/i,
-  /defined[\s_-]*fake[\s_-]*injection/i,
-  /fake[\s_-]*injection/i,
-  /fake[\s_-]*payload/i,
-  /fraud[\s_-]*injection/i,
-  /synthetic[\s_-]*attack/i,
-  /suspicious_hack/i,
-  /exploit/i,
-  /attack/i,
-  /malicious/i
-];
-
-/**
  * Complete Payment Verification & Observation Security Pipeline.
  *
  * Core Decision Architecture:
@@ -119,6 +94,7 @@ export class PaymentVerificationPipeline {
    */
   process(input) {
     const isTest = Boolean(input.isTest);
+    const isProductionMode = process.env.NODE_ENV === 'production' || process.env.YOUPI_MODE === 'production';
     const testModeActive = Boolean(input.testModeActive);
     // Bank credit notifications are a few hundred bytes. Capping the text bounds the cost of
     // the reference-extraction regexes below, which are scanned from every start offset and
@@ -408,7 +384,9 @@ export class PaymentVerificationPipeline {
         emailDomain === 'fin.in' ||
         Array.from(KNOWN_BANK_DOMAINS).some(root => emailDomain === root || emailDomain.endsWith('.' + root));
       // In automated test suite or local dev, allow TEST sender and legacy test fixture domains
-      const isValidDomain = isBankDomain || sender === 'TEST' || cleanEmail === 'TEST' || sender === 'gmail-browser-automator' || emailDomain.endsWith('.youpi.local');
+      // These fixture senders are never honoured in production, so they cannot be spoofed there.
+      const allowTestSenders = !isProductionMode;
+      const isValidDomain = isBankDomain || (allowTestSenders && (sender === 'TEST' || cleanEmail === 'TEST' || sender === 'gmail-browser-automator' || emailDomain.endsWith('.youpi.local')));
 
       if (!isValidDomain) {
         if (!isAttributableToCustomer) {
@@ -488,6 +466,29 @@ export class PaymentVerificationPipeline {
       });
     }
 
+    // A debit indicator that appears before any credit indicator means money left the account
+    // (same rule as the standalone bank SMS parser), so it must never settle a payment.
+    const debitIdx = rawText.search(/\b(?:debited|withdrawn|deducted|spent|paid rs|sent rs)\b/i);
+    const creditIdx = rawText.search(creditKeywords);
+    if (debitIdx !== -1 && debitIdx < creditIdx) {
+      stage3 = {
+        stage: 3,
+        name: 'PARSER',
+        status: 'FAILED',
+        reason: 'DEBIT_NOTIFICATION',
+        details: 'Message describes a debit before any credit, so it is not an incoming payment.'
+      };
+      return buildResult({
+        finalStatus: 'REJECTED',
+        failingStage: 3,
+        failingCondition: 'DEBIT_NOTIFICATION',
+        failingReason: stage3.details,
+        stage2,
+        stage3,
+        session
+      });
+    }
+
     // Invariant 2: Check Indian currency indicator (Rs, Rs., ₹, or INR)
     const currencyKeywords = /(?:\b(?:rs\.?|inr)\b|₹|(?:rs\.?|inr|₹)\s*\d|\d\s*(?:rs\.?|inr|₹))/i;
     if (!currencyKeywords.test(rawText)) {
@@ -510,7 +511,10 @@ export class PaymentVerificationPipeline {
     }
 
     // Invariant 3: Check 12-digit reference (UTR / RRN)
-    let bankRef = input.bankReferenceNumber || input.utr || null;
+    // A reference printed in the message itself wins over a caller-supplied one, so a caller
+    // cannot attach an arbitrary value to a real credit to dodge the duplicate checks.
+    const labelledRefMatch = rawText.match(/(?:upi\s*ref(?:erence)?\s*(?:no\.?|num)?|utr(?:\s*no\.?)?|rrn(?:\s*no\.?)?|txn\s*(?:id|ref)?|ref\s*no\.?)[\s:=-]+([0-9]{12})\b/i);
+    let bankRef = (labelledRefMatch && labelledRefMatch[1]) || input.bankReferenceNumber || input.utr || null;
     if (!bankRef) {
       const ref12Patterns = [
         /(?:upi\s*ref(?:erence)?\s*(?:no\.?|num)?|utr(?:\s*no\.?)?|rrn(?:\s*no\.?)?|txn\s*(?:id|ref)?|ref\s*no\.?)[\s:=-]+([0-9]{12})\b/i,
@@ -643,6 +647,27 @@ export class PaymentVerificationPipeline {
         stage3,
         stage4,
         parsed: parsedData
+      });
+    }
+
+    if (input.paymentSessionId && [PaymentStatus.FAILED, PaymentStatus.EXPIRED, PaymentStatus.CANCELLED].includes(session.status)) {
+      stage4 = {
+        stage: 4,
+        name: 'VERIFICATION',
+        status: 'FAILED',
+        reason: 'SESSION_NOT_OPEN',
+        details: `Payment session is ${session.status} and can no longer be settled by an observation.`
+      };
+      return buildResult({
+        finalStatus: 'REJECTED',
+        failingStage: 4,
+        failingCondition: 'SESSION_NOT_OPEN',
+        failingReason: stage4.details,
+        stage2,
+        stage3,
+        stage4,
+        parsed: parsedData,
+        session
       });
     }
 
@@ -875,7 +900,7 @@ export class PaymentVerificationPipeline {
       isNotLegitimateBank = !isValidSenderCode || isAttributableToCustomer;
     } else if (source === 'GMAIL') {
       const senderDomain = sender.includes('@') ? sender.split('@')[1]?.toLowerCase().trim() : sender.toLowerCase().trim();
-      const isBankDomain = senderDomain.endsWith('.bank.in') || senderDomain === 'bank.in' || sender === 'TEST' || senderDomain === 'hdfcbank.net';
+      const isBankDomain = senderDomain.endsWith('.bank.in') || senderDomain === 'bank.in' || (!isProductionMode && sender === 'TEST') || senderDomain === 'hdfcbank.net';
       isNotLegitimateBank = !isBankDomain || isAttributableToCustomer;
     } else {
       isNotLegitimateBank = true;

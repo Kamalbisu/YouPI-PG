@@ -45,8 +45,8 @@ jobs:
       - name: Check for Production Container Changes
         id: filter
         run: |
-          # The container assets (Dockerfile, docker-compose.yml) are not part of this
-          # repository yet. Skip the whole build/scan/push pipeline instead of failing.
+          # Skip the whole build/scan/push pipeline instead of failing if the Dockerfile is
+          # ever removed from the repository.
           if [ ! -f Dockerfile ]; then
             echo "::notice::No Dockerfile found in the repository - skipping container build, scan and push."
             echo "should_build=false" >> "$GITHUB_OUTPUT"
@@ -55,8 +55,7 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "Manual trigger via workflow_dispatch - proceeding with build."
             echo "should_build=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "should_build=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
           if ! git rev-parse HEAD^1 >/dev/null 2>&1; then

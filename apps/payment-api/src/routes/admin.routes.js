@@ -2,8 +2,13 @@ import crypto from 'node:crypto';
 import { HttpServer } from '../server.js';
 import { PaymentStatus, PaymentMethod, SellingMode, AuditActorType, isValidVpa, toRupeesString, deriveCloudflareRoutes, resolveRuntimeUrls, resolveGmailRedirectUri, createOAuthState, validateOutboundWebhookUrl } from '@youpi/common';
 import { PaymentVerificationPipeline } from '@youpi/core';
+import { isObserverRequest } from '../auth-guard.js';
 import { globalTunnelManager } from '../services/tunnel-manager.js';
 import { formatQrDataUrl } from '../services/whatsapp-berry.service.js';
+
+/** Placeholder returned in place of stored secrets; saving it back leaves the stored value unchanged. */
+const MASKED_SECRET = '••••••••';
+const isMaskedSecret = (value) => typeof value === 'string' && value.includes('•');
 
 function resolveSellingModeAndMethods(body, currentBranding = {}) {
   const inputBranding = body.branding || {};
@@ -1451,21 +1456,32 @@ export function registerAdminRoutes(server, ctx) {
     const redirectUri = resolveGmailRedirectUri(branding);
     const hasToken = Boolean(gmailConfig.refreshToken && gmailConfig.refreshToken.trim());
 
+    // Only the Gmail observer process (observer token) receives the real secrets. Everyone else,
+    // including the admin UI, gets a masked placeholder plus has* flags, so a leaked admin token
+    // or an XSS in the panel cannot exfiltrate the Google OAuth credentials.
+    const reveal = isObserverRequest(req);
+    const secretOut = (value) => (reveal ? (value || '') : (value ? MASKED_SECRET : ''));
+    const clientSecret = secretOut(gmailConfig.clientSecret);
+    const refreshToken = secretOut(gmailConfig.refreshToken);
+    const apiKey = secretOut(gmailConfig.apiKey);
+
     HttpServer.json(res, 200, {
       gmailConfig: {
         clientId: gmailConfig.clientId || '',
-        clientSecret: gmailConfig.clientSecret || '',
+        clientSecret,
         hasClientSecret: Boolean(gmailConfig.clientSecret),
-        refreshToken: gmailConfig.refreshToken || '',
-        apiKey: gmailConfig.apiKey || '',
+        refreshToken,
+        hasRefreshToken: hasToken,
+        apiKey,
         connectedEmail: gmailConfig.connectedEmail || null,
         lastTestedAt: gmailConfig.lastTestedAt || null
       },
       clientId: gmailConfig.clientId || '',
-      clientSecret: gmailConfig.clientSecret || '',
+      clientSecret,
       hasClientSecret: Boolean(gmailConfig.clientSecret),
-      refreshToken: gmailConfig.refreshToken || '',
-      apiKey: gmailConfig.apiKey || '',
+      refreshToken,
+      hasRefreshToken: hasToken,
+      apiKey,
       connectedEmail: gmailConfig.connectedEmail || null,
       redirectUri,
       oauthStatus: hasToken ? 'CONNECTED' : 'DISCONNECTED',
@@ -1571,9 +1587,9 @@ export function registerAdminRoutes(server, ctx) {
     const updatedGmail = {
       ...existingGmail,
       clientId: body.clientId !== undefined && body.clientId.trim() ? body.clientId.trim() : existingGmail.clientId,
-      clientSecret: body.clientSecret !== undefined && body.clientSecret.trim() && !body.clientSecret.includes('•') ? body.clientSecret.trim() : existingGmail.clientSecret,
-      refreshToken: body.refreshToken !== undefined ? body.refreshToken.trim() : existingGmail.refreshToken,
-      apiKey: body.apiKey !== undefined ? body.apiKey.trim() : existingGmail.apiKey,
+      clientSecret: body.clientSecret !== undefined && body.clientSecret.trim() && !isMaskedSecret(body.clientSecret) ? body.clientSecret.trim() : existingGmail.clientSecret,
+      refreshToken: body.refreshToken !== undefined && !isMaskedSecret(body.refreshToken) ? body.refreshToken.trim() : existingGmail.refreshToken,
+      apiKey: body.apiKey !== undefined && !isMaskedSecret(body.apiKey) ? body.apiKey.trim() : existingGmail.apiKey,
       connectedEmail: body.connectedEmail !== undefined ? (body.connectedEmail ? body.connectedEmail.trim() : null) : existingGmail.connectedEmail,
       lastTestedAt: body.lastTestedAt || existingGmail.lastTestedAt,
       lastSuccessfulFetch: body.lastSuccessfulFetch || existingGmail.lastSuccessfulFetch,
@@ -1607,15 +1623,16 @@ export function registerAdminRoutes(server, ctx) {
   // POST /api/v1/admin/gmail/test
   server.post('/api/v1/admin/gmail/test', async (req, res) => {
     const body = await HttpServer.parseBody(req).catch(() => ({}));
-    let merchant = body.merchantId ? (ctx.merchantRepo ? ctx.merchantRepo.findById(body.merchantId) : null) : null;
-    if (!merchant && ctx.merchantRepo) merchant = ctx.merchantRepo.findAll()[0];
+    const merchant = resolveMerchant(req, body.merchantId);
     const merchantId = merchant ? merchant.id : (body.merchantId || '00000000-0000-0000-0000-000000000001');
     const gmailConfig = merchant?.branding?.gmailConfig || {};
 
     const clientId = body.clientId || gmailConfig.clientId;
-    const clientSecret = body.clientSecret || gmailConfig.clientSecret;
-    const refreshToken = body.refreshToken || gmailConfig.refreshToken;
-    const apiKey = body.apiKey || gmailConfig.apiKey;
+    // A masked placeholder from the admin UI means "use the stored value".
+    const submitted = (value) => (isMaskedSecret(value) ? '' : value);
+    const clientSecret = submitted(body.clientSecret) || gmailConfig.clientSecret;
+    const refreshToken = submitted(body.refreshToken) || gmailConfig.refreshToken;
+    const apiKey = submitted(body.apiKey) || gmailConfig.apiKey;
 
     if (!refreshToken && !apiKey) {
       HttpServer.json(res, 400, {
