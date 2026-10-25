@@ -28,7 +28,6 @@ describe('Webhook Engine Integration Tests', () => {
       maxRetries: 3
     });
 
-    // Start a mock merchant webhook receiver HTTP server
     receiverServer = http.createServer((req, res) => {
       let body = '';
       req.on('data', chunk => { body += chunk; });
@@ -86,7 +85,6 @@ describe('Webhook Engine Integration Tests', () => {
     assert.equal(result.status, 200);
     assert.ok(result.deliveryId);
 
-    // Verify received payload & signature
     assert.equal(receivedWebhooks.length, 1);
     const hook = receivedWebhooks[0];
 
@@ -99,13 +97,11 @@ describe('Webhook Engine Integration Tests', () => {
     assert.equal(hook.body.amount, '200.00');
     assert.equal(hook.body.amountPaise, 20000);
 
-    // Cryptographically verify signature using merchant webhookSecret
     const rawSig = hook.headers['x-gateway-signature'].replace('sha256=', '');
     const isValid = verifyHmac(JSON.stringify(hook.body), merchant.webhookSecret, rawSig);
     assert.equal(isValid, true);
     assert.ok('utr' in hook.body);
 
-    // Verify recorded in DB as successful
     const delivery = db.queryOne('SELECT * FROM webhook_deliveries WHERE id = ?', [result.deliveryId]);
     assert.ok(delivery);
     assert.equal(delivery.is_successful, 1);
@@ -129,7 +125,6 @@ describe('Webhook Engine Integration Tests', () => {
       receivingAccountId: '00000000-0000-0000-0000-000000000002'
     });
 
-    // The UTR lives on the observation, not on the session row.
     const observation = new ObservationRepository(db).create({
       receivingAccountId: session.receivingAccountId,
       source: 'GOOGLE_MESSAGES',
@@ -151,11 +146,9 @@ describe('Webhook Engine Integration Tests', () => {
     assert.ok(hook, 'webhook not received');
     assert.equal(hook.body.utr, '412345678901');
 
-    // The signature must still cover the body that now includes the UTR.
     const rawSig = hook.headers['x-gateway-signature'].replace('sha256=', '');
     assert.equal(verifyHmac(JSON.stringify(hook.body), merchant.webhookSecret, rawSig), true);
 
-    // The documented webhook contract must expose every field.
     for (const field of ['event', 'paymentId', 'orderId', 'amount', 'amountPaise', 'currency', 'method', 'utr', 'completedAt', 'metadata']) {
       assert.ok(field in hook.body, `missing documented webhook field: ${field}`);
     }
@@ -183,13 +176,11 @@ describe('Webhook Engine Integration Tests', () => {
     assert.equal(result.delivered, false);
     assert.equal(result.status, 500);
 
-    // Verify recorded as failed with next_retry_at set
     const delivery = db.queryOne('SELECT * FROM webhook_deliveries WHERE id = ?', [result.deliveryId]);
     assert.equal(delivery.is_successful, 0);
     assert.equal(delivery.attempt_count, 1);
     assert.ok(delivery.next_retry_at);
 
-    // Now make receiver healthy and simulate retry worker
     shouldReceiverFail = false;
     const pastIso = new Date(Date.now() - 60000).toISOString();
     db.execute('UPDATE webhook_deliveries SET next_retry_at = ? WHERE id = ?', [pastIso, result.deliveryId]);
@@ -202,9 +193,6 @@ describe('Webhook Engine Integration Tests', () => {
     const updatedDelivery = db.queryOne('SELECT * FROM webhook_deliveries WHERE id = ?', [result.deliveryId]);
     assert.equal(updatedDelivery.is_successful, 1);
 
-    // A retried delivery must carry the SAME MAC as a first delivery: the signature covers
-    // the exact transmitted body, so the merchant's verification accepts it too. Signing the
-    // retry as `${timestamp}.${payload}` made every retry fail verification.
     const retried = receivedWebhooks.filter(h => h.body && h.body.orderId === 'HOOK-ORD-FAIL').pop();
     assert.ok(retried, 'retried webhook not received');
     const retrySig = retried.headers['x-gateway-signature'].replace('sha256=', '');
@@ -237,7 +225,6 @@ describe('Webhook Engine Integration Tests', () => {
     assert.ok(firstBody.timestamp, 'payload must carry a timestamp');
     assert.ok(firstBody.deliveryId, 'payload must carry a delivery id');
 
-    // The retry resends the SAME body, so the headers must describe that same body.
     db.execute('UPDATE webhook_deliveries SET next_retry_at = ? WHERE id = ?', [
       new Date(Date.now() - 60000).toISOString(), result.deliveryId
     ]);
@@ -250,7 +237,6 @@ describe('Webhook Engine Integration Tests', () => {
       'a retry must keep the delivery id of the body it resends');
     assert.equal(JSON.stringify(retried.body), JSON.stringify(first.body), 'a retry must resend the identical body');
 
-    // And the merchant's verifier must accept the retried delivery.
     const rawSig = retried.headers['x-gateway-signature'].replace('sha256=', '');
     assert.equal(verifyHmac(JSON.stringify(retried.body), merchant.webhookSecret, rawSig), true);
   });
@@ -264,7 +250,6 @@ describe('Webhook Engine Integration Tests', () => {
       webhookUrl: `http://localhost:${receiverPort}/webhook-no-secret`,
       webhookSecret: 'temp_secret'
     });
-    // Explicitly set secret to empty string in DB to test missing secret guard
     db.execute("UPDATE merchants SET webhook_secret = '' WHERE id = ?", [merchantNoSecret.id]);
 
     const session = sessionRepo.create({

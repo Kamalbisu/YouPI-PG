@@ -1,35 +1,18 @@
 import { PaymentStatus } from '@youpi/common';
 
 export class TimingEngine {
-  /**
-   * @param {{
-   *   sessionRepo: import('@youpi/db').PaymentSessionRepository,
-   *   queueEngine: import('./queue-engine.js').QueueEngine,
-   *   eventEmitter?: { emit: (event: string, payload: any) => void },
-   *   auditRepo?: import('@youpi/db').AuditLogRepository,
-   *   activeDurationMs?: number,
-   *   processingDurationMs?: number
-   * }} options
-   */
   constructor(options) {
     this.sessionRepo = options.sessionRepo;
     this.queueEngine = options.queueEngine;
     this.eventEmitter = options.eventEmitter || { emit: () => {} };
     this.auditRepo = options.auditRepo;
-    this.activeDurationMs = options.activeDurationMs || 300000; // 5 minutes
-    this.processingDurationMs = options.processingDurationMs || 30000; // 30 seconds
+    this.activeDurationMs = options.activeDurationMs || 300000;
+    this.processingDurationMs = options.processingDurationMs || 30000;
 
-    /** @type {Map<string, NodeJS.Timeout>} */
     this.activeTimers = new Map();
-    /** @type {Map<string, NodeJS.Timeout>} */
     this.processingTimers = new Map();
   }
 
-  /**
-   * Starts Timer 1 (5-minute payment window) for an activated session.
-   * @param {string} sessionId
-   * @param {Date} expiresAt
-   */
   startActiveTimer(sessionId, expiresAt) {
     this.clearTimers(sessionId);
 
@@ -39,29 +22,21 @@ export class TimingEngine {
       this.handleActiveTimerExpiration(sessionId);
     }, delayMs);
 
-    // Unref so timer doesn't prevent process exit if running standalone
     if (timer.unref) timer.unref();
 
     this.activeTimers.set(sessionId, timer);
   }
 
-  /**
-   * Executes when Timer 1 reaches 0 without customer clicking "Payment Done".
-   * Transitions to EXPIRED and promotes next queued customer.
-   * @param {string} sessionId
-   */
   handleActiveTimerExpiration(sessionId) {
     this.activeTimers.delete(sessionId);
 
     const session = this.sessionRepo.findById(sessionId);
     if (!session) return;
 
-    // Invariant: Only expire if still in ACTIVE status
     if (session.status !== PaymentStatus.ACTIVE) {
       return;
     }
 
-    // Transition to EXPIRED and release slot
     this.sessionRepo.transitionToTerminal(sessionId, PaymentStatus.EXPIRED);
 
     if (this.auditRepo) {
@@ -83,16 +58,11 @@ export class TimingEngine {
       amountPaise: session.amountPaise
     });
 
-    // Immediately promote next queued customer
     if (session.receivingAccountId) {
       this.queueEngine.promoteNext(session.receivingAccountId, this.activeDurationMs);
     }
   }
 
-  /**
-   * Cancel active timer for session if running.
-   * @param {string} sessionId
-   */
   cancelActiveTimer(sessionId) {
     const activeTimer = this.activeTimers.get(sessionId);
     if (activeTimer) {
@@ -101,23 +71,13 @@ export class TimingEngine {
     }
   }
 
-  /**
-   * Customer clicked "PAYMENT DONE — CHECK MY PAYMENT".
-   * 1. Cancels Timer 1 (5-minute timer).
-   * 2. Starts Timer 2 (30-second processing timer).
-   * 3. Customer does NOT get another 5 minutes.
-   * @param {string} sessionId
-   * @returns {any} Updated session in PROCESSING state
-   */
   handlePaymentDone(sessionId) {
-    // 1. Cancel Timer 1
     const activeTimer = this.activeTimers.get(sessionId);
     if (activeTimer) {
       clearTimeout(activeTimer);
       this.activeTimers.delete(sessionId);
     }
 
-    // 2. Transition session to PROCESSING in DB
     const session = this.sessionRepo.transitionToProcessing(sessionId, this.processingDurationMs);
 
     if (this.auditRepo) {
@@ -137,7 +97,6 @@ export class TimingEngine {
       processingExpiresAt: session.processingExpiresAt
     });
 
-    // 3. Start Timer 2 (30-second processing window)
     const delayMs = Math.max(0, session.processingExpiresAt.getTime() - Date.now());
 
     const procTimer = setTimeout(() => {
@@ -150,23 +109,16 @@ export class TimingEngine {
     return session;
   }
 
-  /**
-   * Executes when Timer 2 (30-second processing window) reaches 0 with no matching observation.
-   * Transitions to FAILED and promotes next queued customer.
-   * @param {string} sessionId
-   */
   handleProcessingTimerExpiration(sessionId) {
     this.processingTimers.delete(sessionId);
 
     const session = this.sessionRepo.findById(sessionId);
     if (!session) return;
 
-    // Invariant: Only fail if still in PROCESSING status (no observer matched it yet)
     if (session.status !== PaymentStatus.PROCESSING) {
       return;
     }
 
-    // Transition to FAILED and release slot
     this.sessionRepo.transitionToTerminal(sessionId, PaymentStatus.FAILED);
 
     if (this.auditRepo) {
@@ -188,23 +140,17 @@ export class TimingEngine {
       amountPaise: session.amountPaise
     });
 
-    // Immediately promote next queued customer
     if (session.receivingAccountId) {
       this.queueEngine.promoteNext(session.receivingAccountId, this.activeDurationMs);
     }
   }
 
-  /**
-   * Customer explicitly cancels the payment session during ACTIVE window.
-   * Immediately releases slot and promotes next queued customer.
-   * @param {string} sessionId
-   */
   handleCancel(sessionId) {
     const session = this.sessionRepo.findById(sessionId);
     if (!session) return null;
 
     if ([PaymentStatus.PROCESSING, PaymentStatus.SUCCESS, PaymentStatus.FAILED, PaymentStatus.EXPIRED, PaymentStatus.CANCELLED, PaymentStatus.SUSPICIOUS].includes(session.status)) {
-      return session; // cannot cancel in-flight PROCESSING or already terminal sessions
+      return session;
     }
 
     this.clearTimers(sessionId);
@@ -230,7 +176,6 @@ export class TimingEngine {
       amountPaise: session.amountPaise
     });
 
-    // Immediately promote next queued customer
     if (session.receivingAccountId) {
       this.queueEngine.promoteNext(session.receivingAccountId, this.activeDurationMs);
     }
@@ -238,10 +183,6 @@ export class TimingEngine {
     return updated;
   }
 
-  /**
-   * Clears all in-memory timer handles for a session.
-   * @param {string} sessionId
-   */
   clearTimers(sessionId) {
     const act = this.activeTimers.get(sessionId);
     if (act) {
@@ -256,9 +197,6 @@ export class TimingEngine {
     }
   }
 
-  /**
-   * Clean up all timers across all sessions (for graceful shutdown).
-   */
   destroy() {
     for (const timer of this.activeTimers.values()) {
       clearTimeout(timer);

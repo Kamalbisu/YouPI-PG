@@ -2,9 +2,6 @@ import crypto from 'node:crypto';
 import { AuditActorType } from '@youpi/common';
 
 export class AuditLogRepository {
-  /**
-   * @param {import('../database.js').Database} db
-   */
   constructor(db) {
     this.db = db;
   }

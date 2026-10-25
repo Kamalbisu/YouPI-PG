@@ -15,7 +15,6 @@ async function executeCleanReset() {
     process.exit(1);
   }
 
-  // --- 1. PRODUCTION RESET ---
   const prodPath = path.resolve('data/youpi_pg.sqlite');
   console.log('\n[1] Processing Production Database:', prodPath);
 
@@ -63,7 +62,6 @@ async function executeCleanReset() {
   console.log(`  [✓] Production verified: Customers=0, Sessions=0, Merchants=${prodMerchantsAfter}, Active VPA=${prodAccount.upi_id}`);
   prodDb.close();
 
-  // --- 2. DEVELOPMENT RESET ---
   const devPath = process.env.DEV_DB_PATH || path.resolve(process.cwd(), 'data/youpi_pg_dev.sqlite');
   console.log('\n[2] Processing Development Database:', devPath);
 

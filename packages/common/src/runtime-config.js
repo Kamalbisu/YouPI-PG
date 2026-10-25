@@ -1,8 +1,3 @@
-/**
- * Canonical Cloudflare Tunnel and Runtime URL Resolution Engine.
- * Single source of truth for runtime mode, derived hostnames, and service mappings.
- */
-
 export const SERVICE_PORTS = Object.freeze({
   CHECKOUT: 7000,
   API: 6100,
@@ -11,20 +6,6 @@ export const SERVICE_PORTS = Object.freeze({
   STORE: 5000
 });
 
-/**
- * Derives public hostnames and Cloudflare published application mappings.
- * @param {{ domain?: string, prefix?: string }} config
- * @returns {Array<{
- *   role: string,
- *   name: string,
- *   publicHostname: string,
- *   publicUrl: string,
- *   serviceUrl: string,
- *   port: number,
- *   purpose: string,
- *   optional: boolean
- * }>}
- */
 export function deriveCloudflareRoutes(config = {}) {
   const rawDomain = (config.domain || config.domainTld || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/+$/, '');
   const rawPrefix = (config.prefix || config.domainPrefix || 'pay').trim().toLowerCase().replace(/[^a-z0-9-_]/g, '') || 'pay';
@@ -87,16 +68,6 @@ export function deriveCloudflareRoutes(config = {}) {
   ];
 }
 
-/**
- * Resolves authoritative runtime URLs for all system components.
- * @param {{
- *   envMode?: string,
- *   domain?: string,
- *   domainTld?: string,
- *   prefix?: string,
- *   domainPrefix?: string
- * }} options
- */
 export function resolveRuntimeUrls(options = {}) {
   let mode = options.envMode;
   if (!mode) {
@@ -148,7 +119,6 @@ export function resolveRuntimeUrls(options = {}) {
     };
   }
 
-  // Localhost / Development Mode
   return {
     mode: 'localhost',
     isProduction: false,
@@ -174,16 +144,13 @@ export function resolveRuntimeUrls(options = {}) {
   };
 }
 
-/**
- * Generates structured SMS Gateway QR pairing payload according to Part C1 & C2.
- */
 export function createPairingPayload(options = {}) {
   const {
     serverUrl,
     sessionId = `pair_sess_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
     token = `tok_${Math.random().toString(36).substring(2, 12)}`,
     merchantId = '00000000-0000-0000-0000-000000000001',
-    ttlMs = 10 * 60 * 1000 // 10 minutes default
+    ttlMs = 10 * 60 * 1000
   } = options;
 
   return {
@@ -198,9 +165,6 @@ export function createPairingPayload(options = {}) {
   };
 }
 
-/**
- * Validates pairing payload according to Part C5.
- */
 export function validatePairingPayload(payload) {
   if (!payload || typeof payload !== 'object') {
     return { valid: false, error: 'INVALID YOUPI PAIRING QR' };
@@ -223,19 +187,11 @@ export function validatePairingPayload(payload) {
   return { valid: true };
 }
 
-/**
- * Resolves active runtime pairing API URL.
- */
 export function resolvePairingUrl(options = {}) {
   const urls = resolveRuntimeUrls(options);
   return urls.apiUrl || 'http://localhost:6100';
 }
 
-/**
- * OAuth redirect URI for the Gmail observer. `GMAIL_REDIRECT_URI` wins; otherwise it is derived
- * from the configured domain, falling back to the local observer port.
- * @param {object} [branding]
- */
 export function resolveGmailRedirectUri(branding = {}) {
   if (process.env.GMAIL_REDIRECT_URI) return process.env.GMAIL_REDIRECT_URI;
   try {

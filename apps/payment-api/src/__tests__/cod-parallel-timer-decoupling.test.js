@@ -30,7 +30,6 @@ describe('COD Parallel Timer & UPI Queue Decoupling Suite', () => {
       ]
     );
 
-    // Create an active receiving account
     testDb.execute(`
       UPDATE payment_receiving_accounts
       SET is_slot_busy = 0, current_active_session_id = NULL
@@ -85,7 +84,6 @@ describe('COD Parallel Timer & UPI Queue Decoupling Suite', () => {
   }
 
   test('Switching from UPI to COD decouples UPI queue, promotes queued customer, and starts parallel 5-min timer', async () => {
-    // 1. Session A starts on UPI and holds the active UPI queue slot
     const payA = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -100,11 +98,9 @@ describe('COD Parallel Timer & UPI Queue Decoupling Suite', () => {
     assert.equal(payA.body.status, PaymentStatus.ACTIVE);
     const sessionAId = payA.body.paymentId;
 
-    // Simulate time running down to 30 seconds left on Session A's UPI slot
     const expiringSoon = new Date(Date.now() + 30000);
     testDb.execute(`UPDATE payment_sessions SET expires_at = ? WHERE id = ?`, [expiringSoon.toISOString(), sessionAId]);
 
-    // 2. Session B starts on UPI and enters the queue behind Session A
     const payB = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -119,7 +115,6 @@ describe('COD Parallel Timer & UPI Queue Decoupling Suite', () => {
     assert.equal(payB.body.queuePosition, 1);
     const sessionBId = payB.body.paymentId;
 
-    // 3. Customer A switches payment mode from UPI to COD via /select-method
     const switchRes = await request(`/api/v1/checkout/${sessionAId}/select-method`, {
       method: 'POST',
       body: { method: 'COD' }
@@ -128,37 +123,30 @@ describe('COD Parallel Timer & UPI Queue Decoupling Suite', () => {
     assert.equal(switchRes.body.success, true);
     assert.equal(switchRes.body.method, 'COD');
     assert.equal(switchRes.body.status, PaymentStatus.ACTIVE);
-    // Parallel timer must be ~300 seconds (5 minutes), NOT the old 30 seconds!
     assert.ok(switchRes.body.timeRemainingSeconds >= 295 && switchRes.body.timeRemainingSeconds <= 300);
 
-    // 4. Invariant: Session A must be completely decoupled from the UPI receiving account slot
     const stateA = await request(`/api/v1/checkout/${sessionAId}/state`);
     assert.equal(stateA.body.method, 'COD');
     assert.equal(stateA.body.queuePosition, 0);
 
-    // In DB, Session A receiving_account_id must be NULL
     const rowA = testDb.queryOne(`SELECT * FROM payment_sessions WHERE id = ?`, [sessionAId]);
     assert.equal(rowA.receiving_account_id, null);
     assert.equal(rowA.method, 'COD');
 
-    // 5. Invariant: Session B must be immediately promoted to ACTIVE in the UPI slot
     const stateB = await request(`/api/v1/checkout/${sessionBId}/state`);
     assert.equal(stateB.body.status, PaymentStatus.ACTIVE);
     assert.equal(stateB.body.queuePosition, 0);
 
-    // 6. Invariant: Admin queue now shows Session B occupying the active UPI concurrency slot
     const adminQueue = await request('/api/v1/admin/queue');
     assert.equal(adminQueue.status, 200);
     assert.ok(adminQueue.body.currentSlot);
     assert.equal(adminQueue.body.currentSlot.id, sessionBId);
     assert.equal(adminQueue.body.currentSlot.orderId, 'ORD-UPI-QUEUE-2');
 
-    // Clean up
     await request(`/api/v1/checkout/${sessionBId}/cancel`, { method: 'POST' });
   });
 
   test('COD session expires after parallel 5-minute window without touching UPI queue', async () => {
-    // 1. Create COD session
     const payCod = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -172,7 +160,6 @@ describe('COD Parallel Timer & UPI Queue Decoupling Suite', () => {
     assert.equal(payCod.status, 201);
     const codSessionId = payCod.body.paymentId;
 
-    // Explicitly select COD to ensure parallel timer is armed
     const switchRes = await request(`/api/v1/checkout/${codSessionId}/select-method`, {
       method: 'POST',
       body: { method: 'COD' }
@@ -180,7 +167,6 @@ describe('COD Parallel Timer & UPI Queue Decoupling Suite', () => {
     assert.equal(switchRes.status, 200);
     assert.equal(switchRes.body.timeRemainingSeconds, 300);
 
-    // Fast-forward / trigger expiration
     testDb.execute(`UPDATE payment_sessions SET expires_at = ? WHERE id = ? AND expires_at IS NOT NULL`, [new Date(Date.now() - 1000).toISOString(), codSessionId]);
     const expireRes = await request(`/api/v1/checkout/${codSessionId}/expire`, {
       method: 'POST'
@@ -188,7 +174,6 @@ describe('COD Parallel Timer & UPI Queue Decoupling Suite', () => {
     assert.equal(expireRes.status, 200);
     assert.equal(expireRes.body.status, PaymentStatus.EXPIRED);
 
-    // Verify session in DB is EXPIRED
     const row = testDb.queryOne(`SELECT * FROM payment_sessions WHERE id = ?`, [codSessionId]);
     assert.equal(row.status, PaymentStatus.EXPIRED);
     assert.equal(row.receiving_account_id, null);

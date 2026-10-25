@@ -2,9 +2,6 @@ import crypto from 'node:crypto';
 import { TicketStatus, SenderType } from '@youpi/common';
 
 export class SupportTicketRepository {
-  /**
-   * @param {import('../database.js').Database} db
-   */
   constructor(db) {
     this.db = db;
   }
@@ -90,7 +87,6 @@ export class SupportTicketRepository {
       now
     ]);
 
-    // Update ticket updated_at
     this.db.execute(
       'UPDATE support_tickets SET updated_at = ? WHERE id = ?',
       [now, data.ticketId]

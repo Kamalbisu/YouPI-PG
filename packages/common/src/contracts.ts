@@ -1,9 +1,8 @@
 import { PaymentStatus, PublicPaymentOutcome, PaymentMethod, ObserverSource, TicketStatus, SenderType } from './enums.js';
 
-// --- Merchant API Contracts ---
 export interface CreatePaymentRequest {
   orderId: string;
-  amount: string | number; // e.g. "200.00" or 200
+  amount: string | number;
   currency?: string;
   returnUrl?: string;
   method?: PaymentMethod;
@@ -35,7 +34,6 @@ export interface QueryPaymentResponse {
   metadata?: Record<string, unknown>;
 }
 
-// --- Checkout Portal Contracts ---
 export interface CheckoutStateResponse {
   paymentId: string;
   orderId: string;
@@ -58,7 +56,6 @@ export interface CheckoutStateResponse {
   };
 }
 
-// --- Webhook Payload Contract ---
 export interface WebhookEventPayload {
   event: PublicPaymentOutcome;
   paymentId: string;
@@ -71,7 +68,6 @@ export interface WebhookEventPayload {
   metadata?: Record<string, unknown>;
 }
 
-// --- Observer Payload Contracts ---
 export interface AndroidObservationPayload {
   deviceId: string;
   source: ObserverSource.ANDROID_OBSERVER;
@@ -90,7 +86,6 @@ export interface AndroidHeartbeatPayload {
   appVersion?: string;
 }
 
-// --- Customer & Support Contracts ---
 export interface CustomerProfile {
   id: string;
   name: string;
@@ -125,26 +120,17 @@ export interface CustomerSessionDto {
   createdAt: string;
 }
 
-/**
- * Normalizes an email address to trimmed lowercase.
- */
 export function normalizeEmail(email: string | null | undefined): string {
   if (!email || typeof email !== 'string') return '';
   return email.trim().toLowerCase();
 }
 
-/**
- * Validates email format with standard requirements.
- */
 export function isValidEmail(email: string | null | undefined): boolean {
   const norm = normalizeEmail(email);
   if (!norm) return false;
   return /^[^\s@]+@[^\s@]+\.[a-zA-Z]{2,}$/.test(norm);
 }
 
-/**
- * Normalizes a mobile number to canonical 10 digits (stripping prefixes and country codes).
- */
 export function normalizeMobile(mobile: string | null | undefined): string {
   if (!mobile) return '';
   const cleaned = String(mobile).replace(/\D/g, '');
@@ -154,17 +140,11 @@ export function normalizeMobile(mobile: string | null | undefined): string {
   return cleaned;
 }
 
-/**
- * Validates canonical Indian 10-digit mobile number format.
- */
 export function isValidMobile(mobile: string | null | undefined): boolean {
   const norm = normalizeMobile(mobile);
   return /^[6-9]\d{9}$/.test(norm);
 }
 
-/**
- * Validates password strength (minimum 6 characters).
- */
 export function isValidPassword(password: string | null | undefined): boolean {
   return typeof password === 'string' && password.length >= 6;
 }

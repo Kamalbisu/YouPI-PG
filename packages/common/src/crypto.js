@@ -1,16 +1,9 @@
 import crypto from 'node:crypto';
 
 const ALGORITHM = 'aes-256-gcm';
-const IV_LENGTH = 12; // 96-bit IV recommended for GCM
-const AUTH_TAG_LENGTH = 16; // 128-bit auth tag
+const IV_LENGTH = 12;
+const AUTH_TAG_LENGTH = 16;
 
-/**
- * Encrypts plaintext string using AES-256-GCM.
- * Output format: iv_hex:authTag_hex:cipher_hex
- * @param {string} plaintext
- * @param {string} masterKeyHex
- * @returns {string}
- */
 export function encrypt(plaintext, masterKeyHex) {
   const key = Buffer.from(masterKeyHex, 'hex');
   if (key.length !== 32) {
@@ -30,12 +23,6 @@ export function encrypt(plaintext, masterKeyHex) {
   return `${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted.toString('hex')}`;
 }
 
-/**
- * Decrypts an AES-256-GCM ciphertext payload.
- * @param {string} encryptedPayload
- * @param {string} masterKeyHex
- * @returns {string}
- */
 export function decrypt(encryptedPayload, masterKeyHex) {
   const key = Buffer.from(masterKeyHex, 'hex');
   if (key.length !== 32) {
@@ -62,23 +49,10 @@ export function decrypt(encryptedPayload, masterKeyHex) {
   return decrypted.toString('utf8');
 }
 
-/**
- * Generates an HMAC-SHA256 signature for webhooks and device authentication.
- * @param {string} data
- * @param {string} secret
- * @returns {string}
- */
 export function generateHmac(data, secret) {
   return crypto.createHmac('sha256', secret).update(data, 'utf8').digest('hex');
 }
 
-/**
- * Timing-safe HMAC signature verification.
- * @param {string} data
- * @param {string} secret
- * @param {string} expectedSignature
- * @returns {boolean}
- */
 export function verifyHmac(data, secret, expectedSignature) {
   const actualSignature = generateHmac(data, secret);
   const actualBuffer = Buffer.from(actualSignature, 'hex');
@@ -91,21 +65,10 @@ export function verifyHmac(data, secret, expectedSignature) {
   return crypto.timingSafeEqual(actualBuffer, expectedBuffer);
 }
 
-/**
- * Generates a cryptographically secure random hex string.
- * @param {number} [bytes=32]
- * @returns {string}
- */
 export function generateRandomToken(bytes = 32) {
   return crypto.randomBytes(bytes).toString('hex');
 }
 
-/**
- * Hashes a password using PBKDF2 with SHA-512 and salt.
- * Format: iterations:salt_hex:hash_hex
- * @param {string} password
- * @returns {string}
- */
 export function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString('hex');
   const iterations = 100000;
@@ -113,12 +76,6 @@ export function hashPassword(password) {
   return `${iterations}:${salt}:${hash}`;
 }
 
-/**
- * Verifies a password against a stored PBKDF2 hash.
- * @param {string} password
- * @param {string} storedHash
- * @returns {boolean}
- */
 export function verifyPassword(password, storedHash) {
   const parts = storedHash.split(':');
   if (parts.length !== 3) return false;

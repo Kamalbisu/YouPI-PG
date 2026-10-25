@@ -1,4 +1,3 @@
-// --- STATE MANAGEMENT ---
 let currentAmount = 1.00;
 const photos = [
   {
@@ -34,7 +33,6 @@ const photos = [
 ];
 let currentPhotoIndex = 0;
 
-// --- GALLERY CONTROLLER ---
 function switchGalleryPhoto(index, url, title, desc) {
   currentPhotoIndex = index;
   const mainImg = document.getElementById('mainGalleryImg');
@@ -47,7 +45,6 @@ function switchGalleryPhoto(index, url, title, desc) {
   }
   if (badgeText) badgeText.textContent = title;
 
-  // Update thumbnails active state
   document.querySelectorAll('.thumb-card').forEach((el, i) => {
     el.classList.toggle('active', i === index);
   });
@@ -69,7 +66,6 @@ function closeLightbox() {
   }
 }
 
-// --- AMOUNT MODIFIER & BUY BOX ---
 function selectAmount(amt, chipEl) {
   currentAmount = Number(amt);
   updateAmountUI();
@@ -86,7 +82,6 @@ function handleCustomAmountInput(val) {
     currentAmount = num;
     updateAmountUI();
   }
-  // Unset active chips if not exact match
   document.querySelectorAll('.chip-btn').forEach(b => {
     const chipVal = parseFloat(b.innerText.replace(/[^0-9.]/g, ''));
     b.classList.toggle('active', chipVal === currentAmount);
@@ -101,7 +96,6 @@ function updateAmountUI() {
   if (btnDisp) btnDisp.textContent = formatted;
 }
 
-// --- PURCHASE INITIATION (Using Official Universal YouPI Integration) ---
 async function startGatewayPurchase() {
   const btn = document.getElementById('btnInitiateCheckout');
   const oldHtml = btn.innerHTML;
@@ -113,7 +107,6 @@ async function startGatewayPurchase() {
     btn.setAttribute('data-amount', currentAmount.toFixed(2));
     btn.setAttribute('data-order-id', orderId);
 
-    // 1. Create order on store backend via YoupiPaymentClient
     const res = await fetch('/api/checkout', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -132,7 +125,6 @@ async function startGatewayPurchase() {
       return;
     }
 
-    // 2. Launch checkout modal using official Youpi.pay() SDK
     window.Youpi.pay({
       checkoutUrl: data.checkoutUrl,
       order_id: data.orderId,
@@ -162,7 +154,6 @@ async function startGatewayPurchase() {
   }
 }
 
-// --- OFFICIAL BROWSER PAYMENT EVENT LISTENERS ---
 window.addEventListener('youpi:payment:success', function(e) {
   console.log('[YOUPI PG Event] youpi:payment:success', e.detail);
   const res = e.detail;
@@ -216,7 +207,6 @@ function closeCelebrationModal() {
   if (modal) modal.classList.remove('active');
 }
 
-// Keydown ESC to close modals
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     closeLightbox();
@@ -224,7 +214,6 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
-// Initialize UI on load
 document.addEventListener('DOMContentLoaded', () => {
   updateAmountUI();
 });

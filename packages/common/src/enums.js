@@ -1,6 +1,3 @@
-/**
- * Internal high-resolution payment session lifecycle states.
- */
 export const PaymentStatus = Object.freeze({
   INITIATED: 'INITIATED',
   QUEUED: 'QUEUED',
@@ -12,9 +9,6 @@ export const PaymentStatus = Object.freeze({
   CANCELLED: 'CANCELLED'
 });
 
-/**
- * Public-facing payment outcomes consumed by external merchants.
- */
 export const PublicPaymentOutcome = Object.freeze({
   SUCCESS: 'SUCCESS',
   FAILED: 'FAILED',
@@ -22,9 +16,6 @@ export const PublicPaymentOutcome = Object.freeze({
   CANCELLED: 'CANCELLED'
 });
 
-/**
- * Supported payment modalities.
- */
 export const PaymentMethod = Object.freeze({
   UPI: 'UPI',
   COD: 'COD',
@@ -32,18 +23,11 @@ export const PaymentMethod = Object.freeze({
   CARD_COUNTER: 'CARD_COUNTER'
 });
 
-/**
- * Merchant gateway selling modes.
- */
 export const SellingMode = Object.freeze({
   ONLINE: 'ONLINE',
   OFFLINE: 'OFFLINE'
 });
 
-/**
- * Observation channel sources feeding the payment detection engine (2-Layer: SMS + Gmail).
- * Android observer layer is completely removed.
- */
 export const ObserverSource = Object.freeze({
   GMAIL: 'GMAIL',
   GOOGLE_MESSAGES: 'GOOGLE_MESSAGES',
@@ -52,9 +36,6 @@ export const ObserverSource = Object.freeze({
   MANUAL_COUNTER: 'MANUAL_COUNTER'
 });
 
-/**
- * Attribution status for raw observations.
- */
 export const ObservationAttributionStatus = Object.freeze({
   UNATTRIBUTED: 'UNATTRIBUTED',
   ATTRIBUTED: 'ATTRIBUTED',
@@ -62,9 +43,6 @@ export const ObservationAttributionStatus = Object.freeze({
   DUPLICATE_IGNORED: 'DUPLICATE_IGNORED'
 });
 
-/**
- * Support ticket lifecycle states.
- */
 export const TicketStatus = Object.freeze({
   OPEN: 'OPEN',
   IN_PROGRESS: 'IN_PROGRESS',
@@ -72,17 +50,11 @@ export const TicketStatus = Object.freeze({
   CLOSED: 'CLOSED'
 });
 
-/**
- * Live chat message sender identity type.
- */
 export const SenderType = Object.freeze({
   CUSTOMER: 'CUSTOMER',
   ADMIN: 'ADMIN'
 });
 
-/**
- * Audit log actor classifications.
- */
 export const AuditActorType = Object.freeze({
   SYSTEM: 'SYSTEM',
   CUSTOMER: 'CUSTOMER',

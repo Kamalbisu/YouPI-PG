@@ -14,7 +14,6 @@ describe('Control Center Supervisor Integration Tests', () => {
 
   before(async () => {
     pm = new ProcessManager();
-    // Start on test port 8190
     ccInstance = await startControlCenter(8190, { processManager: pm });
     baseUrl = `http://localhost:${ccInstance.port}`;
   });
@@ -115,7 +114,6 @@ describe('Control Center Supervisor Integration Tests', () => {
     assert.equal(res.status, 200);
     assert.equal(res.body.success, true);
 
-    // Verify Control Center is still alive and responsive!
     const healthCheck = await get('/health');
     assert.equal(healthCheck.status, 200);
     assert.equal(healthCheck.body.status, 'UP');

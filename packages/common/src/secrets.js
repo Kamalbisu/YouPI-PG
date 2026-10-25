@@ -6,23 +6,17 @@ import { fileURLToPath } from 'node:url';
 import { encrypt, decrypt } from './crypto.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// Resolved from this file, not cwd: every service must read the same files.
 const SECRETS_DIR = path.resolve(__dirname, '../../../data/.secrets');
 
 const cache = new Map();
 const warnedPlaceholders = new Set();
 
-/** Template/example values that shipped in .env.example or docs and are therefore publicly known. */
 const KNOWN_PLACEHOLDER_SECRETS = new Set([
   'android_pairing_enrollment_secret_key_32_chars',
   'super_secret_jwt_key_change_in_production_min_32_chars',
   'merchant_webhook_secret_for_wallet_store'
 ]);
 
-/**
- * True when a configured secret is an obvious template value (REPLACE_WITH_..., change_me,
- * a value from .env.example) rather than something an operator generated.
- */
 export function isPlaceholderSecret(value) {
   const v = String(value || '').trim().toLowerCase();
   if (!v) return false;
@@ -30,18 +24,9 @@ export function isPlaceholderSecret(value) {
   return /^(replace[_-]?with|changeme|change[_-]me|your[_-]|<.*>$)/.test(v);
 }
 
-/**
- * Resolves a service secret: explicit env var first, else a random value
- * generated once and persisted under data/.secrets/ (shared by all local services).
- * @param {string} name file-safe secret name
- * @param {string} [envVar] env var that overrides the file
- * @returns {string}
- */
 export function resolveSecret(name, envVar) {
   let fromEnv = envVar ? (process.env[envVar] || '').trim() : '';
   if (fromEnv && isPlaceholderSecret(fromEnv)) {
-    // A copied template value is public knowledge, so it must never act as a secret. Fall
-    // through to the generated per-install secret instead of trusting it.
     if (!warnedPlaceholders.has(envVar)) {
       warnedPlaceholders.add(envVar);
       console.warn(`[secrets] ${envVar} is set to a placeholder/default value and was ignored; using a generated secret instead. Set a real random value to silence this warning.`);
@@ -61,7 +46,6 @@ export function resolveSecret(name, envVar) {
       fs.writeFileSync(file, fresh, { flag: 'wx', mode: 0o600 });
       value = fresh;
     } catch {
-      // Another process created it first: use theirs.
       value = fs.readFileSync(file, 'utf8').trim();
     }
   }
@@ -69,7 +53,6 @@ export function resolveSecret(name, envVar) {
   return value;
 }
 
-/** Constant-time string comparison (length-independent via hashing). */
 export function safeEqual(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string') return false;
   const ha = crypto.createHash('sha256').update(a).digest();
@@ -81,42 +64,20 @@ export const getAdminToken = () => resolveSecret('admin_api_token', 'ADMIN_API_T
 export const getObserverToken = () => resolveSecret('observer_api_token', 'OBSERVER_API_TOKEN');
 export const getCoinStoreWebhookSecret = () => resolveSecret('coin_store_webhook_secret', 'COIN_STORE_WEBHOOK_SECRET');
 
-/**
- * Shared credential proving a request originated from a co-located service (server-side render
- * proxies) rather than a browser. A plain `X-Internal-Render: true` header is attacker-settable,
- * so the header is only honoured together with this secret.
- */
 export const getInternalServiceToken = () => resolveSecret('internal_service_token', 'INTERNAL_SERVICE_TOKEN');
 
-/**
- * Key used to sign device credentials and device challenges.
- *
- * Deliberately separate from the internal service token: that token is transmitted by the
- * checkout portal on every internal render, so sharing a key with it would mean a leaked
- * internal token could be used to mint a valid device credential for any device id.
- */
 export const getDeviceCredentialKey = () => resolveSecret('device_credential_key', 'DEVICE_CREDENTIAL_KEY');
 
-/**
- * Key used to index high-entropy secrets for lookup (session tokens, device tokens).
- * Separate from the internal service token so a leaked internal token cannot be used to
- * compute stored indexes.
- */
 export const getBlindIndexKey = () => resolveSecret('blind_index_key', 'BLIND_INDEX_KEY');
 
-/** True when a socket remoteAddress is loopback (IPv4 or IPv6). */
 function isLoopbackRemoteAddress(remoteAddress) {
-  // Fail closed: an absent or malformed address is NOT loopback. Returning true here would
-  // let any request that hides its peer address satisfy the internal-service check.
   if (!remoteAddress || typeof remoteAddress !== 'string') return false;
   const addr = remoteAddress.trim().toLowerCase();
   if (!addr) return false;
   if (addr === '::1' || addr === '::ffff:127.0.0.1') return true;
-  // 127.0.0.0/8
   return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(addr);
 }
 
-/** True only when the caller proves it is a trusted co-located internal service. */
 export function isInternalServiceRequest(req) {
   if (!isLoopbackRemoteAddress(req?.socket?.remoteAddress)) return false;
   const match = /^Bearer\s+(.+)$/i.exec(req?.headers?.['authorization'] || '');
@@ -124,12 +85,6 @@ export function isInternalServiceRequest(req) {
   return Boolean(presented) && safeEqual(presented, getInternalServiceToken());
 }
 
-/**
- * Mints a server-signed device credential bound to a specific `deviceId`.
- * Format: `devtok_<deviceId>.<nonce>.<issuedAt>.<hmac>`
- * @param {string} deviceId
- * @returns {string}
- */
 export function issueDeviceCredential(deviceId) {
   if (!deviceId || typeof deviceId !== 'string') {
     throw new Error('deviceId is required to issue a device credential');
@@ -143,13 +98,6 @@ export function issueDeviceCredential(deviceId) {
   return `devtok_${deviceId}.${nonce}.${issuedAt}.${mac}`;
 }
 
-/**
- * Verifies in constant time that a presented `deviceToken` is a genuine server-signed
- * credential issued for `deviceId`.
- * @param {string} deviceId
- * @param {string} token
- * @returns {boolean}
- */
 export function verifyDeviceCredential(deviceId, token) {
   if (!deviceId || typeof deviceId !== 'string' || !token || typeof token !== 'string') {
     return false;
@@ -178,12 +126,6 @@ function deviceChallengeMac(deviceId, nonce, expiresAt) {
     .digest('hex');
 }
 
-/**
- * Mints a short-lived, single-use challenge bound to a registered `deviceId` for
- * challenge-response token re-issuance.
- * @param {string} deviceId
- * @returns {string}
- */
 export function createDeviceChallenge(deviceId) {
   if (!deviceId || typeof deviceId !== 'string') {
     throw new Error('deviceId is required to create a device challenge');
@@ -194,12 +136,6 @@ export function createDeviceChallenge(deviceId) {
   return `devchal_${deviceId}.${nonce}.${expiresAt}.${mac}`;
 }
 
-/**
- * Verifies and consumes a single-use device challenge bound to `deviceId`.
- * @param {string} challenge
- * @param {string} deviceId
- * @returns {boolean}
- */
 export function consumeDeviceChallenge(challenge, deviceId) {
   if (typeof challenge !== 'string' || typeof deviceId !== 'string' || !deviceId) return false;
   const prefix = `devchal_${deviceId}.`;
@@ -220,63 +156,37 @@ export function consumeDeviceChallenge(challenge, deviceId) {
   return true;
 }
 
-/** Literal that older builds seeded into databases; must never be trusted. */
 export const LEGACY_DEFAULT_WEBHOOK_SECRET = 'merchant_webhook_secret_for_wallet_store';
 
-/**
- * Master key for encrypting data at rest (merchant webhook secrets, OTPs).
- * Generated once and persisted alongside the other local secrets.
- */
 export const getEncryptionMasterKey = () => {
   const key = resolveSecret('encryption_master_key', 'ENCRYPTION_MASTER_KEY');
-  // Fail at the source with a clear message instead of a short-key crash deep inside encrypt().
   if (!/^[0-9a-fA-F]{64}$/.test(key)) {
     throw new Error('ENCRYPTION_MASTER_KEY must be exactly 64 hex characters (32 bytes). Generate one with: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
   }
   return key;
 };
 
-/** Envelope prefix marking a stored value as AES-256-GCM ciphertext. */
 const ENC_PREFIX = 'enc:v1:';
 
-/** True when a stored value is in the ciphertext envelope. */
 export function isEncryptedValue(value) {
   return typeof value === 'string' && value.startsWith(ENC_PREFIX);
 }
 
-/**
- * Encrypts a value for storage. Values are idempotent: an already-encrypted value is
- * returned unchanged so callers can wrap reads and writes without tracking state.
- */
 export function encryptAtRest(plaintext) {
   if (plaintext === null || plaintext === undefined || plaintext === '') return plaintext;
   if (isEncryptedValue(plaintext)) return plaintext;
   return ENC_PREFIX + encrypt(String(plaintext), getEncryptionMasterKey());
 }
 
-/**
- * Decrypts a stored value, transparently passing through values written before encryption
- * existed (plaintext) so existing databases keep working and get re-encrypted on next write.
- */
 export function decryptAtRest(stored) {
   if (!isEncryptedValue(stored)) return stored;
   try {
     return decrypt(stored.slice(ENC_PREFIX.length), getEncryptionMasterKey());
   } catch {
-    // A value encrypted under a different/lost key must not silently become plaintext.
     return null;
   }
 }
 
-/**
- * Keyed digest for high-entropy secrets that are only ever looked up, never read back
- * (session tokens, device tokens). Unlike a plain hash this is not brute-forceable from a
- * database dump, because the key lives outside the database.
- *
- * The key is dedicated to this purpose rather than shared with the internal service token:
- * that token travels in a request header on every internal render, so a shared key would
- * leak the indexing secret wherever those headers are logged.
- */
 export function blindIndex(value, namespace = 'token') {
   if (value === null || value === undefined || value === '') return null;
   const digest = crypto.createHmac('sha256', getBlindIndexKey())
@@ -285,24 +195,16 @@ export function blindIndex(value, namespace = 'token') {
   return `${namespace}_v1_${digest}`;
 }
 
-/**
- * Compares a presented secret against a stored blind index in constant time.
- *
- * Rows written before the key was separated were indexed with the internal service token,
- * so that key is still accepted for existing rows; the row is re-indexed on first use.
- */
 export function blindIndexMatches(value, storedIndex, namespace = 'token') {
   if (!value || !storedIndex) return false;
   const candidate = blindIndex(value, namespace);
   if (candidate && safeEqual(candidate, storedIndex)) return true;
-  // Legacy index produced with the previous key.
   const legacy = crypto.createHmac('sha256', getInternalServiceToken())
     .update(`${namespace}:${value}`)
     .digest('hex');
   return safeEqual(`${namespace}_v1_${legacy}`, storedIndex);
 }
 
-/** True when the request's `Authorization: Bearer` value matches any of the given tokens. */
 export function hasBearer(req, ...tokens) {
   const match = /^Bearer\s+(.+)$/i.exec(req?.headers?.['authorization'] || '');
   if (!match) return false;
@@ -318,7 +220,6 @@ function hexPairToIPv4(hi, lo) {
   return `${h >> 8}.${h & 255}.${l >> 8}.${l & 255}`;
 }
 
-/** Returns the embedded IPv4 address of a mapped/compatible/NAT64 IPv6 literal, or null. */
 function embeddedIPv4(lower) {
   const dotted = lower.match(/^(?:::ffff:|::|64:ff9b::)(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
   if (dotted) return dotted[1];
@@ -329,23 +230,18 @@ function embeddedIPv4(lower) {
   return null;
 }
 
-/** True for loopback, RFC1918, link-local, CGNAT, multicast and reserved IPv4/IPv6 ranges. */
 function isPrivateAddress(hostname) {
   const lower = hostname.toLowerCase().replace(/^\[|\]$/g, '');
   if (lower === '::1' || lower === '::' || lower === '0.0.0.0') return true;
 
-  // IPv4-mapped (::ffff:a.b.c.d or ::ffff:xxxx:xxxx), IPv4-compatible and NAT64 (64:ff9b::/96)
-  // forms embed an IPv4 address: judge that embedded address instead.
   const embedded = embeddedIPv4(lower);
   if (embedded) return isPrivateAddress(embedded);
-  // 6to4 (2002::/16) carries an IPv4 address in bits 16-48.
   const sixToFour = lower.match(/^2002:([0-9a-f]{1,4}):([0-9a-f]{1,4})(?::|$)/);
   if (sixToFour) return isPrivateAddress(hexPairToIPv4(sixToFour[1], sixToFour[2]));
   if (lower.endsWith('.local') || lower.endsWith('.internal') || lower.endsWith('.localhost')) return true;
 
   const v4 = lower.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
   if (!v4) {
-    // Unique-local (fc00::/7) and link-local (fe80::/10) IPv6.
     return /^f[cd][0-9a-f]{2}:/.test(lower) || /^fe[89ab][0-9a-f]:/.test(lower);
   }
   const [a, b] = [Number(v4[1]), Number(v4[2])];
@@ -358,23 +254,10 @@ function isPrivateAddress(hostname) {
   return false;
 }
 
-/**
- * Self-hosted merchants legitimately deliver webhooks to a host on their own LAN or loopback,
- * so those are permitted only when explicitly opted in. Without the opt-in, private, loopback
- * and link-local targets (including the cloud metadata endpoint) are refused.
- */
 function privateWebhooksAllowed() {
   return process.env.YOUPI_ALLOW_PRIVATE_WEBHOOKS === 'true';
 }
 
-/**
- * Validates an operator-supplied outbound webhook URL.
- * Rejects non-HTTP(S) schemes, embedded credentials and — unless explicitly opted in —
- * loopback/private/link-local hosts, so the gateway cannot be pointed at cloud metadata
- * endpoints or its own internal admin/control-plane services (SSRF).
- * @param {string} value
- * @returns {{ valid: boolean, error?: string, url?: URL }}
- */
 export function validateOutboundWebhookUrl(value) {
   const raw = typeof value === 'string' ? value.trim() : '';
   if (!raw) return { valid: false, error: 'Webhook URL is required.' };
@@ -403,15 +286,6 @@ export function validateOutboundWebhookUrl(value) {
   return { valid: true, url };
 }
 
-/**
- * Resolves the webhook hostname and refuses it when ANY resolved address is private, so a public
- * name that points at an internal address is rejected. Literal IPs need no lookup. This narrows but
- * does not eliminate DNS rebinding (the later fetch resolves again); closing that fully needs the
- * request to connect to the checked address.
- * @param {URL} url
- * @param {{ lookup?: Function }} [options]
- * @returns {Promise<{ valid: boolean, error?: string }>}
- */
 export async function assertWebhookHostResolvesPublic(url, options = {}) {
   if (privateWebhooksAllowed()) return { valid: true };
   const hostname = (url.hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
@@ -424,7 +298,6 @@ export async function assertWebhookHostResolvesPublic(url, options = {}) {
       return { valid: false, error: 'Webhook hostname resolves to a loopback or private network address.' };
     }
   } catch {
-    // An unresolvable host cannot be reached either; delivery will fail on its own.
   }
   return { valid: true };
 }
@@ -436,16 +309,11 @@ function oauthStateMac(payload) {
   return crypto.createHmac('sha256', getObserverToken()).update(`oauth-state:${payload}`).digest('hex');
 }
 
-/**
- * Creates a signed, expiring OAuth `state` value. Mint it only from an authenticated admin route:
- * the callback accepts nothing that was not minted there, which blocks login-CSRF account linking.
- */
 export function createOAuthState() {
   const payload = `${crypto.randomBytes(16).toString('hex')}.${Date.now() + OAUTH_STATE_TTL_MS}`;
   return `${payload}.${oauthStateMac(payload)}`;
 }
 
-/** Verifies signature and expiry, and accepts each state only once (per process). */
 export function consumeOAuthState(state) {
   if (typeof state !== 'string') return false;
   const parts = state.split('.');

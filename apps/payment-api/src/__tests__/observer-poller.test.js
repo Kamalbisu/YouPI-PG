@@ -47,7 +47,6 @@ describe('ObserverPollerService Hardening & Concurrency Protection', () => {
       autoStart: false
     });
 
-    // Run poll cycle when DB is completely empty of active sessions
     await pollerService.pollCycle();
 
     assert.equal(pollerService.isIdle, true, 'Poller must be idle when 0 active sessions exist');
@@ -65,26 +64,22 @@ describe('ObserverPollerService Hardening & Concurrency Protection', () => {
       attributionEngine,
       eventEmitter,
       pollIntervalMs: 1000,
-      minSweepCooldownMs: 1500, // 1.5s cooldown
+      minSweepCooldownMs: 1500,
       autoStart: false
     });
 
-    // First sweep attempt: should dispatch (returns a promise)
     const sweep1Promise = pollerService.sweepSmsObserver();
     assert.equal(pollerService.isSmsSweepInFlight, true, 'In-flight flag must be true during execution');
 
-    // Immediate second sweep while in-flight: MUST BE DROPPED
     const sweep2 = await pollerService.sweepSmsObserver();
     assert.equal(sweep2, false, 'Redundant in-flight sweep must return false and be dropped');
 
     await sweep1Promise;
     assert.equal(pollerService.isSmsSweepInFlight, false, 'In-flight flag must reset after completion');
 
-    // Third sweep immediately after, within the 1.5s cooldown window: MUST BE DROPPED
     const sweep3 = await pollerService.sweepSmsObserver();
     assert.equal(sweep3, false, 'Sweep within 1.5s cooldown window must be rejected');
 
-    // Same behavior for Gmail observer
     const gmail1Promise = pollerService.sweepGmailObserver();
     assert.equal(pollerService.isGmailSweepInFlight, true);
     const gmail2 = await pollerService.sweepGmailObserver();
@@ -106,7 +101,6 @@ describe('ObserverPollerService Hardening & Concurrency Protection', () => {
       autoStart: false
     });
 
-    // Mock active sessions sharing the same receiving account ID
     const activeSessions = [
       { id: 'sess-1', receiving_account_id: 'acc-duplicate-1', amount_paise: 50000, status: 'PROCESSING' },
       { id: 'sess-2', receiving_account_id: 'acc-duplicate-1', amount_paise: 50000, status: 'PROCESSING' },
@@ -122,7 +116,6 @@ describe('ObserverPollerService Hardening & Concurrency Protection', () => {
 
     await pollerService.processPendingAttributions(activeSessions);
 
-    // Invariant: Account IDs are deduplicated so findUnattributed is called exactly ONCE per account!
     assert.equal(queryCount, 1, 'findUnattributed should only be queried once per distinct receiving account');
     assert.equal(pollerService.isAttributionInProgress, false);
   });
@@ -134,7 +127,7 @@ describe('ObserverPollerService Hardening & Concurrency Protection', () => {
       obsRepo,
       attributionEngine,
       eventEmitter,
-      pollIntervalMs: 60000, // 60s slow timer
+      pollIntervalMs: 60000,
       minSweepCooldownMs: 2000,
       autoStart: true
     });
@@ -144,7 +137,6 @@ describe('ObserverPollerService Hardening & Concurrency Protection', () => {
       expeditedCalled = true;
     };
 
-    // Customer clicks "I have paid" -> SESSION.PROCESSING event emitted
     eventEmitter.emit('SESSION.PROCESSING', {
       sessionId: 'sess-active-1',
       receivingAccountId: 'acc-1'
@@ -153,7 +145,6 @@ describe('ObserverPollerService Hardening & Concurrency Protection', () => {
     assert.equal(expeditedCalled, true, 'SESSION.PROCESSING must wake up poller immediately');
 
     expeditedCalled = false;
-    // New session activated -> SESSION.ACTIVATED event emitted
     eventEmitter.emit('SESSION.ACTIVATED', {
       sessionId: 'sess-active-2',
       receivingAccountId: 'acc-1'

@@ -16,7 +16,6 @@ async function backupAndResetProduction() {
     throw new Error(`Database file not found at ${dbPath}`);
   }
 
-  // 1. CREATE BACKUP FIRST
   const backupDir = path.resolve('data/backups');
   if (!fs.existsSync(backupDir)) {
     fs.mkdirSync(backupDir, { recursive: true });
@@ -31,7 +30,6 @@ async function backupAndResetProduction() {
   console.log('Backup path:', backupPath);
   console.log(`Backup size: ${backupStat.size} bytes`);
 
-  // 2. AUDIT PRE-RESET STATE
   const db = new Database({ dbPath });
   const preMerchants = db.query('SELECT id, business_name, slug, contact_email, webhook_url, branding FROM merchants');
   const preAccounts = db.query('SELECT id, upi_id, payee_name, is_active FROM payment_receiving_accounts');
@@ -44,23 +42,18 @@ async function backupAndResetProduction() {
   console.log(`Payment sessions: ${preSessions[0]?.c || 0}`);
   console.log(`Old customers: ${preCustomers[0]?.c || 0}`);
 
-  // 3. EXECUTE CONTROLLED IDENTITY RESET
   console.log('\n--- EXECUTING SAFE RESIDUE RESET ---');
-  // Safe cleanup of obsolete customer references
   try { db.execute('UPDATE payment_sessions SET customer_id = NULL WHERE customer_id IS NOT NULL;'); } catch {}
   try { db.execute('DELETE FROM ticket_messages;'); } catch {}
   try { db.execute('DELETE FROM support_tickets;'); } catch {}
   try { db.execute('DROP TABLE IF EXISTS customer_sessions;'); } catch {}
   try { db.execute('DROP TABLE IF EXISTS customers;'); } catch {}
 
-  // Run migrations to apply new canonical schema
   runMigrations(db);
 
-  // Explicitly ensure customer count = 0
   db.execute('DELETE FROM customer_sessions;');
   db.execute('DELETE FROM customers;');
 
-  // 4. POST-RESET VERIFICATION
   const postMerchants = db.query('SELECT id, business_name, slug, contact_email, webhook_url, branding FROM merchants');
   const postAccounts = db.query('SELECT id, upi_id, payee_name, is_active FROM payment_receiving_accounts');
   const postSessions = db.query('SELECT count(*) as c FROM payment_sessions');
@@ -87,7 +80,6 @@ async function backupAndResetProduction() {
     throw new Error('FATAL: Customer sessions count is not 0 after identity reset!');
   }
 
-  // Verify merchant branding and accounts remain intact
   const activeAccount = db.queryOne('SELECT * FROM payment_receiving_accounts WHERE is_active = 1');
   console.log(`Active Receiving VPA: ${activeAccount.upi_id} (${activeAccount.payee_name})`);
 

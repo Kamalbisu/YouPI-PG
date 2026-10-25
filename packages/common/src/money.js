@@ -1,15 +1,3 @@
-/**
- * Financial utilities enforcing integer minor units (paise).
- * Floating-point representation is strictly forbidden in financial calculations.
- * 1 INR = 100 paise.
- */
-
-/**
- * Converts a rupee amount (string or number) into integer paise (bigint).
- * Throws an error if invalid, negative, zero, or exceeds 2 decimal places.
- * @param {string | number} rupees
- * @returns {bigint}
- */
 export function toPaise(rupees) {
   if (typeof rupees === 'number') {
     if (!Number.isFinite(rupees) || Number.isNaN(rupees)) {
@@ -36,11 +24,6 @@ export function toPaise(rupees) {
   return totalPaise;
 }
 
-/**
- * Formats integer paise into a standard decimal string ("200.00").
- * @param {bigint | number} paise
- * @returns {string}
- */
 export function toRupeesString(paise) {
   const p = typeof paise === 'number' ? BigInt(Math.floor(paise)) : BigInt(paise);
   if (p < 0n) {
@@ -52,11 +35,6 @@ export function toRupeesString(paise) {
   return `${whole}.${fraction.toString().padStart(2, '0')}`;
 }
 
-/**
- * Formats integer paise into a localized INR display string ("₹200.00").
- * @param {bigint | number} paise
- * @returns {string}
- */
 export function formatINR(paise) {
   return `₹${toRupeesString(paise)}`;
 }

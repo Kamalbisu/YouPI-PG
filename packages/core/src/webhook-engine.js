@@ -3,25 +3,12 @@ import { generateHmac, toRupeesString, validateOutboundWebhookUrl, assertWebhook
 import { isTerminalStatus, toPublicOutcome } from './state-machine.js';
 
 export class WebhookEngine {
-  /**
-   * @param {{
-   *   db: import('@youpi/db').Database,
-   *   merchantRepo: import('@youpi/db').MerchantRepository,
-   *   maxRetries?: number
-   * }} options
-   */
   constructor(options) {
     this.db = options.db;
     this.merchantRepo = options.merchantRepo;
     this.maxRetries = options.maxRetries || 5;
   }
 
-  /**
-   * Formats and dispatches a signed webhook for a payment event.
-   * @param {string} event E.g. 'SUCCESS', 'FAILED', 'EXPIRED', 'CANCELLED'
-   * @param {any} session The payment session entity
-   * @returns {Promise<{ delivered: boolean, deliveryId: string, status?: number, error?: string }>}
-   */
   async dispatch(event, session) {
     const merchant = this.merchantRepo.findById(session.merchantId);
     if (!merchant || !merchant.webhookUrl) {
@@ -31,7 +18,6 @@ export class WebhookEngine {
     const publicOutcome = isTerminalStatus(event) ? toPublicOutcome(event) : event;
     const nowIso = new Date().toISOString();
 
-    // 1. Up-front secret validation: if webhookSecret is missing, persist a failed row so it is auditable
     if (!merchant.webhookSecret) {
       const deliveryId = crypto.randomUUID();
       this.db.execute(`
@@ -51,10 +37,8 @@ export class WebhookEngine {
       return { delivered: false, deliveryId, status: 500, error: 'Merchant webhookSecret is not configured.' };
     }
 
-    // 2. Re-validate at dispatch time (SSRF guard)
     let endpointCheck = validateOutboundWebhookUrl(merchant.webhookUrl);
     if (endpointCheck.valid) {
-      // Also refuse public names that resolve to private addresses.
       const resolved = await assertWebhookHostResolvesPublic(endpointCheck.url);
       if (!resolved.valid) endpointCheck = resolved;
     }
@@ -78,10 +62,6 @@ export class WebhookEngine {
       return { delivered: false, deliveryId, status: 400, error: `Webhook delivery blocked: ${endpointCheck.error}` };
     }
 
-    // 3. Resolve UTR / bank reference number if attributed
-    // The bank reference (UTR/RRN) lives on the attributed observation, not on the
-    // session row. Merchants need it to reconcile a webhook against their bank
-    // statement, and it is part of the documented webhook contract.
     let utr = session.utr || session.bankReferenceNumber || session.bank_reference_number || '';
     if (!utr && session.attributedObservationId) {
       try {
@@ -137,9 +117,8 @@ export class WebhookEngine {
         method: 'POST',
         headers,
         body: payloadString,
-        // Never follow redirects: a public URL could otherwise 302 into internal network (SSRF)
         redirect: 'manual',
-        signal: AbortSignal.timeout(10000) // 10s timeout
+        signal: AbortSignal.timeout(10000)
       });
 
       responseStatus = res.status;
@@ -149,10 +128,9 @@ export class WebhookEngine {
       responseBody = err.message || 'Network timeout';
     }
 
-    // Persist delivery record in webhook_deliveries
     const nextRetryAt = isSuccessful
       ? null
-      : new Date(Date.now() + 5000).toISOString(); // initial 5s backoff
+      : new Date(Date.now() + 5000).toISOString();
 
     this.db.execute(`
       INSERT INTO webhook_deliveries (
@@ -181,14 +159,9 @@ export class WebhookEngine {
     };
   }
 
-  /**
-   * Retries overdue pending webhook deliveries with atomic claim & exponential backoff.
-   * Backoff strategy: 5s, 30s, 2m, 10m, 1h
-   */
   async retryPending() {
     const nowIso = new Date().toISOString();
 
-    // Invariant: Atomically claim overdue pending deliveries in a transaction to prevent duplicate dispatches
     const claimed = this.db.transaction(() => {
       const pending = this.db.query(`
         SELECT id, merchant_id, payment_id, event_type, payload, endpoint_url, attempt_count
@@ -199,7 +172,6 @@ export class WebhookEngine {
 
       if (pending.length === 0) return [];
 
-      // Lock claimed items by setting next_retry_at 60 seconds into the future
       const claimLockIso = new Date(Date.now() + 60000).toISOString();
       for (const item of pending) {
         this.db.execute(`
@@ -228,7 +200,6 @@ export class WebhookEngine {
         continue;
       }
 
-      // Re-validate the stored endpoint before every retry (SSRF guard).
       let retryEndpoint = validateOutboundWebhookUrl(item.endpoint_url);
       if (retryEndpoint.valid) {
         const resolved = await assertWebhookHostResolvesPublic(retryEndpoint.url);
@@ -243,10 +214,6 @@ export class WebhookEngine {
         continue;
       }
 
-      // The retry resends the ORIGINAL body byte for byte, so the headers must describe
-      // that same body. Recomputing a fresh timestamp here would make the header disagree
-      // with the timestamp embedded in the payload, and the merchant's verification (which
-      // cross-checks the two) would reject every retry.
       let storedTimestamp = null;
       let storedDeliveryId = item.id;
       try {
@@ -289,7 +256,7 @@ export class WebhookEngine {
         respBody = err.message;
       }
 
-      const nextAttempt = item.attempt_count + 1; // item.attempt_count was already incremented during claim
+      const nextAttempt = item.attempt_count + 1;
       const nextRetryDelay = backoffs[Math.min(nextAttempt - 1, backoffs.length - 1)];
       const nextRetryAt = isSuccess || nextAttempt >= this.maxRetries
         ? null

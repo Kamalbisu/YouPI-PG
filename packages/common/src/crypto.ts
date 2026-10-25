@@ -1,13 +1,9 @@
 import crypto from 'node:crypto';
 
 const ALGORITHM = 'aes-256-gcm';
-const IV_LENGTH = 12; // 96-bit IV recommended for GCM
-const AUTH_TAG_LENGTH = 16; // 128-bit auth tag
+const IV_LENGTH = 12;
+const AUTH_TAG_LENGTH = 16;
 
-/**
- * Encrypts plaintext string using AES-256-GCM.
- * Output format: iv_hex:authTag_hex:cipher_hex
- */
 export function encrypt(plaintext: string, masterKeyHex: string): string {
   const key = Buffer.from(masterKeyHex, 'hex');
   if (key.length !== 32) {
@@ -27,9 +23,6 @@ export function encrypt(plaintext: string, masterKeyHex: string): string {
   return `${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted.toString('hex')}`;
 }
 
-/**
- * Decrypts an AES-256-GCM ciphertext payload.
- */
 export function decrypt(encryptedPayload: string, masterKeyHex: string): string {
   const key = Buffer.from(masterKeyHex, 'hex');
   if (key.length !== 32) {
@@ -56,16 +49,10 @@ export function decrypt(encryptedPayload: string, masterKeyHex: string): string 
   return decrypted.toString('utf8');
 }
 
-/**
- * Generates an HMAC-SHA256 signature for webhooks and device authentication.
- */
 export function generateHmac(data: string, secret: string): string {
   return crypto.createHmac('sha256', secret).update(data, 'utf8').digest('hex');
 }
 
-/**
- * Timing-safe HMAC signature verification.
- */
 export function verifyHmac(data: string, secret: string, expectedSignature: string): boolean {
   const actualSignature = generateHmac(data, secret);
   const actualBuffer = Buffer.from(actualSignature, 'hex');
@@ -78,17 +65,10 @@ export function verifyHmac(data: string, secret: string, expectedSignature: stri
   return crypto.timingSafeEqual(actualBuffer, expectedBuffer);
 }
 
-/**
- * Generates a cryptographically secure random hex string.
- */
 export function generateRandomToken(bytes: number = 32): string {
   return crypto.randomBytes(bytes).toString('hex');
 }
 
-/**
- * Hashes a password using PBKDF2 with SHA-512 and salt.
- * Format: iterations:salt_hex:hash_hex
- */
 export function hashPassword(password: string): string {
   const salt = crypto.randomBytes(16).toString('hex');
   const iterations = 100000;
@@ -96,9 +76,6 @@ export function hashPassword(password: string): string {
   return `${iterations}:${salt}:${hash}`;
 }
 
-/**
- * Verifies a password against a stored PBKDF2 hash.
- */
 export function verifyPassword(password: string, storedHash: string): boolean {
   const parts = storedHash.split(':');
   if (parts.length !== 3) return false;

@@ -37,13 +37,6 @@ function extractBodyFromGmailPayload(payload) {
 }
 
 export class GmailPoller {
-  /**
-   * @param {{
-   *   apiBaseUrl?: string,
-   *   receivingAccountId?: string,
-   *   pollIntervalMs?: number
-   * }} options
-   */
   constructor(options = {}) {
     this.apiBaseUrl = options.apiBaseUrl || process.env.BASE_PAYMENT_API_URL || 'http://localhost:6100';
     this.receivingAccountId = options.receivingAccountId || '00000000-0000-0000-0000-000000000002';
@@ -137,10 +130,6 @@ export class GmailPoller {
     return null;
   }
 
-  /**
-   * Ingests an email directly (e.g. from webhook, push notification, or manual poll).
-   * @param {{ subject: string, body: string, date?: string | Date, from?: string, id?: string }} email
-   */
   async processEmail(email) {
     let parsed = null;
     try {
@@ -191,7 +180,6 @@ export class GmailPoller {
     this.isRunning = true;
     console.log(`[Gmail Observer] Poller started (interval: ${this.pollIntervalMs}ms)`);
 
-    // Run first poll cycle immediately
     this.pollCycle().catch(() => {});
 
     this.timer = setInterval(() => {

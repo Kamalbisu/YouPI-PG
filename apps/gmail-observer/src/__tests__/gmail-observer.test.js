@@ -114,13 +114,12 @@ describe('Gmail Payment Observer Integration Tests', () => {
 
       const state = createOAuthState();
       const first = await get(`/oauth/callback?code=abc&state=${encodeURIComponent(state)}`);
-      assert.ok(!first.text.includes('Invalid or expired OAuth state')); // passes the state check, fails later (no credentials)
+      assert.ok(!first.text.includes('Invalid or expired OAuth state'));
       const replay = await get(`/oauth/callback?code=abc&state=${encodeURIComponent(state)}`);
       assert.ok(replay.text.includes('Invalid or expired OAuth state'));
     });
 
     test('End-to-End: processing bank email confirms active payment session in Payment API', async () => {
-      // 1. Create a payment in Payment API
       const session = apiInstance.app.context.sessionRepo.create({
         merchantId: '00000000-0000-0000-0000-000000000001',
         receivingAccountId: '00000000-0000-0000-0000-000000000002',
@@ -131,7 +130,6 @@ describe('Gmail Payment Observer Integration Tests', () => {
       apiInstance.app.context.queueEngine.enqueueOrActivate(session.id, '00000000-0000-0000-0000-000000000002');
       apiInstance.app.context.timingEngine.handlePaymentDone(session.id);
 
-      // 2. Process matching incoming bank email via Gmail Observer
       const result = await gmailInstance.poller.processEmail({
         subject: 'Credit alert: Rs 200.00 received',
         body: 'Your account received Rs 200.00 from buyer@upi Ref: UTR-GMAIL-777',
@@ -143,7 +141,6 @@ describe('Gmail Payment Observer Integration Tests', () => {
       assert.equal(result.attribution.attributed, true);
       assert.equal(result.attribution.paymentSessionId, session.id);
 
-      // Verify session updated to SUCCESS in DB
       const updated = apiInstance.app.context.sessionRepo.findById(session.id);
       assert.equal(updated.status, PaymentStatus.SUCCESS);
     });

@@ -85,7 +85,6 @@ describe('Auth guard: admin, observer and force-success endpoints', () => {
         const res = await call(path, { method: 'POST', token: TEST_ADMIN_TOKEN, body: {} });
         assert.equal(res.status, 403, path);
       }
-      // Reads and unrelated admin routes keep working.
       assert.equal((await call('/api/v1/admin/merchant-settings', { token: TEST_ADMIN_TOKEN })).status, 200);
     } finally {
       process.env.NODE_ENV = previous;

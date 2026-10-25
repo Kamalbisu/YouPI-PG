@@ -1,32 +1,6 @@
 import { getObserverToken } from '@youpi/common';
 
-/**
- * ObserverPollerService
- *
- * Consolidated, coordinated background poller and verification daemon.
- * Replaces duplicate, uncoordinated polling loops with a single unified orchestrator:
- * - Automatically idles when no active/processing UPI sessions exist.
- * - Enforces minimum 1.5s–2.0s cooldown between external observer sweeps (SMS and Gmail).
- * - Drops redundant in-flight HTTP requests to prevent observer socket exhaustion.
- * - Serializes observation attribution with a mutex lock to eliminate SQLite lock contention (SQLITE_BUSY).
- * - Reacts immediately to payment events (SESSION.PROCESSING, SESSION.ACTIVATED) without waiting for timer ticks.
- */
 export class ObserverPollerService {
-  /**
-   * @param {{
-   *   db: import('@youpi/db').Database,
-   *   sessionRepo: import('@youpi/db').PaymentSessionRepository,
-   *   obsRepo: import('@youpi/db').ObservationRepository,
-   *   attributionEngine: import('@youpi/core').AttributionEngine,
-   *   eventEmitter: import('node:events').EventEmitter,
-   *   pollIntervalMs?: number,
-   *   minSweepCooldownMs?: number,
-   *   smsPort?: number,
-   *   gmailPort?: number,
-   *   observerToken?: string,
-   *   autoStart?: boolean
-   * }} options
-   */
   constructor(options) {
     if (!options || !options.db || !options.sessionRepo || !options.obsRepo || !options.attributionEngine || !options.eventEmitter) {
       throw new Error('ObserverPollerService requires db, sessionRepo, obsRepo, attributionEngine, and eventEmitter');
@@ -38,30 +12,25 @@ export class ObserverPollerService {
     this.attributionEngine = options.attributionEngine;
     this.eventEmitter = options.eventEmitter;
 
-    // Configurable timing parameters
     this.pollIntervalMs = Number(options.pollIntervalMs || process.env.OBSERVER_POLL_INTERVAL_MS || 1500);
     this.minSweepCooldownMs = Number(options.minSweepCooldownMs || process.env.OBSERVER_SWEEP_COOLDOWN_MS || 2000);
     this.smsPort = Number(options.smsPort || process.env.SMS_OBSERVER_PORT || 6002);
     this.gmailPort = Number(options.gmailPort || process.env.GMAIL_OBSERVER_PORT || 6003);
     this.observerToken = options.observerToken || null;
 
-    // Lifecycle and concurrency control state
     this._isRunning = false;
     this._isPollingCycle = false;
     this._isIdle = true;
     this._timer = null;
 
-    // Cooldown and in-flight tracking for observer endpoints
     this._lastSmsSweepTime = 0;
     this._lastGmailSweepTime = 0;
     this._isSmsSweepInFlight = false;
     this._isGmailSweepInFlight = false;
 
-    // Attribution mutex & in-flight hash set to prevent SQLite write contention
     this._isAttributionInProgress = false;
     this._inFlightObservationHashes = new Set();
 
-    // Event listener bindings
     this._boundOnSessionProcessing = this.handleSessionProcessing.bind(this);
     this._boundOnSessionActivated = this.handleSessionActivated.bind(this);
     this._boundOnPaymentTerminal = this.handlePaymentTerminal.bind(this);
@@ -99,14 +68,10 @@ export class ObserverPollerService {
     return this._lastGmailSweepTime;
   }
 
-  /**
-   * Starts the consolidated poller daemon and binds event listeners.
-   */
   start() {
     if (this._isRunning) return;
     this._isRunning = true;
 
-    // Bind reactive lifecycle events
     this.eventEmitter.on('SESSION.PROCESSING', this._boundOnSessionProcessing);
     this.eventEmitter.on('SESSION.ACTIVATED', this._boundOnSessionActivated);
     this.eventEmitter.on('PAYMENT.SUCCESS', this._boundOnPaymentTerminal);
@@ -114,7 +79,6 @@ export class ObserverPollerService {
     this.eventEmitter.on('PAYMENT.EXPIRED', this._boundOnPaymentTerminal);
     this.eventEmitter.on('PAYMENT.CANCELLED', this._boundOnPaymentTerminal);
 
-    // Start single consolidated daemon interval
     this._timer = setInterval(() => {
       this.pollCycle().catch(() => {});
     }, this.pollIntervalMs);
@@ -123,13 +87,9 @@ export class ObserverPollerService {
       this._timer.unref();
     }
 
-    // Initial check
     this.pollCycle().catch(() => {});
   }
 
-  /**
-   * Stops the daemon, cleans up timers, and removes event listeners.
-   */
   stop() {
     this._isRunning = false;
 
@@ -155,58 +115,30 @@ export class ObserverPollerService {
     this._isIdle = true;
   }
 
-  /**
-   * Alias for stop() for standard engine lifecycle parity.
-   */
   destroy() {
     this.stop();
   }
 
-  /**
-   * Reactive handler when a customer initiates payment confirmation.
-   * Wakes up the poller immediately without waiting for the next interval tick.
-   * @param {{ sessionId?: string, receivingAccountId?: string }} data
-   */
   handleSessionProcessing(data) {
     this.triggerExpeditedSweep(data?.receivingAccountId);
   }
 
-  /**
-   * Reactive handler when a new session transitions to ACTIVE.
-   * @param {{ sessionId?: string, receivingAccountId?: string }} data
-   */
   handleSessionActivated(data) {
     this._isIdle = false;
     this.triggerExpeditedSweep(data?.receivingAccountId);
   }
 
-  /**
-   * Reactive handler on terminal payment outcomes.
-   */
   handlePaymentTerminal() {
-    // Next poll cycle will automatically update idle state
   }
 
-  /**
-   * Immediately triggers a poll sweep, waking the poller if idle.
-   * @param {string} [preferredAccountId]
-   */
   triggerExpeditedSweep(preferredAccountId = null) {
     if (!this._isRunning || this._isPollingCycle) return;
     this.pollCycle(preferredAccountId).catch(() => {});
   }
 
-  /**
-   * Finds all active payment sessions waiting for bank verification.
-   * Includes ACTIVE, PROCESSING, and recent SUCCESS sessions awaiting secondary channel dual/triple match.
-   * @returns {Array<{ id: string, receiving_account_id: string, amount_paise: number, status: string, verification_level?: number }>}
-   */
   getActiveSessions() {
     try {
       const sixtySecsAgo = new Date(Date.now() - 60000).toISOString();
-      // A session that already reached the Triple Verification Standard (level 3) is fully
-      // confirmed: sweeping it again can never change its outcome, so it is excluded. This
-      // preserves the upper bound the previous per-session sweep timers enforced.
       return this.db.query(`
         SELECT id, receiving_account_id, amount_paise, status, verification_level
         FROM payment_sessions
@@ -220,13 +152,6 @@ export class ObserverPollerService {
     }
   }
 
-  /**
-   * Executes a single coordinated polling cycle:
-   * 1. Evaluates active sessions; idles immediately if none are active.
-   * 2. Fires throttled sweeps to SMS and Gmail observers (respecting cooldown & in-flight lock).
-   * 3. Sequentially processes unattributed bank observations under mutex lock.
-   * @param {string} [preferredAccountId]
-   */
   async pollCycle(preferredAccountId = null) {
     if (!this._isRunning || this._isPollingCycle) return;
     this._isPollingCycle = true;
@@ -241,24 +166,17 @@ export class ObserverPollerService {
 
       this._isIdle = false;
 
-      // 1. Concurrently trigger external observer sweeps with strict cooldown & in-flight locks
       await Promise.allSettled([
         this.sweepSmsObserver(),
         this.sweepGmailObserver()
       ]);
 
-      // 2. Process pending unattributed bank observations in DB under sequential mutex lock
       await this.processPendingAttributions(activeSessions, preferredAccountId);
     } finally {
       this._isPollingCycle = false;
     }
   }
 
-  /**
-   * Sweeps Google Messages SMS Observer with cooldown and in-flight protection.
-   * Drops redundant calls if cooldown has not elapsed or another sweep is currently in flight.
-   * @returns {Promise<boolean>} True if sweep was dispatched, false if dropped/in-flight/cooldown.
-   */
   async sweepSmsObserver() {
     const now = Date.now();
     if (this._isSmsSweepInFlight || (now - this._lastSmsSweepTime < this.minSweepCooldownMs)) {
@@ -285,11 +203,6 @@ export class ObserverPollerService {
     }
   }
 
-  /**
-   * Sweeps Gmail Observer with cooldown and in-flight protection.
-   * Drops redundant calls if cooldown has not elapsed or another sweep is currently in flight.
-   * @returns {Promise<boolean>} True if sweep was dispatched, false if dropped/in-flight/cooldown.
-   */
   async sweepGmailObserver() {
     const now = Date.now();
     if (this._isGmailSweepInFlight || (now - this._lastGmailSweepTime < this.minSweepCooldownMs)) {
@@ -316,13 +229,6 @@ export class ObserverPollerService {
     }
   }
 
-  /**
-   * Processes unattributed observations for active accounts under strict sequential mutex lock.
-   * Deduplicates receivingAccountIds and tracks in-flight observation hashes to prevent
-   * concurrent SQLite write transactions and SQLITE_BUSY contention.
-   * @param {Array<{ receiving_account_id: string }>} activeSessions
-   * @param {string} [preferredAccountId]
-   */
   async processPendingAttributions(activeSessions, preferredAccountId = null) {
     if (this._isAttributionInProgress) return;
     this._isAttributionInProgress = true;
@@ -356,7 +262,6 @@ export class ObserverPollerService {
               fingerprintHash: obs.fingerprintHash
             });
           } catch {
-            // Silently absorb individual observation attribution failures to avoid interrupting poller loop
           } finally {
             this._inFlightObservationHashes.delete(hash);
           }

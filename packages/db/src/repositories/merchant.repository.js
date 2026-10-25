@@ -1,15 +1,12 @@
 import crypto from 'node:crypto';
 import { encryptAtRest, decryptAtRest, safeEqual } from '@youpi/common';
 
-/** Computes a deterministic SHA-256 hex digest for storing and verifying merchant API keys. */
 export function hashApiKey(rawKey) {
   return crypto.createHash('sha256').update(String(rawKey)).digest('hex');
 }
 
-/** Gmail OAuth credentials are nested inside `branding.gmailConfig`; encrypt just those. */
 const GMAIL_SECRET_FIELDS = ['clientSecret', 'refreshToken', 'apiKey'];
 
-/** Serializes branding, encrypting any nested Gmail OAuth secrets. */
 function serializeBranding(branding) {
   if (!branding || typeof branding !== 'object') return branding || '{"primaryColor":"#2563eb","appName":"YOUPI PG","logoUrl":null}';
   const copy = { ...branding };
@@ -24,7 +21,6 @@ function serializeBranding(branding) {
   return JSON.stringify(copy);
 }
 
-/** Reverses serializeBranding. Plaintext values written earlier pass through unchanged. */
 function deserializeBranding(raw) {
   const branding = JSON.parse(raw || '{}');
   const gmail = branding.gmailConfig;
@@ -39,16 +35,10 @@ function deserializeBranding(raw) {
 }
 
 export class MerchantRepository {
-  /**
-   * @param {import('../database.js').Database} db
-   */
   constructor(db) {
     this.db = db;
   }
 
-  /**
-   * Creates a new merchant record.
-   */
   create(data) {
     const id = data.id || crypto.randomUUID();
     const branding = typeof data.branding === 'object'
@@ -70,7 +60,6 @@ export class MerchantRepository {
       data.contactEmail,
       data.contactPhone,
       data.webhookUrl || null,
-      // Webhook HMAC key must be recoverable at signing time, so it is encrypted at rest.
       encryptAtRest(rawWebhookSecret),
       apiKeyHash,
       branding,
@@ -159,10 +148,6 @@ export class MerchantRepository {
     return this.findById(id);
   }
 
-  /**
-   * Verifies a candidate merchant API key against the merchant's stored SHA-256 apiKeyHash
-   * (or webhookSecret for backward compatibility) in constant time.
-   */
   verifyApiKey(merchant, candidateKey) {
     if (!merchant || !candidateKey || typeof candidateKey !== 'string') return false;
     const clean = candidateKey.trim();
@@ -184,7 +169,6 @@ export class MerchantRepository {
       contactEmail: row.contact_email,
       contactPhone: row.contact_phone,
       webhookUrl: row.webhook_url,
-      // Plaintext rows written before encryption existed decrypt to themselves.
       webhookSecret: decryptAtRest(row.webhook_secret),
       apiKeyHash: row.api_key_hash || null,
       branding: deserializeBranding(row.branding),

@@ -8,7 +8,6 @@ async function verifyIsolation() {
   console.log('🔍 VERIFYING PRODUCTION RESET AND DEVELOPMENT DATABASE ISOLATION');
   console.log('============================================================');
 
-  // 1. Check Production Database
   const dbPath = path.resolve(process.cwd(), 'data/youpi_pg.sqlite');
   const prodDb = new Database({ dbPath });
   const prodMerchants = prodDb.queryOne('SELECT count(*) as c FROM merchants').c;
@@ -34,7 +33,6 @@ async function verifyIsolation() {
     auditLogs: prodAudit
   });
 
-  // Verify production acceptance criteria
   assert.ok(prodMerchants >= 1, 'Production merchant must be preserved');
   assert.ok(prodAccounts >= 1, 'Production receiving account must be preserved');
 
@@ -45,7 +43,6 @@ async function verifyIsolation() {
 
   prodDb.close();
 
-  // 2. Check Development Database (MUST BE UNTOUCHED)
   const devDbPath = process.env.DEV_DB_PATH || path.resolve(process.cwd(), 'data/youpi_pg_dev.sqlite');
   if (fs.existsSync(devDbPath)) {
     const devDb = new Database({ dbPath: devDbPath });
@@ -72,7 +69,6 @@ async function verifyIsolation() {
     auditLogs: devAudit
   });
 
-  // Verify development database is completely untouched
   assert.equal(devMerchants, 1, 'Development merchant count intact');
   assert.equal(devAccounts, 1, 'Development receiving account count intact');
   assert.equal(devCustomers, 2, 'Development customer count intact');

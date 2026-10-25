@@ -11,7 +11,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, '..');
 
-// In production, reliably ensure environment variables from .env are loaded first
 try {
   const rootEnv = path.resolve(rootDir, '.env');
   if (fs.existsSync(rootEnv) && typeof process.loadEnvFile === 'function') {
@@ -19,13 +18,6 @@ try {
   }
 } catch {}
 
-// Authoritative runtime mode enforcement (start.js takes absolute precedence).
-//
-// Production is the default and the ONLY mode that requires a Cloudflare domain: nothing
-// ever falls back to localhost implicitly. A containerised or LAN-only deployment can
-// opt out EXPLICITLY with YOUPI_ALLOW_LOCALHOST_MODE=true together with
-// YOUPI_MODE=localhost, so the operator has asked for it rather than it being a silent
-// fallback.
 const allowLocalhostMode = String(process.env.YOUPI_ALLOW_LOCALHOST_MODE || '').trim().toLowerCase() === 'true';
 const requestedMode = String(process.env.YOUPI_MODE || '').trim().toLowerCase();
 const runInLocalhostMode = allowLocalhostMode && requestedMode === 'localhost';
@@ -45,13 +37,11 @@ if (runInLocalhostMode) {
   console.log('====================================================');
 }
 
-// 1. Run database migrations & load persisted configuration (Part B3: never overwrite settings)
 console.log('[1/3] Loading persisted production database & settings...');
 const migrationResult = runMigrations();
 const merchant = migrationResult.defaultMerchant;
 const branding = merchant?.branding || {};
 
-// 2. Validate Production Configuration (Part B2 & Part I)
 const domain = (branding.cloudflareDomain || branding.domainTld || process.env.CLOUDFLARE_DOMAIN || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/+$/, '');
 const prefix = (branding.deploymentPrefix || branding.domainPrefix || process.env.DEPLOYMENT_PREFIX || 'pay').trim().toLowerCase().replace(/[^a-z0-9-_]/g, '') || 'pay';
 
@@ -81,7 +71,6 @@ console.log(`[✓] Authoritative Runtime Mode: ${runInLocalhostMode ? 'LOCALHOST
 console.log(`[✓] ${runInLocalhostMode ? 'Public Host' : 'Cloudflare Domain'}: ${runtimeUrls.domain}`);
 console.log(`[✓] Deployment Prefix: ${runtimeUrls.prefix}\n`);
 
-// Check for user-configured Cloudflare Tunnel command
 let tunnelProcess = null;
 const tunnelCmd = process.env.CLOUDFLARE_TUNNEL_COMMAND || branding.cloudflareTunnelCommand;
 
@@ -92,7 +81,6 @@ if (tunnelCmd && tunnelCmd.trim()) {
   await new Promise(r => setTimeout(r, 1500));
 }
 
-// 3. Launch Process Supervisor and Production Services
 console.log('[2/3] Launching Local Process Supervisor on port 8090...');
 const cc = await startControlCenter(8090);
 

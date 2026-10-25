@@ -26,11 +26,6 @@ export interface IngestObservationInput {
   rawPayload?: Record<string, unknown>;
 }
 
-/**
- * Calculates a deterministic fingerprint for an observation to prevent duplicate processing.
- * If bankReferenceNumber exists, it hashes receivingAccount + amount + referenceNumber.
- * Otherwise, it hashes receivingAccount + amount + 60-second time bucket.
- */
 export function calculateObservationFingerprint(input: {
   receivingAccountId: string;
   amountPaise: bigint;
@@ -42,7 +37,6 @@ export function calculateObservationFingerprint(input: {
   if (input.bankReferenceNumber && input.bankReferenceNumber.trim().length > 0) {
     entropy = `REF:${input.bankReferenceNumber.trim().toUpperCase()}`;
   } else {
-    // 60-second temporal cluster bucket partitioned by channel source
     const bucket = Math.floor(input.observedAt.getTime() / 60000);
     entropy = `TIME_BUCKET:${bucket}:${input.source || ''}`;
   }

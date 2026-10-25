@@ -29,7 +29,6 @@ async function resetProductionDatabase() {
 
   const db = new Database({ dbPath: prodDbPath });
 
-  // Backup before reset using WAL-safe atomic VACUUM INTO
   const backupDir = path.resolve(process.cwd(), 'data/backups');
   if (!fs.existsSync(backupDir)) {
     fs.mkdirSync(backupDir, { recursive: true });
@@ -45,7 +44,6 @@ async function resetProductionDatabase() {
     }
   }
 
-  // 1. Audit BEFORE state
   console.log('\n--- BEFORE RESET COUNTS ---');
   const countsBefore = {
     merchants: db.queryOne('SELECT count(*) as c FROM merchants').c,
@@ -68,36 +66,27 @@ async function resetProductionDatabase() {
   assert.ok(merchantBefore, 'Merchant record must exist before reset');
   assert.ok(accountBefore, 'Receiving account record must exist before reset');
 
-  // 2. Perform ACID Transactional Reset
   console.log('\n[→] Executing transactional customer & transaction data purge...');
   db.transaction(() => {
-    // A. Support tickets and messages
     db.execute('DELETE FROM ticket_messages;');
     db.execute('DELETE FROM support_tickets;');
 
-    // B. Webhook deliveries
     db.execute('DELETE FROM webhook_deliveries;');
 
-    // C. Payment observations (unlink attributed payments then delete)
     db.execute('UPDATE payment_observations SET attributed_payment_id = NULL;');
     db.execute('DELETE FROM payment_observations;');
 
-    // D. Payment sessions
     db.execute('DELETE FROM payment_sessions;');
 
-    // E. Customers
     db.execute('DELETE FROM customers;');
 
-    // F. Audit logs (remove customer/transaction events, keep merchant & account configuration history)
     db.execute("DELETE FROM audit_logs WHERE entity_type IN ('PAYMENT_SESSION', 'PAYMENT_OBSERVATION');");
 
-    // G. Reset slot state on receiving accounts
     db.execute('UPDATE payment_receiving_accounts SET is_slot_busy = 0, current_active_session_id = NULL;');
   });
 
   console.log('[✓] Transaction committed successfully.');
 
-  // 3. Audit AFTER state
   console.log('\n--- AFTER RESET COUNTS ---');
   const countsAfter = {
     merchants: db.queryOne('SELECT count(*) as c FROM merchants').c,
@@ -112,7 +101,6 @@ async function resetProductionDatabase() {
   };
   console.table(countsAfter);
 
-  // 4. Verify Merchant & Account Integrity
   const merchantAfter = db.queryOne('SELECT id, business_name, slug, webhook_url, branding FROM merchants');
   const accountAfter = db.queryOne('SELECT id, merchant_id, upi_id, payee_name, is_active, is_slot_busy, current_active_session_id FROM payment_receiving_accounts');
 
@@ -126,7 +114,6 @@ async function resetProductionDatabase() {
   assert.equal(accountAfter.is_slot_busy, 0, 'Receiving slot must be free');
   assert.equal(accountAfter.current_active_session_id, null, 'Active session ID must be null');
 
-  // Verify Acceptance Criteria
   assert.equal(countsAfter.customers, 0, 'Customers count must be 0');
   assert.equal(countsAfter.paymentSessions, 0, 'Payment sessions count must be 0');
   assert.equal(countsAfter.observations, 0, 'Observations count must be 0');
@@ -134,7 +121,6 @@ async function resetProductionDatabase() {
   assert.equal(countsAfter.ticketMessages, 0, 'Ticket messages count must be 0');
   assert.equal(countsAfter.webhookDeliveries, 0, 'Webhook deliveries count must be 0');
 
-  // 5. Vacuum database to reclaim disk space
   console.log('\n[→] Vacuuming database to reclaim storage space...');
   db.exec('VACUUM;');
   console.log('[✓] Database vacuumed.');

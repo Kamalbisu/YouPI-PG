@@ -9,9 +9,6 @@ import {
 import { isAdminRequest } from '../auth-guard.js';
 import { createRateLimiter, envLimit, getClientIp } from '../rate-limit.js';
 
-/**
- * Resolves a verified customer ID strictly from a valid customer session token.
- */
 function resolveAuthenticatedCustomerId(req, body, ctx) {
   if (!ctx.customerSessionRepo) return null;
   let token = body?.token || req.headers['x-customer-token'] || null;
@@ -26,10 +23,6 @@ function resolveAuthenticatedCustomerId(req, body, ctx) {
   return authCtx?.customer?.id || null;
 }
 
-/**
- * True when the caller may read device metadata: the gateway admin, the owning customer
- * (valid customer session token) or the device itself (its own device token).
- */
 function canReadDevice(req, ctx, { customerId, device }) {
   if (isAdminRequest(req)) return true;
   const authCustomerId = resolveAuthenticatedCustomerId(req, null, ctx);
@@ -39,19 +32,7 @@ function canReadDevice(req, ctx, { customerId, device }) {
   return Boolean(device && typeof deviceToken === 'string' && deviceToken.trim() && ctx.deviceRepo.verifyToken(device.id, deviceToken.trim()));
 }
 
-/**
- * Registers device identity and cryptographic binding routes.
- * @param {HttpServer} server
- * @param {{
- *   deviceRepo: import('@youpi/db').DeviceRepository,
- *   customerRepo: import('@youpi/db').CustomerRepository,
- *   customerSessionRepo?: import('@youpi/db').CustomerSessionRepository,
- *   auditRepo?: import('@youpi/db').AuditLogRepository
- * }} ctx
- */
 export function registerDeviceRoutes(server, ctx) {
-  // Registration and challenge issuing are open to anonymous browsers and write state
-  // (device rows, in-memory challenges), so they are throttled per client address.
   const deviceRateMax = envLimit('YOUPI_RATE_LIMIT_DEVICE_PER_MIN', 60);
   const deviceRateLimiter = createRateLimiter({ windowMs: 60 * 1000, max: deviceRateMax });
   function deviceRateLimited(req, res) {
@@ -63,7 +44,6 @@ export function registerDeviceRoutes(server, ctx) {
     return false;
   }
 
-  // 0. POST /api/v1/devices/challenge
   server.post('/api/v1/devices/challenge', async (req, res) => {
     if (deviceRateLimited(req, res)) return;
     const body = await HttpServer.parseBody(req).catch(() => ({}));
@@ -91,7 +71,6 @@ export function registerDeviceRoutes(server, ctx) {
     });
   });
 
-  // 1. POST /api/v1/devices/register
   server.post('/api/v1/devices/register', async (req, res) => {
     if (deviceRateLimited(req, res)) return;
     const body = await HttpServer.parseBody(req).catch(() => ({}));
@@ -108,7 +87,6 @@ export function registerDeviceRoutes(server, ctx) {
       return;
     }
 
-    // Resolve or generate fingerprint hash
     const clientSignals = signals || {};
     if (!clientSignals.userAgent && req.headers['user-agent']) {
       clientSignals.userAgent = req.headers['user-agent'];
@@ -120,10 +98,8 @@ export function registerDeviceRoutes(server, ctx) {
     const fingerprintHash = body.fingerprintHash || generateFingerprintHash(clientSignals);
     const normalized = normalizeDeviceSignals(clientSignals);
 
-    // Optional customer association strictly from verified customer session token (never bare customerId)
     const customerId = resolveAuthenticatedCustomerId(req, body, ctx);
 
-    // Check if device with this exact public key already exists
     const existing = ctx.deviceRepo.findByPublicKey(trimmedPublicKey);
     if (existing) {
       if (existing.status !== 'ACTIVE') {
@@ -131,8 +107,6 @@ export function registerDeviceRoutes(server, ctx) {
         return;
       }
 
-      // Never return or rotate a deviceToken for an existing publicKey unless the caller
-      // proves possession of the private key by signing a valid server-issued challenge.
       const hasChallengeProof =
         typeof challenge === 'string' &&
         challenge.trim().length > 0 &&
@@ -187,7 +161,6 @@ export function registerDeviceRoutes(server, ctx) {
       return;
     }
 
-    // Register new device
     const device = ctx.deviceRepo.create({
       customerId,
       publicKey: trimmedPublicKey,
@@ -225,7 +198,6 @@ export function registerDeviceRoutes(server, ctx) {
     });
   });
 
-  // 2. POST /api/v1/devices/verify
   server.post('/api/v1/devices/verify', async (req, res) => {
     const body = await HttpServer.parseBody(req).catch(() => ({}));
     const { deviceId, payload, signature, deviceToken } = body;
@@ -245,7 +217,6 @@ export function registerDeviceRoutes(server, ctx) {
     const hasSig = typeof signature === 'string' && signature.trim().length > 0;
     const hasPayload = payload !== undefined && payload !== null && String(payload).trim().length > 0;
 
-    // Require at least one cryptographic credential; never default to valid: true!
     if (!hasToken && !hasSig) {
       HttpServer.json(res, 401, {
         valid: false,
@@ -286,10 +257,8 @@ export function registerDeviceRoutes(server, ctx) {
     });
   });
 
-  // 3. GET /api/v1/devices/:id
   server.get('/api/v1/devices/:id', async (req, res, params) => {
     const device = ctx.deviceRepo.findById(params.id);
-    // Same response for unknown and foreign devices so ids cannot be enumerated.
     if (!device || !canReadDevice(req, ctx, { device })) {
       HttpServer.json(res, 404, { error: 'Device not found' });
       return;
@@ -308,7 +277,6 @@ export function registerDeviceRoutes(server, ctx) {
     });
   });
 
-  // 4. GET /api/v1/devices/customer/:customerId
   server.get('/api/v1/devices/customer/:customerId', async (req, res, params) => {
     if (!canReadDevice(req, ctx, { customerId: params.customerId })) {
       HttpServer.json(res, 401, { error: 'Customer session required', code: 'AUTH_REQUIRED' });

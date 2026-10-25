@@ -1,18 +1,10 @@
 import crypto from 'node:crypto';
 
 export class ReceivingAccountRepository {
-  /**
-   * @param {import('../database.js').Database} db
-   */
   constructor(db) {
     this.db = db;
   }
 
-  /**
-   * Creates a new receiving UPI account.
-   * If isActive is true, atomically deactivates any other active accounts for this merchant.
-   * Enforces that maximum ONE VPA may be active per merchant.
-   */
   create(data) {
     const id = data.id || crypto.randomUUID();
     const now = new Date().toISOString();
@@ -20,7 +12,6 @@ export class ReceivingAccountRepository {
     const isMerchantEnabled = data.isMerchantEnabled !== undefined ? Boolean(data.isMerchantEnabled) : true;
 
     return this.db.transaction(() => {
-      // If this new account is marked active, atomically deactivate all existing active accounts for this merchant
       if (isActive) {
         this.db.execute(`
           UPDATE payment_receiving_accounts
@@ -77,22 +68,16 @@ export class ReceivingAccountRepository {
     return this.mapRow(row);
   }
 
-  /**
-   * Atomically activates an account and deactivates all other accounts for this merchant.
-   * Backend invariant: At most ONE VPA active per merchant.
-   */
   activateAccount(merchantId, accountId) {
     return this.db.transaction(() => {
       const now = new Date().toISOString();
 
-      // Deactivate all existing accounts for this merchant
       this.db.execute(`
         UPDATE payment_receiving_accounts
         SET is_active = 0, updated_at = ?
         WHERE merchant_id = ?
       `, [now, merchantId]);
 
-      // Activate the targeted account
       this.db.execute(`
         UPDATE payment_receiving_accounts
         SET is_active = 1, updated_at = ?
@@ -103,9 +88,6 @@ export class ReceivingAccountRepository {
     });
   }
 
-  /**
-   * Deactivates a specific account.
-   */
   deactivateAccount(merchantId, accountId) {
     const now = new Date().toISOString();
     this.db.execute(`
@@ -117,9 +99,6 @@ export class ReceivingAccountRepository {
     return this.findById(accountId);
   }
 
-  /**
-   * Updates an existing account's details.
-   */
   updateAccount(id, data) {
     return this.db.transaction(() => {
       const existing = this.findById(id);
@@ -165,10 +144,6 @@ export class ReceivingAccountRepository {
     });
   }
 
-  /**
-   * Deletes a receiving account.
-   * Throws if the slot is currently busy.
-   */
   deleteAccount(merchantId, accountId) {
     const account = this.findById(accountId);
     if (!account || account.merchantId !== merchantId) {
@@ -183,9 +158,6 @@ export class ReceivingAccountRepository {
     return true;
   }
 
-  /**
-   * Sets slot busy status and currently active session ID.
-   */
   setSlotStatus(id, isBusy, activeSessionId = null) {
     const now = new Date().toISOString();
     this.db.execute(`
@@ -197,13 +169,6 @@ export class ReceivingAccountRepository {
     return this.findById(id);
   }
 
-  /**
-   * Updates or creates the active receiving UPI account for a merchant.
-   * @param {string} merchantId
-   * @param {string} upiId
-   * @param {string} [payeeName]
-   * @param {boolean} [isMerchantEnabled=true]
-   */
   upsertActiveForMerchant(merchantId, upiId, payeeName = null, isMerchantEnabled = true) {
     const cleanUpi = upiId.trim();
     const existing = this.findActiveForMerchant(merchantId);

@@ -1,17 +1,6 @@
 import { PaymentStatus } from '@youpi/common';
 
 export class RecoveryEngine {
-  /**
-   * @param {{
-   *   db: import('@youpi/db').Database,
-   *   sessionRepo: import('@youpi/db').PaymentSessionRepository,
-   *   accountRepo: import('@youpi/db').ReceivingAccountRepository,
-   *   queueEngine: import('./queue-engine.js').QueueEngine,
-   *   timingEngine: import('./timing-engine.js').TimingEngine,
-   *   auditRepo?: import('@youpi/db').AuditLogRepository,
-   *   eventEmitter?: { emit: (event: string, payload: any) => void }
-   * }} options
-   */
   constructor(options) {
     this.db = options.db;
     this.sessionRepo = options.sessionRepo;
@@ -22,16 +11,6 @@ export class RecoveryEngine {
     this.eventEmitter = options.eventEmitter;
   }
 
-  /**
-   * Performs full crash-recovery on startup.
-   * Reconstructs timers and resolves overdue sessions.
-   * @returns {{
-   *   expiredCount: number,
-   *   failedCount: number,
-   *   rescheduledCount: number,
-   *   promotedCount: number
-   * }}
-   */
   recover() {
     let expiredCount = 0;
     let failedCount = 0;
@@ -41,7 +20,6 @@ export class RecoveryEngine {
     const now = new Date();
     const nowIso = now.toISOString();
 
-    // 1. Recover overdue PROCESSING sessions -> mark SUCCESS if verified/attributed, else FAILED
     const overdueProcessing = this.db.query(`
       SELECT id, merchant_id, order_id, receiving_account_id, verification_level, attributed_observation_id FROM payment_sessions
       WHERE status = ? AND processing_expires_at < ?
@@ -86,7 +64,6 @@ export class RecoveryEngine {
       }
     }
 
-    // 2. Recover overdue ACTIVE sessions -> mark EXPIRED
     const overdueActive = this.db.query(`
       SELECT id, merchant_id, order_id, receiving_account_id FROM payment_sessions
       WHERE status = ? AND expires_at < ?
@@ -112,7 +89,6 @@ export class RecoveryEngine {
       }
     }
 
-    // 3. Reschedule ongoing ACTIVE sessions
     const ongoingActive = this.db.query(`
       SELECT id, expires_at FROM payment_sessions
       WHERE status = ? AND expires_at >= ?
@@ -123,7 +99,6 @@ export class RecoveryEngine {
       rescheduledCount++;
     }
 
-    // 4. Reschedule ongoing PROCESSING sessions
     const ongoingProcessing = this.db.query(`
       SELECT id, processing_expires_at FROM payment_sessions
       WHERE status = ? AND processing_expires_at >= ?
@@ -139,7 +114,6 @@ export class RecoveryEngine {
       rescheduledCount++;
     }
 
-    // 5. Scan all receiving accounts: promote waiting queue if slot is now vacant
     const accounts = this.db.query(`SELECT id FROM payment_receiving_accounts WHERE is_active = 1`);
     for (const acc of accounts) {
       const promoted = this.queueEngine.promoteNext(acc.id);

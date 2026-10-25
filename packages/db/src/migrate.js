@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import crypto from 'node:crypto';
 import { getCoinStoreWebhookSecret, LEGACY_DEFAULT_WEBHOOK_SECRET } from '@youpi/common';
 import { getDatabase } from './database.js';
 import { MerchantRepository } from './repositories/merchant.repository.js';
@@ -11,17 +10,11 @@ import { CustomerRepository } from './repositories/customer.repository.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-/**
- * Runs database migrations and applies base seeds.
- * @param {import('./database.js').Database} [targetDb]
- */
 export function runMigrations(targetDb) {
   const db = targetDb || getDatabase();
   const schemaPath = path.join(__dirname, 'sqlite-schema.sql');
   const schemaSql = fs.readFileSync(schemaPath, 'utf8');
 
-  // Detect if customers table has an obsolete schema (phone_number/merchant_id instead of email/mobile_number, or password_hash NOT NULL).
-  // The old table is only rebuilt when it holds no customers: a schema mismatch must never destroy customer data.
   try {
     const tableInfo = db.query ? db.query("PRAGMA table_info(customers)") : [];
     const colNames = (tableInfo || []).map(c => c.name);
@@ -47,7 +40,6 @@ export function runMigrations(targetDb) {
     console.error('[migrate] Could not inspect customers table schema; skipping rebuild:', err.message);
   }
 
-  // Fallback alter columns if customers/sessions table exists without new columns
   try { db.exec("ALTER TABLE merchants ADD COLUMN api_key_hash TEXT;"); } catch {}
   try { db.exec("ALTER TABLE customers ADD COLUMN email TEXT;"); } catch {}
   try { db.exec("ALTER TABLE customers ADD COLUMN mobile_number TEXT;"); } catch {}
@@ -64,10 +56,8 @@ export function runMigrations(targetDb) {
   try { db.exec("ALTER TABLE payment_sessions ADD COLUMN verification_sources TEXT DEFAULT '[]';"); } catch {}
   try { db.exec("ALTER TABLE payment_sessions ADD COLUMN verification_tag TEXT DEFAULT 'UNVERIFIED';"); } catch {}
 
-  // Execute schema DDL
   db.exec(schemaSql);
 
-  // Alter table columns if migrating existing databases
   try { db.exec("ALTER TABLE payment_sessions ADD COLUMN verification_level INTEGER DEFAULT 0;"); } catch {}
   try { db.exec("ALTER TABLE payment_sessions ADD COLUMN verification_sources TEXT DEFAULT '[]';"); } catch {}
   try { db.exec("ALTER TABLE payment_sessions ADD COLUMN verification_tag TEXT DEFAULT 'UNVERIFIED';"); } catch {}
@@ -117,7 +107,6 @@ export function runMigrations(targetDb) {
   try { db.exec("CREATE INDEX IF NOT EXISTS idx_observations_fingerprint ON payment_observations (fingerprint_hash);"); } catch {}
   try { db.exec("CREATE INDEX IF NOT EXISTS idx_observations_attributed_payment ON payment_observations (attributed_payment_id);"); } catch {}
 
-  // Seed default merchant if empty
   const merchantRepo = new MerchantRepository(db);
   const existing = merchantRepo.findAll();
 
@@ -145,13 +134,11 @@ export function runMigrations(targetDb) {
         webhookSecret: getCoinStoreWebhookSecret()
       });
     } else if (defaultMerchant.webhookSecret === LEGACY_DEFAULT_WEBHOOK_SECRET) {
-      // Older installs were seeded with a publicly known secret: rotate it.
       merchantRepo.update(defaultMerchant.id, { webhookSecret: getCoinStoreWebhookSecret() });
       console.warn('[migrate] Rotated the default merchant webhook secret away from the legacy public value. Update your merchant webhook verifier.');
     }
   }
 
-  // Seed default UPI receiving account if none
   const accountRepo = new ReceivingAccountRepository(db);
   const accounts = accountRepo.findByMerchantId(defaultMerchant.id);
   if (accounts.length === 0) {
@@ -164,10 +151,6 @@ export function runMigrations(targetDb) {
     });
   }
 
-  // Demo customer seeding is opt-in and never carries real personal data.
-  // Previously this unconditionally created a customer with a real name, phone number and
-  // email, and flagged the phone as verified — shipping someone's PII (and a pre-authorised
-  // OTP login identity) into every merchant deployment.
   if (process.env.YOUPI_SEED_DEMO_CUSTOMER === 'true') {
     const customerRepo = new CustomerRepository(db);
     const demoMobile = '9000000000';
@@ -188,22 +171,6 @@ export function runMigrations(targetDb) {
   };
 }
 
-/**
- * Completely wipes all customer identity records and active sessions,
- * reinitializing the customer identity store to a pristine state.
- * @param {import('./database.js').Database} [targetDb]
- */
-export function reinitializeCustomerIdentity(targetDb) {
-  const db = targetDb || getDatabase();
-  try { db.exec("PRAGMA foreign_keys = OFF;"); } catch {}
-  try { db.exec("UPDATE payment_sessions SET customer_id = NULL WHERE customer_id IS NOT NULL;"); } catch {}
-  try { db.exec("DELETE FROM customer_sessions;"); } catch {}
-  try { db.exec("DELETE FROM customers;"); } catch {}
-  try { db.exec("PRAGMA foreign_keys = ON;"); } catch {}
-  return { success: true, message: 'All old customer identity records wiped and reinitialized.' };
-}
-
-// Auto-run if executed directly as script
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   console.log('Running YOUPI PG database migrations...');
   const result = runMigrations();

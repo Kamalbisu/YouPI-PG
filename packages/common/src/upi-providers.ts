@@ -1,8 +1,3 @@
-/**
- * Central registry of 30 official UPI application providers.
- * Real official Google Play Store listing CDN icons and official brand assets.
- */
-
 export interface UpiProvider {
   id: string;
   name: string;
@@ -364,10 +359,6 @@ export function findUpiProviderById(id?: string): UpiProvider | undefined {
   return UPI_PROVIDERS.find(p => p.id.toLowerCase() === clean);
 }
 
-/**
- * Official companion SMS and banking notification application packages
- * permitted to deliver real-time credit payment observations to YOUPI Gateway.
- */
 export const BANKING_AND_MESSAGING_PACKAGES: readonly string[] = Object.freeze([
   'com.google.android.apps.messaging',
   'com.samsung.android.messaging',
@@ -379,9 +370,6 @@ export const BANKING_AND_MESSAGING_PACKAGES: readonly string[] = Object.freeze([
   'com.fedmobile'
 ]);
 
-/**
- * Canonical unified allowlist of all verified UPI payment and banking observation packages.
- */
 export const ALLOWED_NOTIFICATION_PACKAGES: readonly string[] = Object.freeze(
   Array.from(new Set([
     ...UPI_PROVIDERS.map(p => p.packageName.toLowerCase()),
@@ -389,9 +377,6 @@ export const ALLOWED_NOTIFICATION_PACKAGES: readonly string[] = Object.freeze(
   ])).sort()
 );
 
-/**
- * Verifies whether a given Android package identifier is an authorized banking/UPI provider.
- */
 export function isAllowedNotificationPackage(packageName?: string): boolean {
   if (!packageName || typeof packageName !== 'string') return false;
   const clean = packageName.trim().toLowerCase();

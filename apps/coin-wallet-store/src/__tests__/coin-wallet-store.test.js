@@ -18,7 +18,6 @@ describe('Coin Top-Up Wallet Demo Store Integration Tests', () => {
     testDb = new Database({ inMemory: true });
     apiInstance = await startPaymentApi(6193, testDb);
 
-    // Update demo merchant with our store webhook secret
     testDb.execute('UPDATE merchants SET webhook_secret = ?, webhook_url = ? WHERE id = ?', [
       storeSecret,
       'http://localhost:5099/api/webhook',
@@ -34,7 +33,6 @@ describe('Coin Top-Up Wallet Demo Store Integration Tests', () => {
     storeBaseUrl = `http://localhost:${storeInstance.port}`;
   });
 
-  /** Headers the real gateway always sends with every signed delivery. */
   function gatewayHeaders(payloadString, overrides = {}) {
     return {
       'X-Gateway-Signature': `sha256=${generateHmac(payloadString, storeSecret)}`,
@@ -151,10 +149,8 @@ describe('Coin Top-Up Wallet Demo Store Integration Tests', () => {
     assert.equal(hookRes.status, 200);
     assert.equal(hookRes.body.credited, true);
 
-    // Verify coins were credited to wallet!
     assert.equal(storeInstance.server.walletCoins, initialCoins + 550);
 
-    // Verify recorded in ledger
     const balanceRes = await request('/api/wallet-balance');
     assert.equal(balanceRes.body.coins, initialCoins + 550);
     assert.ok(balanceRes.body.history.length >= 1);
@@ -164,7 +160,6 @@ describe('Coin Top-Up Wallet Demo Store Integration Tests', () => {
   test('POST /api/webhook rejects unknown orders and mismatched amounts, and ignores inflated metadata.coins', async () => {
     const before = storeInstance.server.walletCoins;
 
-    // 1. Unknown orderId rejected with 404
     const unknownPayload = JSON.stringify({
       event: 'SUCCESS',
       paymentId: 'pay_unknown_999',
@@ -183,7 +178,6 @@ describe('Coin Top-Up Wallet Demo Store Integration Tests', () => {
     assert.equal(unknownRes.status, 404);
     assert.equal(storeInstance.server.walletCoins, before);
 
-    // 2. Mismatched amountPaise rejected with 400
     const checkout = await request('/api/checkout', {
       method: 'POST',
       body: { packName: 'Ten Rupee Pack', price: 10.00 }
@@ -209,7 +203,6 @@ describe('Coin Top-Up Wallet Demo Store Integration Tests', () => {
     assert.equal(mismatchRes.status, 400);
     assert.equal(storeInstance.server.walletCoins, before);
 
-    // 3. Matching amountPaise credits local order.coins (10), ignoring inflated metadata.coins (99999)
     const validPayload = JSON.stringify({
       event: 'SUCCESS',
       paymentId,
@@ -252,7 +245,7 @@ describe('Coin Top-Up Wallet Demo Store Integration Tests', () => {
   test('custom top-up: initiates custom amount payment and credits calculated coins on webhook', async () => {
     const initialCoins = storeInstance.server.walletCoins;
     const customAmount = 250.00;
-    const customCoins = 250; // 1 rs = 1 coin
+    const customCoins = 250;
 
     const checkoutRes = await request('/api/checkout', {
       method: 'POST',
@@ -269,7 +262,6 @@ describe('Coin Top-Up Wallet Demo Store Integration Tests', () => {
     assert.ok(checkoutRes.body.checkoutUrl);
     const orderId = checkoutRes.body.orderId;
 
-    // Simulate signed webhook receipt
     const payloadObj = {
       event: 'SUCCESS',
       paymentId: checkoutRes.body.paymentId,
@@ -382,7 +374,6 @@ describe('Coin Top-Up Wallet Demo Store Integration Tests', () => {
     assert.equal(checkout.status, 200);
     const { orderId, paymentId } = checkout.body;
 
-    // Simulate the gateway verification engine completing this UPI payment.
     testDb.execute("UPDATE payment_sessions SET status = 'SUCCESS', method = 'UPI' WHERE id = ?", [paymentId]);
 
     const verifyRes = await request('/api/verify-payment', {
@@ -391,7 +382,6 @@ describe('Coin Top-Up Wallet Demo Store Integration Tests', () => {
     });
     assert.equal(verifyRes.status, 200);
     assert.equal(verifyRes.body.success, true);
-    // Client-supplied coin counts are ignored: the gateway session metadata wins.
     assert.equal(storeInstance.server.walletCoins, initialCoins + 100);
 
     const dupRes = await request('/api/verify-payment', { method: 'POST', body: { orderId } });
@@ -447,7 +437,6 @@ describe('Coin Top-Up Wallet Demo Store Integration Tests', () => {
 
   test('Reverse proxy: /checkout/* does not return 404 Route Not Found', async () => {
     const res = await request('/checkout/some-session-id');
-    // It should either return 200/502 (if portal not up on that test port), but NEVER 404 "Route Not Found"
     assert.notEqual(res.body, 'Route Not Found');
   });
 
@@ -469,7 +458,6 @@ describe('Coin Top-Up Wallet Demo Store Integration Tests', () => {
 
   test('Security: directory traversal attempts on public static assets are blocked', async () => {
     const res = await request('/css/../../package.json');
-    // Traversal should not return package.json content with 200
     assert.ok(res.status === 404 || res.status === 502 || !res.body.includes('"name": "youpi-pg"'));
   });
 });

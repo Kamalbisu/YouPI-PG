@@ -67,7 +67,6 @@ describe('White-Label Branding & Visual Gateway Customizer Test Suite', () => {
     const updateBody = await updateRes.json();
     assert.strictEqual(updateBody.success, true);
 
-    // Read back and assert all fields
     const getRes = await authFetch(`${baseUrl}/api/v1/admin/merchant-settings?merchantId=${merchantId}`);
     const getData = await getRes.json();
     const b = getData.branding;
@@ -90,7 +89,6 @@ describe('White-Label Branding & Visual Gateway Customizer Test Suite', () => {
   });
 
   it('3. Checkout state endpoint propagates updated branding to customer checkout', async () => {
-    // Initiate payment session
     const initRes = await authFetch(`${baseUrl}/api/v1/payments`, {
       method: 'POST',
       headers: {
@@ -107,7 +105,6 @@ describe('White-Label Branding & Visual Gateway Customizer Test Suite', () => {
     const initData = await initRes.json();
     assert.ok(initData.paymentId);
 
-    // Fetch checkout state
     const stateRes = await authFetch(`${baseUrl}/api/v1/checkout/${initData.paymentId}/state`);
     assert.strictEqual(stateRes.status, 200);
     const state = await stateRes.json();

@@ -80,9 +80,6 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
   }
 
   function createActiveSession(orderId, amountPaise, customerId = null, slotOffsetMs = 0, accountId = receivingAccountId) {
-    // A receiving account may hold only one slot-occupying session (partial unique index).
-    // Release whatever still occupies *this* account before taking its slot, so repeated
-    // calls in separate cases start clean. Sessions on other accounts are untouched.
     testDb.execute(
       `UPDATE payment_sessions SET status = ?, updated_at = ?
        WHERE receiving_account_id = ? AND status IN ('ACTIVE', 'PROCESSING')`,
@@ -105,10 +102,6 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     return session;
   }
 
-  /**
-   * A receiving account holds at most one slot-occupying session (partial unique index).
-   * Tests needing several simultaneous ACTIVE sessions must spread them across accounts.
-   */
   function createAdditionalReceivingAccount(suffix) {
     const id = `00000000-0000-0000-0000-0000000000${String(suffix).padStart(2, '0')}`;
     testDb.execute(
@@ -119,10 +112,6 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     );
     return id;
   }
-
-  // =========================================================================
-  // PARSER ACCEPTANCE TESTS (1 - 6)
-  // =========================================================================
 
   test('1. "Rs 499" parses to 49900 paise', () => {
     const res = extractIntelligentAmount('A/C credited with Rs 499 UPI:123456789012');
@@ -187,14 +176,9 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     assert.equal(result.failingStage, 3);
     assert.equal(result.failingCondition, 'MISSING_CURRENCY_INDICATOR');
 
-    // Verify NO ban was applied
     const reloadedCust = customerRepo.findById(cust.id);
     assert.equal(reloadedCust.status, 'ACTIVE');
   });
-
-  // =========================================================================
-  // AUTO-BAN NON-TRIGGERS (MUST NOT BAN) (7 - 13)
-  // =========================================================================
 
   test('7. Message from unknown personal number (NOT matching customer\'s phone): Rejected at Stage 2. NO ban applied.', () => {
     const cust = customerRepo.create({
@@ -205,7 +189,6 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     });
     const session = createActiveSession('ORD-SEVEN-1', 49900n, cust.id);
 
-    // Personal number does NOT match customer (+918888888888 vs +919876543210)
     const result = pipeline.process({
       source: 'SMS',
       sender: '+918888888888',
@@ -231,7 +214,6 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     });
     const session = createActiveSession('ORD-EIGHT-1', 49900n, cust.id);
 
-    // Personal email does NOT match customer (random@gmail.com vs eight@test.com)
     const result = pipeline.process({
       source: 'GMAIL',
       sender: 'randomstranger@gmail.com',
@@ -257,7 +239,6 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     });
     const session = createActiveSession('ORD-NINE-1', 49900n, cust.id);
 
-    // Valid institutional bank sender, but amount is Rs 100 instead of Rs 499
     const result = pipeline.process({
       source: 'SMS',
       sender: 'VM-HDFCBK',
@@ -283,7 +264,6 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     });
     const session = createActiveSession('ORD-TEN-1', 49900n, cust.id);
 
-    // Valid bank sender, has currency and 12-digit ref, but NO credit keyword
     const result = pipeline.process({
       source: 'SMS',
       sender: 'VM-HDFCBK',
@@ -333,7 +313,6 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     });
     const session = createActiveSession('ORD-TWELVE-1', 49900n, cust.id);
 
-    // Injection string without defined fraud match
     const result = pipeline.process({
       source: 'SMS',
       sender: 'VM-HDFCBK',
@@ -357,7 +336,6 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     });
     const session = createActiveSession('ORD-THIRTEEN-1', 49900n, cust.id);
 
-    // Legitimate bank message where note or sender contains "test" or "suspicious"
     const result = pipeline.process({
       source: 'SMS',
       sender: 'VM-HDFCBK',
@@ -371,10 +349,6 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     const reloaded = customerRepo.findById(cust.id);
     assert.equal(reloaded.status, 'ACTIVE', 'Legitimate bank message must remain ACTIVE');
   });
-
-  // =========================================================================
-  // DEFINED FRAUD SCENARIO (MUST BAN) (14 - 25)
-  // =========================================================================
 
   test('14. Customer with phone +919876543210 has active payment session. Observation arrives from SMS sender "+919876543210". Content contains valid credit format matching session amount.', () => {
     const cust = customerRepo.create({
@@ -393,21 +367,17 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
       paymentSessionId: session.id
     });
 
-    // 1. Payment is NOT confirmed
     assert.equal(result.success, false, 'Payment must NOT be confirmed (DO NOT PAY)');
     assert.equal(result.status, 'REJECTED');
 
-    // 2. customer.status becomes 'BANNED'
     const updatedCust = customerRepo.findById(cust.id);
     assert.equal(updatedCust.status, 'BANNED', 'Customer status must become BANNED');
     assert.equal(updatedCust.banReason, 'FRAUDULENT_PAYMENT_INJECTION');
 
-    // 3. Security event recorded: FRAUDULENT_PAYMENT_INJECTION
     const secEvents = customerRepo.getSecurityEvents(cust.id);
     assert.ok(secEvents.length > 0, 'Security event must be recorded');
     assert.equal(secEvents[0].eventType, 'FRAUDULENT_PAYMENT_INJECTION');
 
-    // 4. Raw message preserved verbatim
     assert.equal(secEvents[0].rawMessage, rawFakeMessage, 'Raw message must be preserved verbatim word-for-word');
   });
 
@@ -422,7 +392,7 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
 
     const result = pipeline.process({
       source: 'SMS',
-      sender: '+91 98765 43255', // Spaces and country code formatting
+      sender: '+91 98765 43255',
       rawText: '₹500.00 credited to a/c via UPI/CR/123456789099',
       paymentSessionId: session.id
     });
@@ -443,7 +413,7 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
 
     const result = pipeline.process({
       source: 'GMAIL',
-      sender: 'user16@gmail.com', // Customer attempts to inject fake payment from personal Gmail
+      sender: 'user16@gmail.com',
       rawText: 'Payment received: INR 750.00 ref: 998877665544 credited to merchant account',
       paymentSessionId: session.id
     });
@@ -462,7 +432,6 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     });
     customerRepo.banCustomer(bannedCust.id, 'FRAUDULENT_PAYMENT_INJECTION');
 
-    // Attempt initiating payment
     const res = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -485,16 +454,13 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
       mobileNumber: '+919876543221'
     });
     const s1 = createActiveSession('ORD-18-A', 49900n, cust.id);
-    // Second concurrent session needs a second slot: one account can only hold one.
     const s2 = createActiveSession('ORD-18-B', 99900n, cust.id, 0, createAdditionalReceivingAccount(91));
 
     assert.equal(sessionRepo.findById(s1.id).status, PaymentStatus.ACTIVE);
     assert.equal(sessionRepo.findById(s2.id).status, PaymentStatus.ACTIVE);
 
-    // Apply ban
     customerRepo.banCustomer(cust.id, 'FRAUDULENT_PAYMENT_INJECTION');
 
-    // Verify both sessions were immediately transitioned to EXPIRED
     assert.equal(sessionRepo.findById(s1.id).status, PaymentStatus.EXPIRED);
     assert.equal(sessionRepo.findById(s2.id).status, PaymentStatus.EXPIRED);
   });
@@ -576,13 +542,11 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     });
     customerRepo.banCustomer(cust.id, 'FRAUDULENT_PAYMENT_INJECTION');
 
-    // Unban
     await request('/api/v1/admin/security/unban', {
       method: 'POST',
       body: { customerId: cust.id, reason: 'False positive investigated' }
     });
 
-    // Initiate payment
     const res = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -635,10 +599,6 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     assert.ok(logs.length > 0, 'Audit log must contain CUSTOMER_AUTOMATICALLY_BANNED');
   });
 
-  // =========================================================================
-  // TEST MODE ACCEPTANCE TESTS (26 - 29)
-  // =========================================================================
-
   test('26. When defined fraud scenario occurs: triggers FRAUDULENT_PAYMENT_INJECTION detection, payment is NOT confirmed, customer IS automatically banned, and security event is recorded.', () => {
     const cust = customerRepo.create({
       merchantId,
@@ -657,17 +617,14 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
       testModeActive: true
     });
 
-    // 1. Payment is NOT confirmed and status is REJECTED
     assert.equal(result.success, false, 'Payment must NOT be confirmed');
     assert.equal(result.status, 'REJECTED', 'Status is REJECTED');
     assert.equal(result.failingCondition, 'FRAUDULENT_PAYMENT_INJECTION');
 
-    // 2. Customer status is immediately BANNED
     const reloaded = customerRepo.findById(cust.id);
     assert.equal(reloaded.status, 'BANNED', 'Customer must be automatically banned');
     assert.equal(reloaded.banReason, 'FRAUDULENT_PAYMENT_INJECTION');
 
-    // 3. Security event is recorded
     const secEvents = customerRepo.getSecurityEvents(cust.id);
     assert.ok(secEvents.length > 0, 'Security event must be recorded');
   });
@@ -682,13 +639,11 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
   });
 
   test('28. Synthetic observations cannot be injected when Test Mode is OFF.', async () => {
-    // Explicitly disable test mode
     await request('/api/v1/admin/dev/test-mode', {
       method: 'POST',
       body: { enabled: false }
     });
 
-    // Attempt injection
     const res = await request('/api/v1/admin/dev/test-mode/inject', {
       method: 'POST',
       body: {
@@ -702,7 +657,6 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
   });
 
   test('29. Test Mode automatically expires after 10 minutes.', async () => {
-    // Enable test mode
     const enableRes = await request('/api/v1/admin/dev/test-mode', {
       method: 'POST',
       body: { enabled: true }
@@ -715,29 +669,22 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     const enabledAt = enableRes.body.testModeEnabledAt;
     assert.ok(until && enabledAt);
 
-    // Verify exactly 10 minutes (600,000 ms) window
     const durationMs = until - enabledAt;
     assert.equal(durationMs, 10 * 60 * 1000, 'Test mode window must be exactly 10 minutes (600,000 ms)');
 
-    // Simulate expiration by setting testModeUntil in the past
     const merchant = merchantRepo.findById(merchantId);
     merchantRepo.update(merchantId, {
       branding: {
         ...(merchant.branding || {}),
-        testModeUntil: Date.now() - 5000 // Expired 5 seconds ago
+        testModeUntil: Date.now() - 5000
       }
     });
 
-    // Verify status returns enabled = false after expiration
     const statusRes = await request('/api/v1/admin/dev/test-mode');
     assert.equal(statusRes.status, 200);
     assert.equal(statusRes.body.enabled, false, 'Expired test mode must report enabled = false');
     assert.equal(statusRes.body.remainingSeconds, 0);
   });
-
-  // =========================================================================
-  // REAL-TIME FAKE SMS/EMAIL DETECTION & CHECKOUT GATEWAY INVESTIGATION SCREEN
-  // =========================================================================
 
   test('30. When user pushes fake SMS: server detects fraud instantly, auto-bans customer, terminates ongoing session, and checkout state reports BLOCKED under-investigation screen', async () => {
     const cust = customerRepo.create({
@@ -748,11 +695,9 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     });
     const session = createActiveSession('ORD-REALTIME-30', 49900n, cust.id);
 
-    // Verify session starts ACTIVE and customer is ACTIVE
     assert.equal(sessionRepo.findById(session.id).status, PaymentStatus.ACTIVE);
     assert.equal(customerRepo.findById(cust.id).status, 'ACTIVE');
 
-    // User pushes fake SMS matching their registered mobile
     const pushRes = await request(`/api/v1/checkout/${session.id}/simulate-observation`, {
       method: 'POST',
       body: {
@@ -762,22 +707,18 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
       }
     });
 
-    // 1. Instantly rejected with 403 / BLOCKED
     assert.equal(pushRes.status, 403);
     assert.equal(pushRes.body.status, 'BLOCKED');
     assert.equal(pushRes.body.isBanned, true);
     assert.equal(pushRes.body.reason, 'FRAUDULENT_PAYMENT_INJECTION');
 
-    // 2. Customer is instantly BANNED
     const reloadedCust = customerRepo.findById(cust.id);
     assert.equal(reloadedCust.status, 'BANNED');
     assert.equal(reloadedCust.banReason, 'FRAUDULENT_PAYMENT_INJECTION');
 
-    // 3. Ongoing session is instantly TERMINATED (EXPIRED)
     const reloadedSession = sessionRepo.findById(session.id);
     assert.equal(reloadedSession.status, PaymentStatus.EXPIRED);
 
-    // 4. Checkout state endpoint immediately returns BLOCKED with investigation notice
     const stateRes = await request(`/api/v1/checkout/${session.id}/state`);
     assert.equal(stateRes.status, 200);
     assert.equal(stateRes.body.status, 'BLOCKED');
@@ -798,7 +739,6 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     });
     const session = createActiveSession('ORD-REALTIME-31', 99900n, cust.id);
 
-    // User pushes fake email matching their registered email
     const pushRes = await request(`/api/v1/checkout/${session.id}/simulate-observation`, {
       method: 'POST',
       body: {
@@ -812,11 +752,9 @@ describe('YOUPI PG: Parser Rule Correction & Exact Fraud/Ban System (All 29 Acce
     assert.equal(pushRes.body.status, 'BLOCKED');
     assert.equal(pushRes.body.isBanned, true);
 
-    // Customer is instantly BANNED & session is TERMINATED
     assert.equal(customerRepo.findById(cust.id).status, 'BANNED');
     assert.equal(sessionRepo.findById(session.id).status, PaymentStatus.EXPIRED);
 
-    // Checkout portal state reports BLOCKED with investigating badge
     const stateRes = await request(`/api/v1/checkout/${session.id}/state`);
     assert.equal(stateRes.status, 200);
     assert.equal(stateRes.body.status, 'BLOCKED');

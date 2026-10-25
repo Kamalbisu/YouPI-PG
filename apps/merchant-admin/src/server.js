@@ -8,7 +8,6 @@ import { getAdminToken, safeEqual } from '@youpi/common';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-/** Security headers applied to every response served by the merchant admin. */
 const BASE_SECURITY_HEADERS = Object.freeze({
   'X-Content-Type-Options': 'nosniff',
   'X-Frame-Options': 'SAMEORIGIN',
@@ -16,22 +15,14 @@ const BASE_SECURITY_HEADERS = Object.freeze({
   'Content-Security-Policy': "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; frame-ancestors 'self'; base-uri 'none'; form-action 'self'; object-src 'none'"
 });
 
-/** True when the caller presented the admin bearer token in constant time (or ?token= on GET SSE). */
 function hasAdminToken(req, url = null, pathname = '') {
   const match = /^Bearer\s+(.+)$/i.exec(req.headers?.['authorization'] || '');
   if (match) {
     return safeEqual(match[1].trim(), getAdminToken());
   }
-  // NOTE: the stream token is deliberately NOT accepted from a query parameter. A
-  // credential in the URL ends up in access logs, browser history and Referer headers.
-  // The dashboards now open the stream with fetch() so the token travels in the
-  // Authorization header only.
   return false;
 }
 
-/**
- * Strips headers a browser must not be able to spoof when relaying to an internal service.
- */
 function sanitizedForwardHeaders(req, targetHost) {
   const headers = { ...req.headers, host: targetHost };
   for (const name of Object.keys(headers)) {
@@ -43,7 +34,6 @@ function sanitizedForwardHeaders(req, targetHost) {
   return headers;
 }
 
-// In production, reliably ensure environment variables from .env are loaded if not already provided
 if (!process.env.BASE_PAYMENT_API_URL && typeof process.loadEnvFile === 'function') {
   try {
     const rootEnv = path.resolve(__dirname, '../../../.env');
@@ -54,12 +44,6 @@ if (!process.env.BASE_PAYMENT_API_URL && typeof process.loadEnvFile === 'functio
 }
 
 export class AdminServer {
-  /**
-   * @param {{
-   *   db?: import('@youpi/db').Database,
-   *   apiBaseUrl?: string
-   * }} options
-   */
   constructor(options = {}) {
     this.db = options.db || getDatabase();
     this.apiBaseUrl = options.apiBaseUrl || process.env.BASE_PAYMENT_API_URL || 'http://localhost:6100';
@@ -75,8 +59,6 @@ export class AdminServer {
     } catch {}
 
     let html = this.template;
-    // Always use empty string '' so client fetch calls hit the merchant admin's own /api proxy!
-    // This completely eliminates CORS errors, tunnel downtime 530s, and cross-origin failures.
     const clientApiBase = '';
     html = html.replaceAll('{{API_BASE_URL}}', clientApiBase);
     return html;
@@ -97,14 +79,12 @@ export class AdminServer {
         return;
       }
 
-      // Health
       if (pathname === '/health') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'UP', service: 'merchant-admin' }));
         return;
       }
 
-      // Admin Tickets API: GET /api/admin/tickets
       if (pathname === '/api/admin/tickets') {
         if (!hasAdminToken(req)) {
           res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -124,9 +104,6 @@ export class AdminServer {
         return;
       }
 
-      // Merged Control Center Supervisor Proxy: /api/services/* and /api/logs/stream -> Control Center on port 8090
-      // Relaying this unauthenticated would republish process control and every service's
-      // stdout/stderr on the internet-facing admin host, so the admin token is required.
       if (pathname.startsWith('/api/services') || pathname === '/api/logs/stream') {
         if (!hasAdminToken(req, url, pathname)) {
           res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -161,7 +138,6 @@ export class AdminServer {
         return;
       }
 
-      // Transparent API Proxy: /api/* -> Payment Core REST API
       if (pathname.startsWith('/api/')) {
         const targetPort = Number(process.env.PAYMENT_API_PORT || 6100);
         const defaultMerchant = this.merchantRepo.getDefault ? this.merchantRepo.getDefault() : (this.merchantRepo.findById('00000000-0000-0000-0000-000000000001') || this.merchantRepo.findAll()[0]);
@@ -193,7 +169,6 @@ export class AdminServer {
         return;
       }
 
-      // Download Android Companion APK
       if (pathname === '/youpi-sms-gateway.apk' || pathname === '/api/v1/admin/sms-gateway/download-apk') {
         const apkCandidates = [
           path.resolve(__dirname, '../public/youpi-sms-gateway.apk'),
@@ -221,7 +196,6 @@ export class AdminServer {
         }
       }
 
-      // Self-hosted UI fonts (CSP blocks third-party font CDNs)
       const fontMatch = /^\/fonts\/(dm-sans|sora)\.woff2$/.exec(pathname);
       if (fontMatch && req.method === 'GET') {
         const fontPath = path.resolve(__dirname, '../public/fonts', `${fontMatch[1]}.woff2`);
@@ -236,7 +210,6 @@ export class AdminServer {
         }
       }
 
-      // Dashboard View: GET / or GET /admin
       if (pathname === '/' || pathname === '/admin') {
         const html = this.renderHtml();
         res.writeHead(200, {

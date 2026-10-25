@@ -95,7 +95,6 @@ describe('Phase 16: Comprehensive Chaos & Concurrency Verification', () => {
   test('CHAOS 1: 10 simultaneous sessions for identical amounts (₹200) acquire slot deterministically', () => {
     const sessionIds = [];
 
-    // Create 10 sessions for identical ₹200.00
     for (let i = 1; i <= 10; i++) {
       const s = sessionRepo.create({
         merchantId: defaultMerchant.id,
@@ -106,22 +105,18 @@ describe('Phase 16: Comprehensive Chaos & Concurrency Verification', () => {
       sessionIds.push(s.id);
     }
 
-    // Simultaneously attempt slot acquisition
     const results = sessionIds.map(id => queueEngine.enqueueOrActivate(id, testAccount.id, 300000));
 
-    // Exactly 1 must be ACTIVE
     const activeResults = results.filter(r => r.status === PaymentStatus.ACTIVE);
     assert.equal(activeResults.length, 1);
     assert.equal(activeResults[0].queuePosition, 0);
 
-    // Exactly 9 must be QUEUED with sequential positions 1 to 9
     const queuedResults = results.filter(r => r.status === PaymentStatus.QUEUED);
     assert.equal(queuedResults.length, 9);
 
     const positions = queuedResults.map(r => r.queuePosition).sort((a, b) => a - b);
     assert.deepEqual(positions, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
 
-    // Active session owns the slot
     const activeAccount = accountRepo.findById(testAccount.id);
     assert.equal(activeAccount.isSlotBusy, true);
     assert.equal(activeAccount.currentActiveSessionId, sessionIds[0]);
@@ -131,7 +126,6 @@ describe('Phase 16: Comprehensive Chaos & Concurrency Verification', () => {
     const activeSession = sessionRepo.findCurrentActiveOrProcessing(testAccount.id);
     assert.ok(activeSession);
 
-    // Simulate 5 browser tabs clicking Payment Done at the exact same instant
     const results = [1, 2, 3, 4, 5].map(() => {
       try {
         return timingEngine.handlePaymentDone(activeSession.id);
@@ -140,12 +134,10 @@ describe('Phase 16: Comprehensive Chaos & Concurrency Verification', () => {
       }
     });
 
-    // All must resolve to status PROCESSING
     for (const r of results) {
       assert.equal(r.status, PaymentStatus.PROCESSING);
     }
 
-    // Session in DB must be PROCESSING
     const checkDb = sessionRepo.findById(activeSession.id);
     assert.equal(checkDb.status, PaymentStatus.PROCESSING);
   });
@@ -155,7 +147,6 @@ describe('Phase 16: Comprehensive Chaos & Concurrency Verification', () => {
     assert.ok(activeSession);
     assert.equal(activeSession.status, PaymentStatus.PROCESSING);
 
-    // Simulate SMS and Gmail seeing the exact same ₹200 transfer (same UTR)
     const utr = 'UTR-CHAOS-9999';
 
     const obsSms = ObservationNormalizer.normalize({
@@ -177,7 +168,6 @@ describe('Phase 16: Comprehensive Chaos & Concurrency Verification', () => {
     const resSms = attributionEngine.processObservation(obsSms);
     const resGmail = attributionEngine.processObservation(obsGmail);
 
-    // Multi-channel flood confirms payment at Level 1, then upgrades to Level 2 (Dual Verification)!
     assert.equal(resSms.attributed, true);
     assert.equal(resSms.outcomeStatus, PaymentStatus.SUCCESS);
     assert.equal(resSms.verificationLevel, 1);
@@ -185,25 +175,21 @@ describe('Phase 16: Comprehensive Chaos & Concurrency Verification', () => {
     assert.equal(resGmail.attributed, true);
     assert.equal(resGmail.verificationLevel, 2);
 
-    // Redundant duplicate from the same source (SMS again) is safely ignored!
     const resSmsDup = attributionEngine.processObservation(obsSms);
     assert.equal(resSmsDup.attributed, false);
     assert.equal(resSmsDup.duplicate, true);
     assert.equal(resSmsDup.outcomeStatus, ObservationAttributionStatus.DUPLICATE_IGNORED);
 
-    // Session transitions to SUCCESS
     const checkDb = sessionRepo.findById(activeSession.id);
     assert.equal(checkDb.status, PaymentStatus.SUCCESS);
   });
 
   test('CHAOS 4: Promotion cascade: completed session immediately unblocks waiting queue in order', () => {
-    // Current slot is now freed from CHAOS 3
     const promotedSession = queueEngine.promoteNext(testAccount.id);
     assert.ok(promotedSession);
     assert.equal(promotedSession.status, PaymentStatus.ACTIVE);
     assert.equal(promotedSession.queuePosition, 0);
 
-    // Remaining queue positions should now be 1 to 8
     const remainingQueued = sessionRepo.findQueuedSessions(testAccount.id);
     assert.equal(remainingQueued.length, 8);
     for (let i = 0; i < remainingQueued.length; i++) {
@@ -212,11 +198,9 @@ describe('Phase 16: Comprehensive Chaos & Concurrency Verification', () => {
   });
 
   test('CHAOS 5: Late observation does not hijack currently active customer session', () => {
-    // Current active session is customer B
     const activeCustomerB = sessionRepo.findCurrentActiveOrProcessing(testAccount.id);
     assert.ok(activeCustomerB);
 
-    // A delayed observation arrives for an earlier customer session that expired
     const expiredCust = customerRepo.create({
       merchantId: defaultMerchant.id,
       phoneNumber: '9000011111',
@@ -234,7 +218,6 @@ describe('Phase 16: Comprehensive Chaos & Concurrency Verification', () => {
     sessionRepo.acquireSlotAtomic(expiredSession.id, testAccount.id, 100);
     sessionRepo.transitionToTerminal(expiredSession.id, PaymentStatus.EXPIRED);
 
-    // Observation arrives matching expired amount (20000n)
     const delayedObs = ObservationNormalizer.normalize({
       source: ObserverSource.GMAIL,
       receivingAccountId: testAccount.id,
@@ -245,12 +228,10 @@ describe('Phase 16: Comprehensive Chaos & Concurrency Verification', () => {
 
     const lateResult = attributionEngine.processObservation(delayedObs);
 
-    // MUST NOT attribute to Active Customer B!
     assert.equal(lateResult.attributed, false);
     assert.equal(lateResult.lateMatch, true);
     assert.equal(lateResult.paymentSessionId, expiredSession.id);
 
-    // Customer B must still be ACTIVE
     const checkB = sessionRepo.findById(activeCustomerB.id);
     assert.equal(checkB.status, PaymentStatus.ACTIVE);
   });

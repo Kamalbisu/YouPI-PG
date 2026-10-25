@@ -17,7 +17,6 @@ async function main() {
     console.log(`[+] Created database directory: ${path.dirname(dbPath)}`);
   }
 
-  // Ensure workspace packages in node_modules/@youpi are linked
   const youpiScopeDir = path.join(rootDir, 'node_modules', '@youpi');
   const packagesDir = path.join(rootDir, 'packages');
   if (fs.existsSync(packagesDir)) {
@@ -42,7 +41,6 @@ async function main() {
     }
   }
 
-  // Import packages/db dynamically
   const migratePath = path.join(rootDir, 'packages', 'db', 'src', 'migrate.js');
   const dbModulePath = path.join(rootDir, 'packages', 'db', 'src', 'database.js');
   
@@ -56,7 +54,6 @@ async function main() {
   console.log(`[✓] Migrations applied successfully!`);
   console.log(`[✓] Default Merchant: ${result.defaultMerchant.businessName} (${result.defaultMerchant.id})`);
   
-  // Verify counts
   const merchantCount = db.queryOne('SELECT COUNT(*) as count FROM merchants');
   const accountsCount = db.queryOne('SELECT COUNT(*) as count FROM payment_receiving_accounts');
   console.log(`[✓] Active Merchants: ${merchantCount.count}, Receiving Accounts: ${accountsCount.count}`);

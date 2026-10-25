@@ -62,7 +62,6 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
   }
 
   test('Issue #23: Checkout state sanitizes branding and never exposes gmailConfig or tunnel command to customer', async () => {
-    // Inject internal credentials into merchant branding
     const merchantId = '00000000-0000-0000-0000-000000000001';
     const dangerousBranding = {
       appName: 'Secure Test Gateway',
@@ -82,7 +81,6 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
       merchantId
     ]);
 
-    // Create a payment session
     const payRes = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -95,7 +93,6 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
     assert.equal(payRes.status, 201);
     const paymentId = payRes.body.paymentId;
 
-    // Fetch public checkout state as a customer
     const stateRes = await request(`/api/v1/checkout/${paymentId}/state`);
     assert.equal(stateRes.status, 200);
 
@@ -104,7 +101,6 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
     assert.equal(branding.appName, 'Secure Test Gateway');
     assert.equal(branding.primaryColor, '#0ea5e9');
 
-    // CRITICAL SECURITY INVARIANT: No credentials leaked to customer
     assert.equal(branding.gmailConfig, undefined, 'gmailConfig must NEVER be leaked to customer checkout state');
     assert.equal(branding.cloudflareTunnelCommand, undefined, 'cloudflareTunnelCommand must NEVER be leaked to customer checkout state');
     assert.equal(branding.webhookSecret, undefined, 'webhookSecret must NEVER be leaked to customer checkout state');
@@ -112,7 +108,6 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
   });
 
   test('Issue #26: COD is disabled by default and rejected unless merchant explicitly opted in', async () => {
-    // Ensure default merchant has NO enabledPaymentMethods set (defaults to UPI only)
     const merchantId = '00000000-0000-0000-0000-000000000001';
     testDb.execute('UPDATE merchants SET branding = ? WHERE id = ?', [
       JSON.stringify({ appName: 'No COD Gateway', sellingMode: 'ONLINE' }),
@@ -129,7 +124,6 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
     });
     assert.equal(payRes.status, 201);
 
-    // Attempting to confirm COD without explicit opt-in must be rejected
     const codRes = await request(`/api/v1/checkout/${payRes.body.paymentId}/confirm-cod`, {
       method: 'POST'
     });
@@ -142,23 +136,19 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
     const account = accountRepo.findByMerchantId('00000000-0000-0000-0000-000000000001')[0];
     assert.ok(account);
 
-    // Simulate busy slot
     testDb.execute('UPDATE payment_receiving_accounts SET is_slot_busy = 1, current_active_session_id = ? WHERE id = ?', [
       'session-active-123',
       account.id
     ]);
 
-    // Updating name or active flag is allowed
     assert.doesNotThrow(() => {
       accountRepo.updateAccount(account.id, { payeeName: 'Updated Name Safe' });
     });
 
-    // Mutating UPI ID while slot is busy MUST THROW
     assert.throws(() => {
       accountRepo.updateAccount(account.id, { upiId: 'hijacked@upi' });
     }, /Cannot change UPI ID while receiving account slot is currently busy/);
 
-    // Reset slot
     testDb.execute('UPDATE payment_receiving_accounts SET is_slot_busy = 0, current_active_session_id = NULL WHERE id = ?', [
       account.id
     ]);
@@ -180,14 +170,12 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
     const originalVpa = stateBefore.body.payeeVpa;
     assert.ok(originalVpa);
 
-    // Now simulate an out-of-band DB mutation to the receiving account's upi_id
     const accountId = stateBefore.body.receivingAccountId;
     testDb.execute('UPDATE payment_receiving_accounts SET upi_id = ? WHERE id = ?', [
       'mutated-afterwards@upi',
       accountId
     ]);
 
-    // The open checkout session must still render the original snapshot VPA!
     const stateAfter = await request(`/api/v1/checkout/${paymentId}/state`);
     assert.equal(stateAfter.body.payeeVpa, originalVpa, 'Checkout session must render immutable snapshot VPA, not live mutated VPA');
   });
@@ -266,7 +254,6 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
     });
     apiInstance.app.context.queueEngine.enqueueOrActivate(session.id, receivingAccountId);
 
-    // Personal numeric SMS sender (+919876543210) attempts to inject payment
     const res = await request('/api/v1/pollers/events', {
       method: 'POST',
       body: {
@@ -284,7 +271,6 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
     assert.equal(res.body.status, 'REJECTED');
     assert.equal(res.body.reason, 'PERSONAL_SMS_REJECTED');
 
-    // Confirm session remains ACTIVE (not marked SUCCESS)
     const freshSession = sessionRepo.findById(session.id);
     assert.equal(freshSession.status, PaymentStatus.ACTIVE);
   });
@@ -295,7 +281,6 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
     const receivingAccountId = '00000000-0000-0000-0000-000000000002';
     const merchantId = '00000000-0000-0000-0000-000000000001';
 
-    // 1. Session 1 is already completed with UTR 123456123456
     const priorObs = obsRepo.create({
       source: 'SMS',
       receivingAccountId,
@@ -316,7 +301,6 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
     testDb.execute("UPDATE payment_sessions SET status = 'EXPIRED' WHERE receiving_account_id = ? AND status IN ('ACTIVE', 'PROCESSING')", [receivingAccountId]);
     testDb.execute('UPDATE payment_receiving_accounts SET is_slot_busy = 0, current_active_session_id = NULL WHERE id = ?', [receivingAccountId]);
 
-    // 2. Session 2 is currently active for ₹100
     const s2 = sessionRepo.create({
       merchantId,
       receivingAccountId,
@@ -325,7 +309,6 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
     });
     apiInstance.app.context.queueEngine.enqueueOrActivate(s2.id, receivingAccountId);
 
-    // 3. Ingest observation reusing the same UTR
     const res = await request('/api/v1/pollers/events', {
       method: 'POST',
       body: {
@@ -344,7 +327,6 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
     assert.equal(res.body.status, 'REJECTED');
     assert.equal(res.body.reason, 'REFERENCE_ALREADY_USED');
 
-    // Confirm s2 is not attributed
     const freshS2 = sessionRepo.findById(s2.id);
     assert.equal(freshS2.status, PaymentStatus.ACTIVE);
   });
@@ -367,13 +349,11 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
     assert.equal(res.status, 400);
     assert.match(res.body.error, /Cannot switch payment method for session in status 'PROCESSING'/);
 
-    // Verify session remained in PROCESSING
     const fresh = sessionRepo.findById(s.id);
     assert.equal(fresh.status, PaymentStatus.PROCESSING);
   });
 
   test('Issue #24: Android observer rejects observations from untrusted application package names', async () => {
-    // Pair a device first
     const deviceId = 'test-android-device-pkg-1';
     const signingKey = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
     testDb.execute(`
@@ -451,8 +431,6 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
       mobileNumber: targetMobile
     });
 
-    // An unanchored %clean10 query would match if another number ends in 9876500001
-    // Exact matching must return the right customer and not match partials
     const foundExact = customerRepo.findByMobile('9876500001');
     assert.ok(foundExact);
     assert.equal(foundExact.id, 'cust-prefix-test-1');
@@ -461,9 +439,8 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
     assert.ok(foundWithPrefix);
     assert.equal(foundWithPrefix.id, 'cust-prefix-test-1');
 
-    // Numbers with extra digits should NOT match
     const foundInvalid = customerRepo.findByMobile('009876500001');
-    assert.equal(foundInvalid?.id, 'cust-prefix-test-1'); // 00 stripped or clean10 matches
+    assert.equal(foundInvalid?.id, 'cust-prefix-test-1');
   });
 
   test('Issue #7: Retrying a terminal payment session preserves exact orderId without -R suffix', async () => {
@@ -477,10 +454,8 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
     assert.equal(payRes1.status, 201);
     assert.equal(payRes1.body.orderId, 'ORDER-EXACT-RETRY-01');
 
-    // Manually transition first attempt to EXPIRED
     testDb.execute("UPDATE payment_sessions SET status = 'EXPIRED' WHERE id = ?", [payRes1.body.paymentId]);
 
-    // Customer retries payment for the same order
     const payRes2 = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -489,7 +464,6 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
       }
     });
     assert.equal(payRes2.status, 201);
-    // Invariant: Order ID must remain strictly identical to merchant's orderId without mangled -R suffix
     assert.equal(payRes2.body.orderId, 'ORDER-EXACT-RETRY-01');
     assert.notEqual(payRes2.body.paymentId, payRes1.body.paymentId);
   });
@@ -532,7 +506,6 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
       method: 'UPI'
     });
 
-    // Simulate attributed bank observation with UTR
     const obsId = crypto.randomUUID();
     testDb.execute(`
       INSERT INTO payment_observations (id, receiving_account_id, source, amount_paise, bank_reference_number, fingerprint_hash, observed_at)
@@ -552,7 +525,6 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
     assert.equal(receivedHook.body.utr, '429182736451');
     assert.ok(receivedHook.body.attemptId);
 
-    // Verify HMAC signature
     const sig = receivedHook.headers['x-gateway-signature'].replace('sha256=', '');
     const ts = receivedHook.headers['x-gateway-timestamp'];
     assert.ok(ts);
@@ -620,7 +592,6 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
       status: PaymentStatus.SUCCESS
     });
 
-    // Unauthenticated request without X-Merchant-Key or admin token
     const url = new URL(`/api/v1/orders/${orderId}/cod`, baseUrl);
     const rawRes = await new Promise((resolve, reject) => {
       const req = http.request(url, { method: 'GET' }, (res) => {
@@ -635,7 +606,6 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
     assert.equal(rawRes.status, 200);
     assert.equal(rawRes.body.customer, null);
 
-    // Authenticated request with X-Merchant-Key
     const merchant = new MerchantRepository(testDb).findById(merchantId);
     const authRes = await new Promise((resolve, reject) => {
       const req = http.request(url, {
@@ -661,9 +631,6 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
     const dedicatedApiKey = 'mk_live_dedicated_merchant_api_key_6369';
     merchantRepo.update(merchantId, { apiKey: dedicatedApiKey });
 
-    // 1. Completely unauthenticated request naming the DEFAULT merchant -> allowed.
-    //    The public one-script integration (the browser SDK) cannot carry a merchant
-    //    secret, so this path has to stay open for the gateway's own merchant.
     const url = new URL('/api/v1/payments', baseUrl);
     const unauthRes = await new Promise((resolve, reject) => {
       const req = http.request(url, {
@@ -680,8 +647,6 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
     });
     assert.equal(unauthRes.status, 201);
 
-    // 1b. An unauthenticated request naming a DIFFERENT merchant -> 401, so an anonymous
-    //     caller still cannot inject sessions into another tenant.
     const otherMerchant = merchantRepo.create({
       businessName: 'Other Tenant',
       slug: 'other-tenant',
@@ -704,7 +669,6 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
     assert.equal(crossTenantRes.status, 401);
     assert.equal(crossTenantRes.body.code, 'MISSING_MERCHANT_KEY');
 
-    // 2. Request with valid dedicated API key (verified against api_key_hash) -> 201
     const orderId = `KEY-OK-${Date.now()}`;
     const keyRes = await new Promise((resolve, reject) => {
       const req = http.request(url, {
@@ -726,7 +690,6 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
     assert.equal(keyRes.status, 201);
     assert.equal(keyRes.body.orderId, orderId);
 
-    // 3. Reusing the same orderId with a different amount -> 409 ORDER_AMOUNT_MISMATCH
     const mismatchRes = await request('/api/v1/payments', {
       method: 'POST',
       headers: { 'x-merchant-id': merchantId, 'x-merchant-key': dedicatedApiKey },
@@ -735,7 +698,6 @@ describe('Gateway Hardening & Invariant Protection Test Suite (#23, #25, #26, #2
     assert.equal(mismatchRes.status, 409);
     assert.equal(mismatchRes.body.code, 'ORDER_AMOUNT_MISMATCH');
 
-    // 4. In production mode, non-admin caller with autoActivate: true -> 403 AUTOACTIVATE_FORBIDDEN
     const prevEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = 'production';
     try {

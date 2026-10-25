@@ -33,7 +33,6 @@ public class SmsReceiver extends BroadcastReceiver {
 
             Log.i(TAG, "Captured incoming SMS from [" + sender + "]: " + (body != null ? body.length() : 0) + " chars");
 
-            // Dispatch to YouPI Gateway in asynchronous worker thread
             new Thread(new Runnable() {
                 @Override
                 public void run() {

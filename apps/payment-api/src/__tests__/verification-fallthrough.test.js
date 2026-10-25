@@ -68,7 +68,6 @@ describe('Verification Pipeline & Fall-Through Protection (#22)', () => {
     });
     apiInstance.app.context.queueEngine.enqueueOrActivate(session.id, receivingAccountId);
 
-    // Personal numeric SMS sender (+919876543210) attempts to inject payment
     const res = await request('/api/v1/pollers/events', {
       method: 'POST',
       body: {
@@ -86,7 +85,6 @@ describe('Verification Pipeline & Fall-Through Protection (#22)', () => {
     assert.equal(res.body.status, 'REJECTED');
     assert.equal(res.body.reason, 'PERSONAL_SMS_REJECTED');
 
-    // Confirm session remains ACTIVE (not marked SUCCESS)
     const freshSession = sessionRepo.findById(session.id);
     assert.equal(freshSession.status, PaymentStatus.ACTIVE);
   });
@@ -97,7 +95,6 @@ describe('Verification Pipeline & Fall-Through Protection (#22)', () => {
     const receivingAccountId = '00000000-0000-0000-0000-000000000002';
     const merchantId = '00000000-0000-0000-0000-000000000001';
 
-    // 1. Session 1 is already completed with UTR 123456123456
     const priorObs = obsRepo.create({
       source: 'SMS',
       receivingAccountId,
@@ -118,7 +115,6 @@ describe('Verification Pipeline & Fall-Through Protection (#22)', () => {
     testDb.execute("UPDATE payment_sessions SET status = 'EXPIRED' WHERE receiving_account_id = ? AND status IN ('ACTIVE', 'PROCESSING')", [receivingAccountId]);
     testDb.execute('UPDATE payment_receiving_accounts SET is_slot_busy = 0, current_active_session_id = NULL WHERE id = ?', [receivingAccountId]);
 
-    // 2. Session 2 is currently active for ₹100
     const s2 = sessionRepo.create({
       merchantId,
       receivingAccountId,
@@ -127,7 +123,6 @@ describe('Verification Pipeline & Fall-Through Protection (#22)', () => {
     });
     apiInstance.app.context.queueEngine.enqueueOrActivate(s2.id, receivingAccountId);
 
-    // 3. Ingest observation reusing the same UTR
     const res = await request('/api/v1/pollers/events', {
       method: 'POST',
       body: {
@@ -146,7 +141,6 @@ describe('Verification Pipeline & Fall-Through Protection (#22)', () => {
     assert.equal(res.body.status, 'REJECTED');
     assert.equal(res.body.reason, 'REFERENCE_ALREADY_USED');
 
-    // Confirm s2 is not attributed
     const freshS2 = sessionRepo.findById(s2.id);
     assert.equal(freshS2.status, PaymentStatus.ACTIVE);
   });
@@ -217,7 +211,6 @@ describe('Verification Pipeline & Fall-Through Protection (#22)', () => {
     const customerRepo = new CustomerRepository(testDb);
     const customer = customerRepo.create({ fullName: 'Dup Customer', mobileNumber: '9876543210' });
 
-    // 1. Create a session and transition INITIATED -> ACTIVE
     const session = sessionRepo.create({
       merchantId,
       customerId: customer.id,
@@ -240,7 +233,6 @@ describe('Verification Pipeline & Fall-Through Protection (#22)', () => {
 
     sessionRepo.recordVerificationSource(session.id, 'ANDROID_OBSERVER', obs1.id, { finalizeSuccess: true });
 
-    // 2. Attribution engine with ticketRepo
     let duplicateEventFired = false;
     const attribution = new AttributionEngine({
       sessionRepo,
@@ -255,7 +247,6 @@ describe('Verification Pipeline & Fall-Through Protection (#22)', () => {
       }
     });
 
-    // 3. Second incoming observation for the same amount but different UTR (222222222222)
     const normObs2 = {
       source: 'ANDROID_OBSERVER',
       receivingAccountId: recAcc.id,
@@ -271,7 +262,6 @@ describe('Verification Pipeline & Fall-Through Protection (#22)', () => {
     assert.equal(result.attributed, false);
     assert.ok(duplicateEventFired, 'PAYMENT.DUPLICATE_DETECTED event must fire');
 
-    // Verify support ticket was created
     const tickets = testDb.query('SELECT * FROM support_tickets WHERE payment_id = ?', [session.id]);
     assert.ok(tickets.length >= 1, 'Reconciliation support ticket must be raised for duplicate payment');
     assert.match(tickets[0].subject, /DUPLICATE PAYMENT DETECTED/);
@@ -289,7 +279,6 @@ describe('Verification Pipeline & Fall-Through Protection (#22)', () => {
       provider: 'AXIS_BANK'
     });
 
-    // Session whose initial 5-min active timer expired, but processing timer has 3 minutes remaining
     const session = sessionRepo.create({
       merchantId,
       receivingAccountId: recAcc.id,
@@ -360,7 +349,6 @@ describe('Verification Pipeline & Fall-Through Protection (#22)', () => {
       VALUES (?, ?, 'ANDROID_OBSERVER', 35000, '555666777888', ?, datetime('now'))
     `, [obsId, recAcc.id, `fp_recover_attrib_${Date.now()}`]);
 
-    // Set session in PROCESSING status with overdue processing_expires_at but already attributed
     const overdueTime = new Date(Date.now() - 10000).toISOString();
     testDb.execute(`
       UPDATE payment_sessions
@@ -408,7 +396,6 @@ describe('Verification Pipeline & Fall-Through Protection (#22)', () => {
     });
     apiInstance.app.context.queueEngine.enqueueOrActivate(session.id, receivingAccountId);
 
-    // Caller attempts to bypass pipeline by sending amount and UTR without rawText
     const res = await request('/api/v1/pollers/events', {
       method: 'POST',
       body: {
@@ -426,7 +413,6 @@ describe('Verification Pipeline & Fall-Through Protection (#22)', () => {
     assert.equal(res.body.status, 'REJECTED');
     assert.equal(res.body.reason, 'MISSING_RAW_TEXT');
 
-    // Confirm session is NOT marked SUCCESS
     const freshSession = sessionRepo.findById(session.id);
     assert.equal(freshSession.status, PaymentStatus.ACTIVE);
   });
@@ -442,7 +428,6 @@ describe('Verification Pipeline & Fall-Through Protection (#22)', () => {
       provider: 'AXIS_BANK'
     });
 
-    // Ingest observation for an account with no active or processing session -> Stage 4 returns UNRESOLVED
     const res = await request('/api/v1/pollers/events', {
       method: 'POST',
       body: {
@@ -466,7 +451,6 @@ describe('Verification Pipeline & Fall-Through Protection (#22)', () => {
     const accountRepo = new ReceivingAccountRepository(testDb);
     const merchantId = '00000000-0000-0000-0000-000000000001';
 
-    // Account A and Account B
     const recAcc1 = accountRepo.create({
       merchantId,
       upiId: `race1-${crypto.randomUUID().slice(0, 8)}@okaxis`,
@@ -498,7 +482,6 @@ describe('Verification Pipeline & Fall-Through Protection (#22)', () => {
 
     const sharedUtr = `RACEUTR${Date.now()}`.slice(0, 12).padEnd(12, '0');
 
-    // Fire two requests concurrently with the same UTR
     const [res1, res2] = await Promise.all([
       request('/api/v1/pollers/events', {
         method: 'POST',
@@ -537,7 +520,6 @@ describe('Verification Pipeline & Fall-Through Protection (#22)', () => {
     assert.equal(failedRes.body.status, 'REJECTED');
     assert.equal(failedRes.body.reason, 'REFERENCE_ALREADY_USED');
 
-    // Verify exactly one session is SUCCESS and one is ACTIVE
     const s1Fresh = sessionRepo.findById(s1.id);
     const s2Fresh = sessionRepo.findById(s2.id);
     const sessionStatuses = [s1Fresh.status, s2Fresh.status].sort();

@@ -6,7 +6,6 @@ import { isObserverRequest } from '../auth-guard.js';
 import { globalTunnelManager } from '../services/tunnel-manager.js';
 import { formatQrDataUrl } from '../services/whatsapp-berry.service.js';
 
-/** Placeholder returned in place of stored secrets; saving it back leaves the stored value unchanged. */
 const MASKED_SECRET = '••••••••';
 const isMaskedSecret = (value) => typeof value === 'string' && value.includes('•');
 
@@ -55,8 +54,6 @@ function resolveSellingModeAndMethods(body, currentBranding = {}) {
     }
   }
 
-  // Strictly filter based on selling mode:
-  // UPI is always enabled in both modes! Turning it off isn't allowed!
   const sanitized = [PaymentMethod.UPI];
   if (sellingMode === SellingMode.ONLINE) {
     if (rawMethods.includes(PaymentMethod.COD) && codOn) {
@@ -86,18 +83,6 @@ function resolveSellingModeAndMethods(body, currentBranding = {}) {
   };
 }
 
-/**
- * Registers merchant admin dashboard routes.
- * @param {HttpServer} server
- * @param {{
- *   db: import('@youpi/db').Database,
- *   sessionRepo: import('@youpi/db').PaymentSessionRepository,
- *   accountRepo: import('@youpi/db').ReceivingAccountRepository,
- *   merchantRepo: import('@youpi/db').MerchantRepository,
- *   auditRepo: import('@youpi/db').AuditLogRepository,
- *   queueEngine: import('@youpi/core').QueueEngine
- * }} ctx
- */
 export function registerAdminRoutes(server, ctx) {
   const resolveMerchant = (req, explicitId = null) => {
     const targetId = explicitId || (req ? (req.query?.merchantId || req.headers?.['x-merchant-id']) : null);
@@ -110,7 +95,6 @@ export function registerAdminRoutes(server, ctx) {
       : (ctx.merchantRepo.findById('00000000-0000-0000-0000-000000000001') || ctx.merchantRepo.findAll()[0]);
   };
 
-  // GET /api/v1/admin/queue
   server.get('/api/v1/admin/queue', async (req, res) => {
     const merchantId = req.query.merchantId || req.headers?.['x-merchant-id'] || '00000000-0000-0000-0000-000000000001';
     let account = ctx.accountRepo.findActiveForMerchant(merchantId);
@@ -164,14 +148,13 @@ export function registerAdminRoutes(server, ctx) {
     });
   });
 
-  // GET /api/v1/admin/observers
   server.get('/api/v1/admin/observers', async (req, res) => {
     const devices = ctx.db.query('SELECT * FROM android_devices ORDER BY created_at DESC');
     const now = Date.now();
 
     const androidHealth = devices.map(d => {
       const lastSeen = d.last_heartbeat_at ? new Date(d.last_heartbeat_at).getTime() : 0;
-      const isConnected = (now - lastSeen) < 180000; // Connected if heartbeat within 3 mins
+      const isConnected = (now - lastSeen) < 180000;
       return {
         id: d.id,
         name: d.device_name,
@@ -182,7 +165,6 @@ export function registerAdminRoutes(server, ctx) {
       };
     });
 
-    // Query live Google Messages browser automator status
     let smsStatus = { status: 'STANDBY', isPaired: false, messagesObserved: 0, isRunning: false };
     try {
       const smsPort = Number(process.env.SMS_OBSERVER_PORT || 6002);
@@ -195,7 +177,6 @@ export function registerAdminRoutes(server, ctx) {
       }
     } catch {}
 
-    // Query live Gmail browser automator status
     let gmailStatus = { status: 'STANDBY', isLoggedIn: false, emailsObserved: 0, isRunning: false };
     try {
       const gmailPort = Number(process.env.GMAIL_OBSERVER_PORT || 6003);
@@ -230,7 +211,6 @@ export function registerAdminRoutes(server, ctx) {
     });
   });
 
-  // GET /api/v1/admin/payments
   server.get('/api/v1/admin/payments', async (req, res) => {
     const merchantId = req.query.merchantId || '00000000-0000-0000-0000-000000000001';
     const limit = parseInt(req.query.limit || '50', 10);
@@ -253,7 +233,6 @@ export function registerAdminRoutes(server, ctx) {
     });
   });
 
-  // GET /api/v1/admin/tickets
   server.get('/api/v1/admin/tickets', async (req, res) => {
     const merchantId = req.query.merchantId || '00000000-0000-0000-0000-000000000001';
     if (!ctx.ticketRepo) {
@@ -264,7 +243,6 @@ export function registerAdminRoutes(server, ctx) {
     HttpServer.json(res, 200, { tickets });
   });
 
-  // POST /api/v1/admin/tickets/:id/resolve
   server.post('/api/v1/admin/tickets/:id/resolve', async (req, res, params) => {
     if (!ctx.ticketRepo) {
       HttpServer.json(res, 404, { error: 'Ticket repo not configured' });
@@ -274,7 +252,6 @@ export function registerAdminRoutes(server, ctx) {
     HttpServer.json(res, 200, { success: true, ticket });
   });
 
-  // POST /api/v1/admin/counter-confirm
   server.post('/api/v1/admin/counter-confirm', async (req, res) => {
     const body = await HttpServer.parseBody(req);
     const { paymentId, operatorId, method } = body;
@@ -290,8 +267,6 @@ export function registerAdminRoutes(server, ctx) {
       return;
     }
 
-    // Manual confirmation is only valid for counter payments still awaiting settlement.
-    // A UPI session must only reach SUCCESS through the verification engine.
     if (session.method !== PaymentMethod.CASH_COUNTER && session.method !== PaymentMethod.CARD_COUNTER) {
       HttpServer.json(res, 400, { error: `Manual confirmation is only allowed for counter payments (session method is '${session.method}').` });
       return;
@@ -341,7 +316,6 @@ export function registerAdminRoutes(server, ctx) {
     });
   });
 
-  // POST /api/v1/admin/counter-decline (Declines/Rejects manual cash or card counter payment)
   server.post('/api/v1/admin/counter-decline', async (req, res) => {
     const body = await HttpServer.parseBody(req);
     const { paymentId, operatorId, reason } = body;
@@ -404,7 +378,6 @@ export function registerAdminRoutes(server, ctx) {
     });
   });
 
-  // GET /api/v1/admin/upi-settings
   server.get('/api/v1/admin/upi-settings', async (req, res) => {
     let merchant = resolveMerchant(req);
 
@@ -432,7 +405,6 @@ export function registerAdminRoutes(server, ctx) {
     });
   });
 
-  // GET /api/v1/admin/upi-accounts (List all merchant VPAs)
   server.get('/api/v1/admin/upi-accounts', async (req, res) => {
     let merchant = resolveMerchant(req);
 
@@ -457,7 +429,6 @@ export function registerAdminRoutes(server, ctx) {
     });
   });
 
-  // POST /api/v1/admin/upi-accounts (Add a new VPA)
   server.post('/api/v1/admin/upi-accounts', async (req, res) => {
     const body = await HttpServer.parseBody(req);
     const { upiId, payeeName, isActive } = body;
@@ -508,7 +479,6 @@ export function registerAdminRoutes(server, ctx) {
     });
   });
 
-  // POST /api/v1/admin/upi-accounts/:id/activate (Atomically activate VPA, deactivating all others)
   server.post('/api/v1/admin/upi-accounts/:id/activate', async (req, res, params) => {
     const account = ctx.accountRepo.findById(params.id);
     if (!account) {
@@ -537,7 +507,6 @@ export function registerAdminRoutes(server, ctx) {
     });
   });
 
-  // POST /api/v1/admin/upi-accounts/:id/toggle (Toggle VPA active state)
   server.post('/api/v1/admin/upi-accounts/:id/toggle', async (req, res, params) => {
     const account = ctx.accountRepo.findById(params.id);
     if (!account) {
@@ -567,7 +536,6 @@ export function registerAdminRoutes(server, ctx) {
     });
   });
 
-  // DELETE /api/v1/admin/upi-accounts/:id (Delete VPA)
   server.delete('/api/v1/admin/upi-accounts/:id', async (req, res, params) => {
     const account = ctx.accountRepo.findById(params.id);
     if (!account) {
@@ -591,7 +559,6 @@ export function registerAdminRoutes(server, ctx) {
     }
   });
 
-  // POST /api/v1/admin/upi-settings (Custom UPI ID addition & persistence)
   server.post('/api/v1/admin/upi-settings', async (req, res) => {
     const body = await HttpServer.parseBody(req);
     const { upiId, payeeName, isMerchantEnabled } = body;
@@ -645,7 +612,6 @@ export function registerAdminRoutes(server, ctx) {
     });
   });
 
-  // GET /api/v1/admin/all-settings (Unified Settings Read)
   server.get('/api/v1/admin/all-settings', async (req, res) => {
     let merchant = resolveMerchant(req);
 
@@ -699,7 +665,6 @@ export function registerAdminRoutes(server, ctx) {
     });
   });
 
-  // POST /api/v1/admin/all-settings (Atomic Unified Settings Write)
   server.post('/api/v1/admin/all-settings', async (req, res) => {
     const body = await HttpServer.parseBody(req);
     let merchant = resolveMerchant(req, body.merchantId);
@@ -709,7 +674,6 @@ export function registerAdminRoutes(server, ctx) {
       return;
     }
 
-    // 1. Update UPI VPA if provided
     let account = ctx.accountRepo.findActiveForMerchant(merchant.id);
     if (body.upiId && body.upiId.trim()) {
       if (!isValidVpa(body.upiId.trim())) {
@@ -719,7 +683,6 @@ export function registerAdminRoutes(server, ctx) {
       account = ctx.accountRepo.upsertActiveForMerchant(merchant.id, body.upiId.trim(), body.payeeName?.trim() || body.businessName?.trim() || merchant.businessName);
     }
 
-    // 2. Non-Destructive Deep Merge for Branding & Merchant Properties
     const updates = {};
     if (body.businessName && body.businessName.trim()) {
       updates.businessName = body.businessName.trim();
@@ -826,7 +789,6 @@ export function registerAdminRoutes(server, ctx) {
     });
   });
 
-  // GET /api/v1/admin/merchant-settings
   server.get('/api/v1/admin/merchant-settings', async (req, res) => {
     let merchant = req.query.merchantId ? ctx.merchantRepo.findById(req.query.merchantId) : (req.headers['x-merchant-id'] ? ctx.merchantRepo.findById(req.headers['x-merchant-id']) : null);
     if (!merchant) merchant = ctx.merchantRepo.getDefault ? ctx.merchantRepo.getDefault() : (ctx.merchantRepo.findById('00000000-0000-0000-0000-000000000001') || ctx.merchantRepo.findAll()[0]);
@@ -913,7 +875,6 @@ export function registerAdminRoutes(server, ctx) {
     });
   });
 
-  // POST /api/v1/admin/merchant-settings
   server.post('/api/v1/admin/merchant-settings', async (req, res) => {
     const body = await HttpServer.parseBody(req);
     let merchant = body.merchantId ? ctx.merchantRepo.findById(body.merchantId) : (req.headers['x-merchant-id'] ? ctx.merchantRepo.findById(req.headers['x-merchant-id']) : null);
@@ -1075,7 +1036,6 @@ export function registerAdminRoutes(server, ctx) {
     });
   });
 
-  // GET /api/v1/admin/cod-orders (List Cash on Delivery orders)
   server.get('/api/v1/admin/cod-orders', async (req, res) => {
     let merchant = req.query.merchantId ? ctx.merchantRepo.findById(req.query.merchantId) : null;
     if (!merchant) merchant = ctx.merchantRepo.findAll()[0];
@@ -1123,14 +1083,10 @@ export function registerAdminRoutes(server, ctx) {
     });
   });
 
-  // GET /api/v1/admin/stream (SSE for Live Admin Counter & Queue Events)
   server.get('/api/v1/admin/stream', async (req, res) => {
     server.initSse('admin_counter_events', res);
   });
 
-  // --- WHATSAPP BERRY PROTOCOL MERCHANT SESSION CONFIGURATION ---
-
-  // GET /api/v1/admin/whatsapp/status
   server.get('/api/v1/admin/whatsapp/status', async (req, res) => {
     const berry = ctx.whatsappBerryService;
     if (!berry) {
@@ -1173,7 +1129,6 @@ export function registerAdminRoutes(server, ctx) {
     });
   });
 
-  // GET /api/v1/admin/whatsapp/qr
   server.get('/api/v1/admin/whatsapp/qr', async (req, res) => {
     const berry = ctx.whatsappBerryService;
     if (!berry) {
@@ -1204,7 +1159,6 @@ export function registerAdminRoutes(server, ctx) {
     });
   });
 
-  // POST /api/v1/admin/whatsapp/reconnect - Refresh Pairing QR or Reset Session
   server.post('/api/v1/admin/whatsapp/reconnect', async (req, res) => {
     const berry = ctx.whatsappBerryService;
     if (!berry) {
@@ -1250,7 +1204,6 @@ export function registerAdminRoutes(server, ctx) {
     }
   });
 
-  // POST /api/v1/admin/whatsapp/pairing-code - Request 8-digit Pairing Code via Phone Number (bypasses QR rate limit)
   server.post('/api/v1/admin/whatsapp/pairing-code', async (req, res) => {
     const berry = ctx.whatsappBerryService;
     if (!berry) {
@@ -1280,7 +1233,6 @@ export function registerAdminRoutes(server, ctx) {
     }
   });
 
-  // POST /api/v1/admin/whatsapp/disconnect - Disconnect Active Session and Wipe Credentials
   server.post('/api/v1/admin/whatsapp/disconnect', async (req, res) => {
     const berry = ctx.whatsappBerryService;
     if (!berry) {
@@ -1296,7 +1248,6 @@ export function registerAdminRoutes(server, ctx) {
     }
   });
 
-  // POST /api/v1/admin/whatsapp/test-message - Send Test WhatsApp OTP / Alert
   server.post('/api/v1/admin/whatsapp/test-message', async (req, res) => {
     const berry = ctx.whatsappBerryService;
     if (!berry) {
@@ -1321,13 +1272,11 @@ export function registerAdminRoutes(server, ctx) {
     }
   });
 
-  // POST /api/v1/admin/queue/clear - Clear All Active & Waiting UPI Queue Sessions and Expire
   server.post('/api/v1/admin/queue/clear', async (req, res) => {
     const body = await HttpServer.parseBody(req).catch(() => ({}));
     const merchantId = body.merchantId || req.query.merchantId || '00000000-0000-0000-0000-000000000001';
 
     try {
-      // Find all non-terminal UPI sessions (INITIATED, QUEUED, ACTIVE, PROCESSING) so they are ALL immediately expired!
       const sessionsToExpire = ctx.db.query(`
         SELECT id, receiving_account_id FROM payment_sessions
         WHERE status IN ('INITIATED', 'QUEUED', 'ACTIVE', 'PROCESSING')
@@ -1340,7 +1289,6 @@ export function registerAdminRoutes(server, ctx) {
         server.broadcastSse(s.id, 'state_change', { status: PaymentStatus.EXPIRED });
       }
 
-      // Free all receiving account slots
       ctx.db.execute(`
         UPDATE payment_receiving_accounts
         SET is_slot_busy = 0, current_active_session_id = NULL
@@ -1368,7 +1316,6 @@ export function registerAdminRoutes(server, ctx) {
     }
   });
 
-  // GET /api/v1/admin/counter-pending - 5-Second Realtime Poller for In-Store Cash/Card Counter Desk
   server.get('/api/v1/admin/counter-pending', async (req, res) => {
     const merchantId = req.query.merchantId;
     const query = merchantId
@@ -1402,18 +1349,15 @@ export function registerAdminRoutes(server, ctx) {
     });
   });
 
-  // GET /api/v1/admin/tunnel/status - Status & logs of Cloudflare Tunnel
   server.get('/api/v1/admin/tunnel/status', async (req, res) => {
     HttpServer.json(res, 200, globalTunnelManager.getStatus());
   });
 
-  // POST /api/v1/admin/tunnel/start - Start user-dropped Cloudflare Tunnel command
   server.post('/api/v1/admin/tunnel/start', async (req, res) => {
     const body = await HttpServer.parseBody(req).catch(() => ({}));
     let command = body.command;
 
     if (!command || !command.trim()) {
-      // Fallback to stored tunnel command in merchant branding
       const merchant = resolveMerchant(req);
       command = merchant?.branding?.cloudflareTunnelCommand;
     }
@@ -1424,7 +1368,6 @@ export function registerAdminRoutes(server, ctx) {
     }
 
     try {
-      // Save command in merchant branding if provided
       const merchant = resolveMerchant(req);
       if (merchant && body.command) {
         const currentBranding = merchant.branding || {};
@@ -1440,13 +1383,11 @@ export function registerAdminRoutes(server, ctx) {
     }
   });
 
-  // POST /api/v1/admin/tunnel/stop - Stop running Cloudflare Tunnel
   server.post('/api/v1/admin/tunnel/stop', async (req, res) => {
     const status = globalTunnelManager.stop();
     HttpServer.json(res, 200, { success: true, ...status });
   });
 
-  // GET /api/v1/admin/gmail/credentials
   server.get('/api/v1/admin/gmail/credentials', async (req, res) => {
     let merchant = resolveMerchant(req, req.query?.merchantId);
     const merchantId = merchant ? merchant.id : (req.query?.merchantId || '00000000-0000-0000-0000-000000000001');
@@ -1456,9 +1397,6 @@ export function registerAdminRoutes(server, ctx) {
     const redirectUri = resolveGmailRedirectUri(branding);
     const hasToken = Boolean(gmailConfig.refreshToken && gmailConfig.refreshToken.trim());
 
-    // Only the Gmail observer process (observer token) receives the real secrets. Everyone else,
-    // including the admin UI, gets a masked placeholder plus has* flags, so a leaked admin token
-    // or an XSS in the panel cannot exfiltrate the Google OAuth credentials.
     const reveal = isObserverRequest(req);
     const secretOut = (value) => (reveal ? (value || '') : (value ? MASKED_SECRET : ''));
     const clientSecret = secretOut(gmailConfig.clientSecret);
@@ -1494,7 +1432,6 @@ export function registerAdminRoutes(server, ctx) {
     });
   });
 
-  // GET /api/v1/admin/gmail/oauth/start (Pre-builds canonical Google OAuth Login URL)
   server.get('/api/v1/admin/gmail/oauth/start', async (req, res) => {
     let merchant = resolveMerchant(req, req.query?.merchantId);
     const branding = merchant?.branding || {};
@@ -1519,7 +1456,6 @@ export function registerAdminRoutes(server, ctx) {
     });
   });
 
-  // POST /api/v1/admin/gmail/disconnect (Cleanly unlinks Google account and clears stored tokens)
   server.post('/api/v1/admin/gmail/disconnect', async (req, res) => {
     const body = await HttpServer.parseBody(req).catch(() => ({}));
     let merchant = resolveMerchant(req, body.merchantId);
@@ -1550,7 +1486,6 @@ export function registerAdminRoutes(server, ctx) {
 
     ctx.merchantRepo.update(merchantId, { branding: newBranding });
 
-    // Sync to all merchants for consistency
     for (const m of ctx.merchantRepo.findAll()) {
       if (m.id !== merchantId) {
         ctx.merchantRepo.update(m.id, {
@@ -1559,7 +1494,6 @@ export function registerAdminRoutes(server, ctx) {
       }
     }
 
-    // Stop poller in observer service
     try {
       await fetch(`http://127.0.0.1:${process.env.GMAIL_OBSERVER_PORT || 6003}/stop`, { method: 'POST' }).catch(() => {});
     } catch {}
@@ -1571,7 +1505,6 @@ export function registerAdminRoutes(server, ctx) {
     });
   });
 
-  // POST /api/v1/admin/gmail/credentials
   server.post('/api/v1/admin/gmail/credentials', async (req, res) => {
     const body = await HttpServer.parseBody(req).catch(() => ({}));
     let merchant = resolveMerchant(req, body.merchantId);
@@ -1604,7 +1537,6 @@ export function registerAdminRoutes(server, ctx) {
 
     ctx.merchantRepo.update(merchantId, { branding: newBranding });
 
-    // Sync to all merchants for consistency
     for (const m of ctx.merchantRepo.findAll()) {
       if (m.id !== merchantId) {
         ctx.merchantRepo.update(m.id, {
@@ -1620,7 +1552,6 @@ export function registerAdminRoutes(server, ctx) {
     });
   });
 
-  // POST /api/v1/admin/gmail/test
   server.post('/api/v1/admin/gmail/test', async (req, res) => {
     const body = await HttpServer.parseBody(req).catch(() => ({}));
     const merchant = resolveMerchant(req, body.merchantId);
@@ -1628,7 +1559,6 @@ export function registerAdminRoutes(server, ctx) {
     const gmailConfig = merchant?.branding?.gmailConfig || {};
 
     const clientId = body.clientId || gmailConfig.clientId;
-    // A masked placeholder from the admin UI means "use the stored value".
     const submitted = (value) => (isMaskedSecret(value) ? '' : value);
     const clientSecret = submitted(body.clientSecret) || gmailConfig.clientSecret;
     const refreshToken = submitted(body.refreshToken) || gmailConfig.refreshToken;
@@ -1681,7 +1611,6 @@ export function registerAdminRoutes(server, ctx) {
         }
       }
 
-      // Record successful test timestamp
       const currentBranding = merchant?.branding || {};
       const currentGmail = currentBranding.gmailConfig || {};
       const nowIso = new Date().toISOString();
@@ -1721,7 +1650,6 @@ export function registerAdminRoutes(server, ctx) {
     }
   });
 
-  // --- DEVELOPER SETTINGS: FALSE NARRATIVE DEV SWITCH (AUTO-EXPIRES AFTER 10 MINUTES) ---
   server.get('/api/v1/admin/dev/false-narrative', async (req, res) => {
     const merchantId = req.headers['x-merchant-id'] || '00000000-0000-0000-0000-000000000001';
     const merchant = ctx.merchantRepo.findById(merchantId);
@@ -1751,7 +1679,6 @@ export function registerAdminRoutes(server, ctx) {
     const chosenNarrative = (narrative || mode || 'GREEN').toUpperCase();
     const shouldEnable = (enabled !== false) && chosenNarrative !== 'OFF';
 
-    // Auto-expires after exactly 10 minutes from enabling time (10 * 60 * 1000 ms)
     const falseNarrativeUntil = shouldEnable ? (Date.now() + 10 * 60 * 1000) : null;
     const falseNarrativeMode = shouldEnable ? chosenNarrative : 'OFF';
     const newBranding = {
@@ -1771,7 +1698,6 @@ export function registerAdminRoutes(server, ctx) {
     });
   });
 
-  // --- DEVELOPER SETTINGS: TEST MODE (AUTO-EXPIRES IN 10 MINUTES, DISRUPTS AUTOMATIC BANNING) ---
   server.get('/api/v1/admin/dev/test-mode', async (req, res) => {
     const merchantId = req.headers['x-merchant-id'] || '00000000-0000-0000-0000-000000000001';
     const merchant = ctx.merchantRepo.findById(merchantId);
@@ -1848,7 +1774,6 @@ export function registerAdminRoutes(server, ctx) {
     const until = merchant?.branding?.testModeUntil;
     const isStillActive = Boolean(until && Number(until) > Date.now());
 
-    // CRITICAL (Acceptance Criteria 28 & 29): Block synthetic injections if Test Mode has expired or is inactive!
     if (!isStillActive) {
       HttpServer.json(res, 403, {
         success: false,
@@ -1894,7 +1819,6 @@ export function registerAdminRoutes(server, ctx) {
       merchantId
     });
 
-    // Record detailed audit log entry
     if (ctx.auditRepo) {
       ctx.auditRepo.log({
         merchantId,
@@ -1949,11 +1873,6 @@ export function registerAdminRoutes(server, ctx) {
     HttpServer.json(res, 200, { logs: parsedLogs });
   });
 
-  // =========================================================================
-  // DEVELOPER PAYMENT SIMULATOR ROUTES (FEATURE 65)
-  // =========================================================================
-
-  // Helper for Simulator Endpoint Authentication (Section 28 & Acceptance Test 34)
   function checkSimulatorAuth(req, res) {
     const merchantId = req.headers['x-merchant-id'] || req.query?.merchantId || null;
     if (!merchantId) {
@@ -1973,7 +1892,6 @@ export function registerAdminRoutes(server, ctx) {
       return null;
     }
 
-    // Explicitly reject if a customer session token is provided without admin credentials
     const authHeader = req.headers['authorization'] || '';
     const custToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : (req.headers['x-customer-session-token'] || null);
     if (custToken && ctx.customerSessionRepo) {
@@ -1990,7 +1908,6 @@ export function registerAdminRoutes(server, ctx) {
     return merchant;
   }
 
-  // 1. GET /api/v1/admin/dev/simulator/customers (Search / Select Existing Customer)
   server.get('/api/v1/admin/dev/simulator/customers', async (req, res) => {
     const merchant = checkSimulatorAuth(req, res);
     if (!merchant) return;
@@ -2023,7 +1940,6 @@ export function registerAdminRoutes(server, ctx) {
     HttpServer.json(res, 200, { customers });
   });
 
-  // 2. GET /api/v1/admin/dev/simulator/customers/:id/sessions (Target Existing Payment Session)
   server.get('/api/v1/admin/dev/simulator/customers/:id/sessions', async (req, res, params) => {
     const merchant = checkSimulatorAuth(req, res);
     if (!merchant) return;
@@ -2068,12 +1984,10 @@ export function registerAdminRoutes(server, ctx) {
     });
   });
 
-  // 3. POST /api/v1/admin/dev/simulator/inject (Push SMS / Gmail Synthetic Observation into Real Pipeline)
   server.post('/api/v1/admin/dev/simulator/inject', async (req, res) => {
     const merchant = checkSimulatorAuth(req, res);
     if (!merchant) return;
 
-    // Developer Test Mode Compatibility (Section 27 & Acceptance Test 36)
     const until = merchant?.branding?.testModeUntil;
     const isTestModeActive = Boolean(until && Number(until) > Date.now());
     if (!isTestModeActive) {
@@ -2087,7 +2001,6 @@ export function registerAdminRoutes(server, ctx) {
 
     const body = await HttpServer.parseBody(req).catch(() => ({}));
 
-    // Target Payment Session (Section 5 & 6)
     const paymentSessionId = body.paymentSessionId || body.sessionId || null;
     let targetSession = null;
     if (paymentSessionId) {
@@ -2100,7 +2013,6 @@ export function registerAdminRoutes(server, ctx) {
         return;
       }
 
-      // Active Session Requirement (Section 6)
       if ([PaymentStatus.SUCCESS, PaymentStatus.FAILED, PaymentStatus.EXPIRED, PaymentStatus.CANCELLED].includes(targetSession.status)) {
         HttpServer.json(res, 400, {
           success: false,
@@ -2113,15 +2025,12 @@ export function registerAdminRoutes(server, ctx) {
       }
     }
 
-    // Two Independent Streams: SMS and GMAIL (Section 8-15)
-    // 100% customizable fields - ABSOLUTELY NO SIMULATOR PRE-VALIDATION!
     const rawSource = (body.source || body.stream || 'SMS').toString().trim().toUpperCase();
     const source = rawSource.includes('GMAIL') ? 'GMAIL' : 'SMS';
     const rawSender = (body.sender !== undefined ? body.sender : '').toString();
     const rawContent = (body.content !== undefined ? body.content : (body.message || body.raw || '')).toString();
     const rawReceivedAt = body.receivedAt !== undefined ? body.receivedAt : null;
 
-    // Canonical Synthetic Observation Model (Section 16)
     const simUuid = crypto.randomUUID();
     const messageId = body.messageId || (source === 'GMAIL' ? `SIM-GMAIL-${simUuid}` : `SIM-SMS-${simUuid}`);
 
@@ -2131,11 +2040,10 @@ export function registerAdminRoutes(server, ctx) {
       sender: rawSender,
       received_at: rawReceivedAt ? String(rawReceivedAt) : new Date().toISOString(),
       body: rawContent,
-      raw: rawContent, // Exact raw preserved
+      raw: rawContent,
       is_simulated: true
     };
 
-    // Invoke the REAL canonical verification pipeline (Section 17)
     const pipeline = ctx.pipeline || new PaymentVerificationPipeline({
       db: ctx.db,
       sessionRepo: ctx.sessionRepo,
@@ -2164,7 +2072,6 @@ export function registerAdminRoutes(server, ctx) {
       merchantId: merchant.id
     });
 
-    // Audit Logging (Section 26 & Acceptance Test 33)
     if (ctx.auditRepo) {
       ctx.auditRepo.log({
         merchantId: merchant.id,
@@ -2200,7 +2107,6 @@ export function registerAdminRoutes(server, ctx) {
     });
   });
 
-  // 4. GET /api/v1/admin/dev/simulator/history (Recent Simulation Events)
   server.get('/api/v1/admin/dev/simulator/history', async (req, res) => {
     const merchant = checkSimulatorAuth(req, res);
     if (!merchant) return;
@@ -2233,11 +2139,6 @@ export function registerAdminRoutes(server, ctx) {
     HttpServer.json(res, 200, { history });
   });
 
-  // =========================================================================
-  // SECURITY & BAN MANAGEMENT ROUTES (Sections 4, 5, 6, 7, 9)
-  // =========================================================================
-
-  // 1. GET /api/v1/admin/security/banned-users (List and Search Banned Users)
   server.get('/api/v1/admin/security/banned-users', async (req, res) => {
     const q = req.query.q || '';
     if (!ctx.customerRepo) {
@@ -2248,7 +2149,6 @@ export function registerAdminRoutes(server, ctx) {
     HttpServer.json(res, 200, { bannedUsers });
   });
 
-  // 2. GET /api/v1/admin/security/banned-users/:id (View Complete Ban Details & Raw Evidence)
   server.get('/api/v1/admin/security/banned-users/:id', async (req, res, params) => {
     if (!ctx.customerRepo) {
       HttpServer.json(res, 404, { error: 'Customer repository not configured' });
@@ -2262,7 +2162,6 @@ export function registerAdminRoutes(server, ctx) {
     HttpServer.json(res, 200, evidence);
   });
 
-  // 3. POST /api/v1/admin/security/unban (Unban Customer with Confirmation & Audit Log)
   server.post('/api/v1/admin/security/unban', async (req, res) => {
     const body = await HttpServer.parseBody(req).catch(() => ({}));
     const customerId = body.customerId || body.id;
@@ -2280,7 +2179,6 @@ export function registerAdminRoutes(server, ctx) {
     const prevStatus = customer.status;
     const updated = ctx.customerRepo.unbanCustomer(customerId);
 
-    // Record USER_UNBANNED in Audit Log (Section 5)
     if (ctx.auditRepo) {
       ctx.auditRepo.log({
         merchantId: req.headers['x-merchant-id'] || '00000000-0000-0000-0000-000000000001',
@@ -2304,7 +2202,6 @@ export function registerAdminRoutes(server, ctx) {
       });
     }
 
-    // Also record security event for unban history
     if (ctx.customerRepo.createSecurityEvent) {
       ctx.customerRepo.createSecurityEvent({
         merchantId: req.headers['x-merchant-id'] || '00000000-0000-0000-0000-000000000001',
@@ -2322,7 +2219,6 @@ export function registerAdminRoutes(server, ctx) {
     });
   });
 
-  // 4. POST /api/v1/admin/security/manual-ban (Manually Ban Customer with Distinct Reason)
   server.post('/api/v1/admin/security/manual-ban', async (req, res) => {
     const body = await HttpServer.parseBody(req).catch(() => ({}));
     const customerId = body.customerId || body.id;
@@ -2383,13 +2279,11 @@ export function registerAdminRoutes(server, ctx) {
     });
   });
 
-  // 5. GET /api/v1/admin/security/events (List All Forensic Security Events)
   server.get('/api/v1/admin/security/events', async (req, res) => {
     const events = ctx.customerRepo ? ctx.customerRepo.getSecurityEvents(null, 100) : [];
     HttpServer.json(res, 200, { events });
   });
 
-  // 6. GET /api/v1/admin/security/history (Ban/Unban History Log)
   server.get('/api/v1/admin/security/history', async (req, res) => {
     const logs = ctx.db.query(`
       SELECT id, entity_type, entity_id, action, actor_type, actor_id, details, created_at
@@ -2416,7 +2310,6 @@ export function registerAdminRoutes(server, ctx) {
     HttpServer.json(res, 200, { history: parsedLogs });
   });
 
-  // 7. GET /api/v1/admin/customers (List active customers for manual ban selector)
   server.get('/api/v1/admin/customers', async (req, res) => {
     const rows = ctx.db.query('SELECT id, name, email, mobile_number, status, created_at FROM customers ORDER BY created_at DESC LIMIT 100');
     HttpServer.json(res, 200, {

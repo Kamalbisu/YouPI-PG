@@ -5,7 +5,6 @@ import path from 'node:path';
 import { Database, runMigrations } from '../index.js';
 
 test('Production & Development Database Safe Customer Reset and Zero Residue Invariant', () => {
-  // 1. PROD RESET & VERIFICATION
   const prodPath = path.resolve('data/youpi_pg.sqlite');
   if (!fs.existsSync(prodPath)) {
     const parentDir = path.dirname(prodPath);
@@ -52,7 +51,6 @@ test('Production & Development Database Safe Customer Reset and Zero Residue Inv
   assert.equal(prodAccountsAfter, prodAccountsBefore, 'Production receiving accounts must remain 100% intact');
   prodDb.close();
 
-  // 2. DEV RESET & VERIFICATION
   const devPath = process.env.DEV_DB_PATH || path.resolve('data/youpi_pg_dev.sqlite');
   if (fs.existsSync(devPath)) {
     const devBackupDir = path.resolve('data/backups');

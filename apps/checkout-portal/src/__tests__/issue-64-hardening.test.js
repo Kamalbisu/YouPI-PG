@@ -16,10 +16,6 @@ const checkoutView = fs.readFileSync(
   'utf8'
 );
 
-/**
- * Lifts functions out of the inline checkout script and evaluates them against
- * a sandboxed window/document, so the REAL shipping code is what gets tested.
- */
 function liftCheckoutFunctions(...names) {
   const sources = names.map(name => {
     const match = checkoutView.match(new RegExp(`function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n    \\}`));

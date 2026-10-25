@@ -15,7 +15,6 @@ describe('Merchant SDK Integration Tests', () => {
     testDb = new Database({ inMemory: true });
     apiInstance = await startPaymentApi(6195, testDb);
 
-    // Update demo merchant with our known secret
     testDb.execute('UPDATE merchants SET webhook_secret = ? WHERE id = ?', [
       merchantSecret,
       '00000000-0000-0000-0000-000000000001'
@@ -92,14 +91,12 @@ describe('Merchant SDK Integration Tests', () => {
       const signature = generateHmac(rawString, merchantSecret);
       const signatureHeader = `sha256=${signature}`;
 
-      // Tampered payload
       const tamperedString = JSON.stringify({ event: 'SUCCESS', amount: '500.00' });
       assert.throws(
         () => client.verifyWebhook(tamperedString, signatureHeader),
         /signature mismatch/
       );
 
-      // Wrong secret
       assert.throws(
         () => client.verifyWebhook(rawString, signatureHeader, 'wrong_secret_key'),
         /signature mismatch/
@@ -129,17 +126,14 @@ describe('Merchant SDK Integration Tests', () => {
       const rawString = JSON.stringify(payloadObj);
       const sig = `sha256=${generateHmac(rawString, merchantSecret)}`;
 
-      // Valid fresh timestamp matching signed payload
       const verified = client.verifyWebhook(rawString, sig, String(now), { toleranceMs: 300000 });
       assert.equal(verified.orderId, 'ORD-1001');
 
-      // Also supports `${timestamp}.${rawBody}` signature scheme
       const bodyWithoutEmbeddedTs = JSON.stringify({ event: 'SUCCESS', orderId: 'ORD-1002' });
       const tsSig = `sha256=${generateHmac(`${now}.${bodyWithoutEmbeddedTs}`, merchantSecret)}`;
       const verifiedV2 = client.verifyWebhook(bodyWithoutEmbeddedTs, tsSig, String(now), { toleranceMs: 300000 });
       assert.equal(verifiedV2.orderId, 'ORD-1002');
 
-      // Stale timestamp outside tolerance window is rejected
       const staleTs = String(now - 10 * 60 * 1000);
       const staleSig = `sha256=${generateHmac(`${staleTs}.${bodyWithoutEmbeddedTs}`, merchantSecret)}`;
       assert.throws(
@@ -147,7 +141,6 @@ describe('Merchant SDK Integration Tests', () => {
         /timestamp missing or outside tolerance window/
       );
 
-      // Mismatched timestamp header vs signed payload timestamp is rejected
       assert.throws(
         () => client.verifyWebhook(rawString, sig, String(now + 1000), { toleranceMs: 300000 }),
         /timestamp header does not match signed payload timestamp/

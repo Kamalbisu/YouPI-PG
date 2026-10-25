@@ -35,12 +35,9 @@ describe('@youpi/core Unit & Integration Tests', () => {
       assert.equal(isValidTransition(PaymentStatus.ACTIVE, PaymentStatus.EXPIRED), true);
       assert.equal(isValidTransition(PaymentStatus.ACTIVE, PaymentStatus.CANCELLED), true);
 
-      // Cash-on-Delivery: placing the order terminates the session as SUCCESS even before
-      // a UPI slot is acquired (INITIATED/QUEUED) or while it is held (ACTIVE).
       assert.equal(isValidTransition(PaymentStatus.INITIATED, PaymentStatus.SUCCESS), true);
       assert.equal(isValidTransition(PaymentStatus.QUEUED, PaymentStatus.SUCCESS), true);
 
-      // Illegal transitions
       assert.equal(isValidTransition(PaymentStatus.QUEUED, PaymentStatus.PROCESSING), false);
       assert.equal(isValidTransition(PaymentStatus.EXPIRED, PaymentStatus.SUCCESS), false);
       assert.equal(isValidTransition(PaymentStatus.SUCCESS, PaymentStatus.FAILED), false);
@@ -151,7 +148,6 @@ describe('@youpi/core Unit & Integration Tests', () => {
     });
 
     test('attributes matching observation to active processing session', () => {
-      // 1. Create and activate session for ₹200
       const session = sessionRepo.create({
         merchantId: defaultMerchant.id,
         receivingAccountId: receivingAccount.id,
@@ -162,7 +158,6 @@ describe('@youpi/core Unit & Integration Tests', () => {
       sessionRepo.acquireSlotAtomic(session.id, receivingAccount.id, 300000);
       sessionRepo.transitionToProcessing(session.id, 30000);
 
-      // 2. Normalize and ingest observation for ₹200
       const normObs = ObservationNormalizer.normalize({
         source: ObserverSource.GOOGLE_MESSAGES,
         receivingAccountId: receivingAccount.id,
@@ -176,12 +171,10 @@ describe('@youpi/core Unit & Integration Tests', () => {
       assert.equal(result.outcomeStatus, PaymentStatus.SUCCESS);
       assert.equal(result.paymentSessionId, session.id);
 
-      // Verify session updated to SUCCESS in DB
       const updatedSession = sessionRepo.findById(session.id);
       assert.equal(updatedSession.status, PaymentStatus.SUCCESS);
       assert.ok(updatedSession.completedAt);
 
-      // Verify event was emitted
       assert.ok(emittedEvents.some(e => e.event === 'PAYMENT.SUCCESS'));
     });
 
@@ -195,7 +188,6 @@ describe('@youpi/core Unit & Integration Tests', () => {
       sessionRepo.acquireSlotAtomic(session.id, receivingAccount.id, 300000);
       sessionRepo.transitionToProcessing(session.id, 30000);
 
-      // Method 1: SMS observes ₹200 with UTR111 -> Level 1 (L1)
       const obsSms = ObservationNormalizer.normalize({
         source: ObserverSource.GOOGLE_MESSAGES,
         receivingAccountId: receivingAccount.id,
@@ -208,7 +200,6 @@ describe('@youpi/core Unit & Integration Tests', () => {
       assert.equal(res1.outcomeStatus, PaymentStatus.SUCCESS);
       assert.equal(res1.verificationLevel, 1);
 
-      // Method 2: Gmail observes same payment from independent channel -> Upgrades to Level 2 (L2 Dual Verification)
       const obsGmail = ObservationNormalizer.normalize({
         source: ObserverSource.GMAIL,
         receivingAccountId: receivingAccount.id,
@@ -220,13 +211,11 @@ describe('@youpi/core Unit & Integration Tests', () => {
       assert.equal(res2.attributed, true);
       assert.equal(res2.verificationLevel, 2);
 
-      // Duplicate test: SMS submits same UTR111 again -> MUST be rejected as DUPLICATE_IGNORED!
       const resSmsDup = attributionEngine.processObservation(obsSms);
       assert.equal(resSmsDup.attributed, false);
       assert.equal(resSmsDup.duplicate, true);
       assert.equal(resSmsDup.outcomeStatus, ObservationAttributionStatus.DUPLICATE_IGNORED);
 
-      // Exactly ONE success event was emitted (subsequent multi-channel confirmations were verification upgrades)!
       const successEvents = emittedEvents.filter(e => e.event === 'PAYMENT.SUCCESS');
       assert.equal(successEvents.length, 1);
       const upgradeEvents = emittedEvents.filter(e => e.event === 'PAYMENT.VERIFICATION_UPGRADED');
@@ -234,7 +223,6 @@ describe('@youpi/core Unit & Integration Tests', () => {
     });
 
     test('CRITICAL INVARIANT: Late observation does not attach to a new queued customer', () => {
-      // Customer A creates ₹200 session, but it expires
       const customerA = customerRepo.create({
         merchantId: defaultMerchant.id,
         phoneNumber: '9876500001',
@@ -252,7 +240,6 @@ describe('@youpi/core Unit & Integration Tests', () => {
       sessionRepo.acquireSlotAtomic(sessionA.id, receivingAccount.id, 300000);
       sessionRepo.transitionToTerminal(sessionA.id, PaymentStatus.EXPIRED);
 
-      // Customer B arrives for another ₹200 and becomes ACTIVE
       const customerB = customerRepo.create({
         merchantId: defaultMerchant.id,
         phoneNumber: '9876500002',
@@ -269,30 +256,24 @@ describe('@youpi/core Unit & Integration Tests', () => {
       });
       sessionRepo.acquireSlotAtomic(sessionB.id, receivingAccount.id, 300000);
 
-      // Delayed observation arrives for ₹200 with timestamp corresponding to Customer A's window
       const lateObs = ObservationNormalizer.normalize({
         source: ObserverSource.GMAIL,
         receivingAccountId: receivingAccount.id,
         amountPaise: 20000n,
         bankReferenceNumber: 'DELAYED-UTR-A',
-        observedAt: new Date(Date.now() - 60000), // observed during A's time
+        observedAt: new Date(Date.now() - 60000),
         rawPayload: { text: 'Delayed bank email' }
       });
 
-      // Customer B is in ACTIVE, but has NOT clicked Payment Done (not in PROCESSING).
-      // Even if Customer B were in PROCESSING, late observation check detects expired A!
       const lateRes = attributionEngine.processObservation(lateObs);
 
-      // Observation must NOT be given to Customer B!
       assert.equal(lateRes.attributed, false);
       assert.equal(lateRes.lateMatch, true);
       assert.equal(lateRes.paymentSessionId, sessionA.id);
 
-      // Customer B remains ACTIVE, not falsely completed!
       const checkB = sessionRepo.findById(sessionB.id);
       assert.equal(checkB.status, PaymentStatus.ACTIVE);
 
-      // A support ticket must be raised for Customer A's late payment
       const tickets = ticketRepo.findTicketsByCustomer(customerA.id);
       assert.equal(tickets.length, 1);
       assert.ok(tickets[0].subject.includes('LATE PAYMENT DETECTED'));
@@ -356,9 +337,6 @@ describe('Bank SMS Parser UTR & Amount Extraction', () => {
     });
 
     test('amount extraction is not vulnerable to quadratic backtracking (ReDoS)', () => {
-      // The credit patterns chain several whitespace-matching quantifiers. A body such as
-      // "credited" followed by a long whitespace run used to take seconds to scan and blocked
-      // the payment event loop, so the text is whitespace-collapsed before matching.
       const hostile = 'credited' + ' '.repeat(20000);
       const started = Date.now();
       extractIntelligentAmount(hostile);
@@ -504,7 +482,6 @@ describe('Issue #4: Terminal State Invariants and Re-activation Guards', () => {
           /Cannot acquire slot for session in terminal status|Illegal payment state transition/
         );
 
-        // Status must remain terminal in database
         const afterAttempt = sessionRepo.findById(session.id);
         assert.equal(afterAttempt.status, status);
       }
@@ -534,14 +511,12 @@ describe('Issue #4: Terminal State Invariants and Re-activation Guards', () => {
         const res = sessionRepo.recordVerificationSource(session.id, ObserverSource.GMAIL, 'obs_fake_123', { finalizeSuccess: true });
         assert.equal(res.isFirstSuccess, false);
 
-        // Status in database must still be the terminal status
         const unchanged = sessionRepo.findById(session.id);
         assert.equal(unchanged.status, status);
       }
     });
 
     test('transitionToProcessing rejects terminal sessions and non-active sessions', () => {
-      // 1. INITIATED session rejects transition to PROCESSING
       const initiated = sessionRepo.create({
         merchantId: defaultMerchant.id,
         receivingAccountId: receivingAccount.id,
@@ -553,7 +528,6 @@ describe('Issue #4: Terminal State Invariants and Re-activation Guards', () => {
         /Cannot transition to PROCESSING from status|Illegal payment state transition/
       );
 
-      // 2. QUEUED session rejects transition to PROCESSING
       const activeSess = sessionRepo.create({
         merchantId: defaultMerchant.id,
         receivingAccountId: receivingAccount.id,
@@ -576,14 +550,12 @@ describe('Issue #4: Terminal State Invariants and Re-activation Guards', () => {
         /Cannot transition to PROCESSING from status|Illegal payment state transition/
       );
 
-      // 3. SUCCESS session rejects transition to PROCESSING
       sessionRepo.transitionToTerminal(activeSess.id, PaymentStatus.SUCCESS);
       assert.throws(
         () => sessionRepo.transitionToProcessing(activeSess.id),
         /Cannot transition to PROCESSING from status|Illegal payment state transition/
       );
 
-      // 4. CANCELLED session rejects transition to PROCESSING
       const cancelled = sessionRepo.create({
         merchantId: defaultMerchant.id,
         receivingAccountId: receivingAccount.id,
@@ -596,7 +568,6 @@ describe('Issue #4: Terminal State Invariants and Re-activation Guards', () => {
         /Cannot transition to PROCESSING from status|Illegal payment state transition/
       );
 
-      // 5. EXPIRED session rejects transition to PROCESSING
       const expired = sessionRepo.create({
         merchantId: defaultMerchant.id,
         receivingAccountId: receivingAccount.id,
@@ -610,7 +581,6 @@ describe('Issue #4: Terminal State Invariants and Re-activation Guards', () => {
         /Cannot transition to PROCESSING from status|Illegal payment state transition/
       );
 
-      // 6. FAILED session rejects transition to PROCESSING
       const failed = sessionRepo.create({
         merchantId: defaultMerchant.id,
         receivingAccountId: receivingAccount.id,
@@ -661,18 +631,15 @@ describe('Issue #4: Terminal State Invariants and Re-activation Guards', () => {
       assert.equal(result.paymentSessionId, expiredSession.id);
       assert.equal(result.outcomeStatus, ObservationAttributionStatus.LATE_UNMATCHED);
 
-      // Verify the session status in DB is STILL EXPIRED (not SUCCESS)
       const freshSession = sessionRepo.findById(expiredSession.id);
       assert.equal(freshSession.status, PaymentStatus.EXPIRED);
 
-      // Verify support ticket was created
       const tickets = ticketRepo.findTicketsByCustomer(customer.id);
       assert.ok(tickets.length >= 1);
       const ticket = tickets.find(t => t.paymentId === expiredSession.id);
       assert.ok(ticket);
       assert.ok(ticket.subject.includes('[LATE PAYMENT DETECTED]'));
 
-      // Verify PAYMENT.LATE_DETECTED was emitted and not PAYMENT.SUCCESS
       const lateEvents = emittedEvents.filter(e => e.event === 'PAYMENT.LATE_DETECTED' && e.payload.paymentId === expiredSession.id);
       assert.equal(lateEvents.length, 1);
       const successEvents = emittedEvents.filter(e => e.event === 'PAYMENT.SUCCESS' && e.payload.paymentId === expiredSession.id);

@@ -54,11 +54,6 @@ async function loadDependencies() {
   return { BerryProtocol: BerryProtocolClass, qrcode: qrcodeLib };
 }
 
-/**
- * Ensures any pairing string or QR data is formatted as an official WhatsApp Web
- * pairing link (https://wa.me/settings/linked_devices#2@...) and converted to an
- * authentic, renderable Data URI (PNG or SVG).
- */
 export async function formatQrDataUrl(rawText, qrcodeModule = null) {
   if (!rawText) return null;
   if (typeof rawText === 'string' && rawText.startsWith('data:image/')) {
@@ -107,9 +102,9 @@ export class WhatsAppBerryService extends EventEmitter {
     this.databasePath = options.databasePath || path.resolve(rootDir, 'data/berry_store.db');
     this.metaFile = options.metaFile || path.resolve(rootDir, 'data/whatsapp_session.json');
 
-    this.status = 'DISCONNECTED'; // 'DISCONNECTED' | 'QR_READY' | 'PAIRING_CODE_READY' | 'CONNECTING' | 'CONNECTED'
+    this.status = 'DISCONNECTED';
     this.phoneNumber = null;
-    this.qrCode = null; // { raw: string, dataUrl: string }
+    this.qrCode = null;
     this.pairingCode = null;
     this.pairingPhone = null;
     this.client = null;
@@ -118,13 +113,11 @@ export class WhatsAppBerryService extends EventEmitter {
     this.reconnectTimer = null;
     this.isSimulatedMode = false;
 
-    // Check if previous valid connection session exists on disk
     this.restoreSessionMeta();
   }
 
   restoreSessionMeta() {
     try {
-      // 1. Scan sessionPath for existing credentials subfolders
       if (fs.existsSync(this.sessionPath)) {
         const entries = fs.readdirSync(this.sessionPath);
         for (const entry of entries) {
@@ -151,7 +144,6 @@ export class WhatsAppBerryService extends EventEmitter {
           this.status = 'CONNECTED';
           console.log(`[WhatsAppBerryService] Restored WhatsApp session for ${this.phoneNumber} (Session: ${this.sessionId})`);
 
-          // Auto-resume live WhatsApp socket connection on startup if not in unit tests
           if (process.env.NODE_ENV !== 'test') {
             setImmediate(() => {
               if (!this.client && !this.isInitializing) {
@@ -310,7 +302,6 @@ export class WhatsAppBerryService extends EventEmitter {
 
       this.setupListeners(qrcode);
 
-      // Connect with QR
       this.client.connectWithQr().catch(err => {
         console.warn(`[WhatsAppBerryService] connectWithQr notice: ${err.message}`);
       });
@@ -336,7 +327,6 @@ export class WhatsAppBerryService extends EventEmitter {
       if (!rawText || rawText === lastRawQr) return;
       lastRawQr = rawText;
 
-      // If we already have saved credentials and phone number, do not wipe session on transient QR events
       const credsFile1 = path.join(this.sessionPath, 'creds.json');
       const credsFile2 = path.join(this.sessionPath, this.sessionId, 'creds.json');
       if ((fs.existsSync(credsFile1) || fs.existsSync(credsFile2)) && this.phoneNumber) {
@@ -344,7 +334,6 @@ export class WhatsAppBerryService extends EventEmitter {
         return;
       }
 
-      // Format as official WhatsApp Web pairing link if not already prefixed
       if (rawText.startsWith('2@') || rawText.startsWith('1@')) {
         rawText = `https://wa.me/settings/linked_devices#${rawText}`;
       }
@@ -399,7 +388,6 @@ export class WhatsAppBerryService extends EventEmitter {
         this.phoneNumber = phone;
       }
 
-      // Save metadata with sessionId so it is NEVER lost on restart!
       try {
         fs.writeFileSync(this.metaFile, JSON.stringify({
           status: 'CONNECTED',
@@ -430,7 +418,6 @@ export class WhatsAppBerryService extends EventEmitter {
         this.emit('disconnected', { reason: 'logged_out' });
         this.emit('status', this.status);
       } else {
-        // While waiting for user to scan QR code, DO NOT wipe QR_READY status or destroy active QR code!
         if (this.status === 'QR_READY' && this.qrCode && !this.phoneNumber) {
           console.log('[WhatsAppBerryService] Handshake cycle during QR pairing wait. Preserving active QR on screen.');
           return;
@@ -537,11 +524,6 @@ export class WhatsAppBerryService extends EventEmitter {
     await this.initialize();
   }
 
-  /**
-   * Generates an 8-digit WhatsApp pairing code for phone number.
-   * Completely bypasses WhatsApp Web QR-scan rate limiting.
-   * @param {string} phoneNumber 10-digit or full international phone number
-   */
   async requestPairingCode(phoneNumber) {
     if (!phoneNumber) {
       throw new Error('Phone number is required for pairing code linking.');
@@ -570,7 +552,6 @@ export class WhatsAppBerryService extends EventEmitter {
     this.pairingCode = null;
     this.pairingPhone = clean;
 
-    // Fresh session ID prevents device identity collisions on WhatsApp server
     this.sessionId = `youpi_berry_${Date.now()}`;
     try {
       fs.writeFileSync(this.metaFile, JSON.stringify({
@@ -593,7 +574,6 @@ export class WhatsAppBerryService extends EventEmitter {
 
     this.setupListeners(qrcode);
 
-    // Call connectWithPairingCode on client
     this.client.connectWithPairingCode(clean).catch(err => {
       console.warn(`[WhatsAppBerryService] connectWithPairingCode notice: ${err.message}`);
     });
@@ -617,12 +597,6 @@ export class WhatsAppBerryService extends EventEmitter {
     });
   }
 
-  /**
-   * Dispatches WhatsApp OTP message via BerryProtocol
-   * @param {string} to 10-digit or full phone number
-   * @param {string} otpCode 6-digit verification code
-   * @param {string} [customerName]
-   */
   async sendOtp(to, otpCode, customerName = '') {
     const greeting = customerName ? `Hello *${customerName}*!` : 'Hello!';
     const message =
@@ -634,17 +608,11 @@ export class WhatsAppBerryService extends EventEmitter {
     return this.sendMessage(to, message);
   }
 
-  /**
-   * Universal message sender via BerryProtocol
-   * @param {string} to
-   * @param {string} message
-   */
   async sendMessage(to, message) {
     const cleanTo = String(to || '').replace(/[^0-9]/g, '');
     const dummyPrefixes = ['910000000000', '0000000000', '919999999999'];
     const isDummy = dummyPrefixes.some(prefix => cleanTo.startsWith(prefix));
 
-    // Unit test safeguard: If unit test running without forceRealDispatch, simulate dispatch
     if (isDummy || (process.env.NODE_ENV === 'test' && !this.forceRealDispatch)) {
       console.log(`[WhatsAppBerryService] Test guardrail: Simulated OTP message to ${to}`);
       return {
@@ -700,7 +668,6 @@ export class WhatsAppBerryService extends EventEmitter {
 
     try {
       let result;
-      // BerryProtocol API: sendText(to, text) or sendMessage(to, { text })
       if (typeof this.client.sendText === 'function') {
         result = await this.client.sendText(jid, message);
       } else if (typeof this.client.sendMessage === 'function') {
@@ -732,7 +699,6 @@ export class WhatsAppBerryService extends EventEmitter {
   }
 }
 
-// Global Singleton Instance
 let serviceInstance = null;
 
 export function getWhatsAppBerryService(options = {}) {

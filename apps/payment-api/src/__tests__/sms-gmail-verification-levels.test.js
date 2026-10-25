@@ -27,7 +27,6 @@ describe('2-Level Verification (SMS Gateway + Gmail) & Queue Management Tests', 
     const receivingAccountId = '00000000-0000-0000-0000-000000000002';
     const merchantId = '00000000-0000-0000-0000-000000000001';
 
-    // Create 1 active and 3 queued sessions
     const sActive = sessionRepo.create({
       merchantId,
       receivingAccountId,
@@ -60,13 +59,11 @@ describe('2-Level Verification (SMS Gateway + Gmail) & Queue Management Tests', 
     assert.equal(clearData.success, true);
     assert.ok(clearData.clearedCount >= 2);
 
-    // Verify queue sessions are now EXPIRED
     const q1Updated = sessionRepo.findById(sQ1.id);
     const q2Updated = sessionRepo.findById(sQ2.id);
     assert.equal(q1Updated.status, PaymentStatus.EXPIRED);
     assert.equal(q2Updated.status, PaymentStatus.EXPIRED);
 
-    // Clean up sActive so receiving account slot is released
     sessionRepo.transitionToTerminal(sActive.id, PaymentStatus.SUCCESS);
   });
 
@@ -76,13 +73,11 @@ describe('2-Level Verification (SMS Gateway + Gmail) & Queue Management Tests', 
     const receivingAccountId = '00000000-0000-0000-0000-000000000002';
     const merchantId = '00000000-0000-0000-0000-000000000001';
 
-    // Create a customer
     const customer = customerRepo.create({
       phoneNumber: '9876543210',
       fullName: 'Conflict Test User'
     });
 
-    // Session 1: bound to customer and ACTIVE
     const session1 = sessionRepo.create({
       merchantId,
       receivingAccountId,
@@ -92,7 +87,6 @@ describe('2-Level Verification (SMS Gateway + Gmail) & Queue Management Tests', 
     });
     apiInstance.app.context.queueEngine.enqueueOrActivate(session1.id, receivingAccountId);
 
-    // Session 2: new session created for the same customer
     const session2 = sessionRepo.create({
       merchantId,
       receivingAccountId,
@@ -101,7 +95,6 @@ describe('2-Level Verification (SMS Gateway + Gmail) & Queue Management Tests', 
       amountPaise: 75000n
     });
 
-    // Check state of session 2 via API
     const res = await authFetch(`${baseUrl}/api/v1/checkout/${session2.id}/state`);
     assert.equal(res.status, 200);
     const state = await res.json();
@@ -110,7 +103,6 @@ describe('2-Level Verification (SMS Gateway + Gmail) & Queue Management Tests', 
     assert.ok(state.conflictingSession);
     assert.equal(state.conflictingSession.id, session1.id);
 
-    // Retrying new payment clears old conflict
     const retryRes = await authFetch(`${baseUrl}/api/v1/checkout/${session2.id}/retry-new-payment`, {
       method: 'POST'
     });
@@ -119,18 +111,15 @@ describe('2-Level Verification (SMS Gateway + Gmail) & Queue Management Tests', 
     const oldSession = sessionRepo.findById(session1.id);
     assert.equal(oldSession.status, PaymentStatus.CANCELLED);
 
-    // Clean up session2 so slot is released
     sessionRepo.transitionToTerminal(session2.id, PaymentStatus.CANCELLED);
   });
 
   test('Android SMS Gateway pairs via QR, sends HMAC-signed bank SMS and completes payment', async () => {
-    // 1. Get pairing QR from admin
     const qrRes = await authFetch(`${baseUrl}/api/v1/admin/sms-gateway/pair-qr`);
     assert.equal(qrRes.status, 200);
     const qrData = await qrRes.json();
     assert.ok(qrData.enrollmentToken);
 
-    // 2. Mobile app pairs
     const pairRes = await authFetch(`${baseUrl}/api/v1/observers/sms/pair`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -145,7 +134,6 @@ describe('2-Level Verification (SMS Gateway + Gmail) & Queue Management Tests', 
     assert.ok(pairData.deviceId);
     assert.ok(pairData.signingKey);
 
-    // 3. Create active payment session for ₹450
     const sessionRepo = apiInstance.app.context.sessionRepo;
     const receivingAccountId = '00000000-0000-0000-0000-000000000002';
     const s450 = sessionRepo.create({
@@ -157,7 +145,6 @@ describe('2-Level Verification (SMS Gateway + Gmail) & Queue Management Tests', 
     testDb.execute("UPDATE payment_receiving_accounts SET is_slot_busy = 0, current_active_session_id = NULL WHERE id = ?", [receivingAccountId]);
     apiInstance.app.context.queueEngine.enqueueOrActivate(s450.id, receivingAccountId);
 
-    // 4. Mobile app captures bank SMS and dispatches to /api/v1/observers/sms
     const timestamp = Date.now();
     const smsPayload = {
       deviceId: pairData.deviceId,
@@ -186,10 +173,8 @@ describe('2-Level Verification (SMS Gateway + Gmail) & Queue Management Tests', 
     assert.equal(smsResult.attribution.attributed, true);
     assert.equal(smsResult.attribution.paymentSessionId, s450.id);
 
-    // 1st hit (SMS Gateway) -> Level 1 verification recorded
     assert.equal(smsResult.attribution.verificationLevel, 1);
 
-    // 2nd hit arrives from Gmail poller within 5s grace window -> upgrades to Level 2 Dual Verification
     const gmailRes = await authFetch(`${baseUrl}/api/v1/pollers/events`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -209,7 +194,6 @@ describe('2-Level Verification (SMS Gateway + Gmail) & Queue Management Tests', 
     assert.equal(gmailResult.attribution.verificationLevel, 2);
     assert.ok(gmailResult.attribution.verificationTag.includes('Dual Verification'));
 
-    // Verify session in DB is now SUCCESS and Level 2
     const sUpdated = sessionRepo.findById(s450.id);
     assert.equal(sUpdated.status, PaymentStatus.SUCCESS);
     assert.equal(sUpdated.verificationLevel, 2);
@@ -235,7 +219,6 @@ describe('2-Level Verification (SMS Gateway + Gmail) & Queue Management Tests', 
     const getData = await getRes.json();
     assert.equal(getData.gmailConfig.clientId, 'test-client-id.apps.googleusercontent.com');
 
-    // Test connection endpoint
     const testRes = await authFetch(`${baseUrl}/api/v1/admin/gmail/test`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -248,7 +231,6 @@ describe('2-Level Verification (SMS Gateway + Gmail) & Queue Management Tests', 
 
   test('Downloads standalone Android APK binary from Payment API', async () => {
     const res = await authFetch(`${baseUrl}/api/v1/admin/sms-gateway/download-apk`);
-    // The server no longer writes a stub APK: it serves a real build when present, else 404.
     if (res.status === 404) {
       const body = await res.json();
       assert.equal(body.error, 'APK_NOT_BUILT');

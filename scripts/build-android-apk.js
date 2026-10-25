@@ -11,7 +11,6 @@ const REPO_ROOT = path.resolve(__dirname, '..');
 
 console.log('🚀 Starting certified Android APK compilation for YouPI SMS Gateway...');
 
-// Resolve Toolchain Paths dynamically across macOS, Linux, and Windows
 const isWin = process.platform === 'win32';
 
 function findBinary(name, winExt = '.exe', searchDirs = []) {
@@ -21,11 +20,9 @@ function findBinary(name, winExt = '.exe', searchDirs = []) {
     const full = path.join(dir, binaryName);
     if (fs.existsSync(full)) return full;
   }
-  // Fall back to PATH
   return binaryName;
 }
 
-// Locate Android SDK
 const androidSdkCandidates = [
   process.env.ANDROID_HOME,
   process.env.ANDROID_SDK_ROOT,
@@ -40,7 +37,6 @@ if (!ANDROID_SDK) {
   throw new Error('❌ Android SDK not found! Please set ANDROID_HOME or ANDROID_SDK_ROOT environment variable.');
 }
 
-// Locate Build-Tools (prefer highest available or 34+)
 const buildToolsDir = path.join(ANDROID_SDK, 'build-tools');
 let CLT_BUILD_TOOLS = '';
 if (fs.existsSync(buildToolsDir)) {
@@ -50,7 +46,6 @@ if (fs.existsSync(buildToolsDir)) {
   }
 }
 
-// Locate Platforms / android.jar
 const platformsDir = path.join(ANDROID_SDK, 'platforms');
 let ANDROID_JAR = '';
 if (fs.existsSync(platformsDir)) {
@@ -63,11 +58,9 @@ if (!ANDROID_JAR) {
   throw new Error(`❌ android.jar not found under ${platformsDir}!`);
 }
 
-// Locate Java toolchain
 const JAVAC = findBinary('javac', '.exe', [process.env.JAVA_HOME ? path.join(process.env.JAVA_HOME, 'bin') : null]);
 const KEYTOOL = findBinary('keytool', '.exe', [process.env.JAVA_HOME ? path.join(process.env.JAVA_HOME, 'bin') : null]);
 
-// Locate Android build tools binaries
 const AAPT = findBinary('aapt', '.exe', [CLT_BUILD_TOOLS]);
 const D8 = findBinary('d8', isWin ? '.bat' : '', [CLT_BUILD_TOOLS]);
 const ZIPALIGN = findBinary('zipalign', '.exe', [CLT_BUILD_TOOLS]);
@@ -98,11 +91,9 @@ const BIN_DIR = path.join(WORK_DIR, 'bin');
 fs.mkdirSync(BIN_DIR, { recursive: true });
 
 try {
-  // 0. Synchronize banking package allowlist from packages/common/src/upi-providers.js into Java service
   console.log('🔄 [0/6] Synchronizing Android banking package allowlist from @youpi/common...');
   syncAndroidAllowlist();
 
-  // 1. Compile Java Source Code into Bytecode (.class)
   console.log('📦 [1/6] Compiling Java source files with javac...');
   const LIBS_DIR = path.resolve(APP_DIR, 'libs');
   const libJars = fs.existsSync(LIBS_DIR)
@@ -121,7 +112,6 @@ try {
   });
   console.log('   ✅ Java compilation succeeded.');
 
-  // 2. Convert .class files to Dalvik Executable (classes.dex) using D8
   console.log('⚡ [2/6] Converting Java bytecode to Dalvik Executable (classes.dex) with D8...');
   const classFiles = [];
   function collectClasses(dir) {
@@ -136,7 +126,6 @@ try {
   }
   collectClasses(BIN_DIR);
 
-  // Write all input class paths into an argfile (@args.txt) so D8 reads raw paths without shell expansion of '$'
   const d8ArgFile = path.join(WORK_DIR, 'd8_inputs.txt');
   fs.writeFileSync(d8ArgFile, [...classFiles, ...libJars].join('\n'), 'utf8');
 
@@ -151,21 +140,18 @@ try {
   }
   console.log(`   ✅ Dalvik classes.dex created (${fs.statSync(dexPath).size} bytes).`);
 
-  // 3. Package Resources and compiled binary AndroidManifest.xml into initial APK with AAPT
   console.log('📜 [3/6] Packaging resources & compiled binary AndroidManifest with AAPT...');
   const unalignedApk = path.join(WORK_DIR, 'unaligned.apk');
   execSync(`"${AAPT}" package -f -M "${MANIFEST}" -S "${RES_DIR}" -I "${ANDROID_JAR}" -F "${unalignedApk}"`, {
     stdio: 'inherit'
   });
 
-  // Add classes.dex into unaligned APK
   process.chdir(WORK_DIR);
   execSync(`"${AAPT}" add -v "${unalignedApk}" classes.dex`, {
     stdio: 'pipe'
   });
   console.log('   ✅ Base APK packaged with classes.dex and compiled binary manifest.');
 
-  // 4. Align 4-byte boundaries using zipalign
   console.log('📐 [4/6] 4-byte boundary zip-aligning APK...');
   const alignedApk = path.join(WORK_DIR, 'aligned.apk');
   execSync(`"${ZIPALIGN}" -f -v 4 "${unalignedApk}" "${alignedApk}"`, {
@@ -173,7 +159,6 @@ try {
   });
   console.log('   ✅ APK 4-byte alignment verified.');
 
-  // 5. Generate Keystore & Sign APK with apksigner (v1, v2, and v3 signatures)
   console.log('🔏 [5/6] Signing APK with Android v2 + v3 cryptographic certificate...');
   const keystorePath = path.join(WORK_DIR, 'release.keystore');
   const ksPass = 'youpipg123';
@@ -189,7 +174,6 @@ try {
     : `"${APKSIGNER}" sign --ks "${keystorePath}" --ks-pass pass:${ksPass} --key-pass pass:${ksPass} --ks-key-alias "${alias}" --out "${signedApk}" "${alignedApk}"`;
   execSync(signCmd, { stdio: 'inherit' });
 
-  // Verify APK signature
   const verifyCmd = isWin
     ? `cmd.exe /c ""${APKSIGNER}" verify --verbose "${signedApk}""`
     : `"${APKSIGNER}" verify --verbose "${signedApk}"`;
@@ -198,7 +182,6 @@ try {
   });
   console.log('   ✅ Verification Report:\n' + verifyOutput.trim().split('\n').map(l => '      ' + l).join('\n'));
 
-  // 6. Copy final APK to all distribution endpoints & compute cryptographic checksum
   console.log('🚚 [6/6] Distributing final APK to app portals and calculating SHA-256...');
   const apkBuffer = fs.readFileSync(signedApk);
   const sha256 = crypto.createHash('sha256').update(apkBuffer).digest('hex');

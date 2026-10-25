@@ -3,13 +3,6 @@ import { spawn } from 'node:child_process';
 
 const TOKEN_RE = /^[A-Za-z0-9_\-=+/.]{20,}$/;
 
-/**
- * Extracts the Cloudflare tunnel token from whatever the operator pasted
- * (`cloudflared service install <token>`, `cloudflared tunnel run --token <token>`, or the bare token)
- * and returns a fixed argv for `cloudflared`. Nothing else from the pasted text is ever executed.
- * @param {string} rawCommand
- * @returns {{ file: string, args: string[], redacted: string }}
- */
 export function buildCloudflaredInvocation(rawCommand) {
   const text = String(rawCommand || '').trim();
   if (!text) throw new Error('Cloudflare Tunnel command cannot be empty.');
@@ -21,7 +14,6 @@ export function buildCloudflaredInvocation(rawCommand) {
     throw new Error('No valid Cloudflare tunnel token found. Paste the command containing your tunnel token.');
   }
 
-  // Keep an explicit path to the binary (e.g. "C:\Tools\cloudflared.exe") when it exists; otherwise rely on PATH.
   const first = text.match(/^"([^"]+)"|^(\S+)/);
   const candidate = first ? (first[1] || first[2]) : '';
   const file = /cloudflared(\.exe)?$/i.test(candidate) && /[\\/]/.test(candidate) && fs.existsSync(candidate)
@@ -35,13 +27,6 @@ export function buildCloudflaredInvocation(rawCommand) {
   };
 }
 
-/**
- * Starts cloudflared for the pasted command without a shell. Never throws: a bad command or a
- * missing binary is logged and boot continues without a tunnel.
- * @param {string} rawCommand
- * @param {import('node:child_process').SpawnOptions} [options]
- * @returns {import('node:child_process').ChildProcess | null}
- */
 export function startCloudflaredSafely(rawCommand, options = {}) {
   let invocation;
   try {

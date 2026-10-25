@@ -4,13 +4,6 @@ import { GmailPoller } from './gmail-poller.js';
 import { GmailBrowserAutomator } from './browser-automator.js';
 
 export class GmailObserverServer {
-  /**
-   * @param {{
-   *   poller?: GmailPoller,
-   *   apiBaseUrl?: string,
-   *   receivingAccountId?: string
-   * }} options
-   */
   constructor(options = {}) {
     this.poller = options.poller || new GmailPoller(options);
     this.automator = new GmailBrowserAutomator({ gmailPoller: this.poller });
@@ -32,7 +25,6 @@ export class GmailObserverServer {
         return;
       }
 
-      // GET /health
       if (pathname === '/health') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
@@ -45,10 +37,6 @@ export class GmailObserverServer {
         return;
       }
 
-      // POST /stop
-      // This service is published publicly (Google must reach /oauth/callback), so stopping the
-      // poller must not be reachable by an anonymous caller: it silently disables the bank-email
-      // verification channel and prevents live payments from settling.
       if (pathname === '/stop' && method === 'POST') {
         if (!hasBearer(req, getObserverToken(), getAdminToken())) {
           res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -61,9 +49,7 @@ export class GmailObserverServer {
         return;
       }
 
-      // GET /oauth/url
       if (pathname === '/oauth/url') {
-        // The `state` minted here authorises a later callback, so only trusted callers may request it.
         if (!hasBearer(req, getObserverToken(), getAdminToken())) {
           res.writeHead(401, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Unauthorized' }));
@@ -99,12 +85,10 @@ export class GmailObserverServer {
         return;
       }
 
-      // GET /oauth/callback (Google OAuth redirect authorization exchange)
       if (pathname === '/oauth/callback') {
         const code = url.searchParams.get('code');
         const error = url.searchParams.get('error');
 
-        // Reject callbacks that did not start from an authenticated admin action (login CSRF).
         if (!consumeOAuthState(url.searchParams.get('state'))) {
           res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
           res.end('<h1>Invalid or expired OAuth state</h1><p>Start the Google connection again from the Merchant Admin panel.</p>');
@@ -205,7 +189,6 @@ export class GmailObserverServer {
           } catch {}
 
           const nowIso = new Date().toISOString();
-          // Persist credentials to Payment API
           try {
             await fetch(`${apiBase}/api/v1/admin/gmail/credentials`, {
               method: 'POST',
@@ -373,9 +356,7 @@ export class GmailObserverServer {
         return;
       }
 
-      // GET /api/browser/status
       if (pathname === '/api/browser/status') {
-        // Only trigger a background connection attempt when an authenticated observer/admin asks
         if (hasBearer(req, getObserverToken(), getAdminToken()) && this.automator.mode === 'STANDBY' && !this.automator.isEnsuring) {
           this.automator.autoEnsureConnection().catch(() => {});
         }
@@ -387,7 +368,6 @@ export class GmailObserverServer {
         return;
       }
 
-      // POST /api/browser/auto-ensure
       if (pathname === '/api/browser/auto-ensure' && method === 'POST') {
         if (!hasBearer(req, getObserverToken(), getAdminToken())) {
           res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -408,7 +388,6 @@ export class GmailObserverServer {
         return;
       }
 
-      // POST /api/browser/launch-login
       if (pathname === '/api/browser/launch-login' && req.method === 'POST') {
         if (!hasBearer(req, getObserverToken(), getAdminToken())) {
           res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -429,7 +408,6 @@ export class GmailObserverServer {
         return;
       }
 
-      // POST /api/sweep (Active sweep trigger during 30-second verification window)
       if (pathname === '/api/sweep' && req.method === 'POST') {
         if (!hasBearer(req, getObserverToken(), getAdminToken())) {
           res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -450,9 +428,7 @@ export class GmailObserverServer {
         return;
       }
 
-      // POST /process-email (Direct email ingestion / test injection)
       if (pathname === '/process-email' && req.method === 'POST') {
-        // Direct ingestion feeds the payment pipeline: only the local operator/test tooling may call it.
         if (!hasBearer(req, getObserverToken(), getAdminToken())) {
           res.writeHead(401, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Unauthorized' }));

@@ -10,12 +10,6 @@ const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, '../../..');
 
 export class GmailBrowserAutomator {
-  /**
-   * @param {{
-   *   gmailPoller: import('./gmail-poller.js').GmailPoller,
-   *   debuggingPort?: number
-   * }} options
-   */
   constructor(options) {
     this.gmailPoller = options.gmailPoller;
     this.apiBaseUrl = options.apiBaseUrl || process.env.BASE_PAYMENT_API_URL || 'http://localhost:6100';
@@ -28,7 +22,7 @@ export class GmailBrowserAutomator {
     this.backgroundProcess = null;
     this.browserProcess = null;
     this.isLoggedIn = this.loadStoredLoginState();
-    this.mode = 'STANDBY'; // 'BACKGROUND' | 'VISIBLE' | 'STANDBY'
+    this.mode = 'STANDBY';
     this.checkTimer = null;
     this.extractionTimer = null;
     this.lastCheckedAt = null;
@@ -72,11 +66,6 @@ export class GmailBrowserAutomator {
     this.isLoggedIn = loggedIn;
   }
 
-  /**
-   * Automatically ensures connection:
-   * - If already logged in: launches invisible background browser and starts inbox extraction.
-   * - If not logged in / disconnected: automatically launches visible browser window for Google login.
-   */
   async autoEnsureConnection() {
     if (this.isEnsuring) return this.getStatus();
     if (process.env.ENABLE_LEGACY_CHROME_OBSERVERS !== 'true') return this.getStatus();
@@ -108,7 +97,6 @@ export class GmailBrowserAutomator {
         }
       }
 
-      // No browser currently running on port: check stored state
       if (this.isLoggedIn) {
         console.log('[Gmail Browser Automator] Existing login session detected. Launching invisible background browser...');
         this.launchBackgroundObserver();
@@ -127,9 +115,6 @@ export class GmailBrowserAutomator {
     return this.getStatus();
   }
 
-  /**
-   * Launches the real visible Chrome window for the user to log into Gmail.
-   */
   launchLoginWindow() {
     if (process.env.ENABLE_LEGACY_CHROME_OBSERVERS !== 'true') {
       return {
@@ -144,7 +129,7 @@ export class GmailBrowserAutomator {
       url: this.targetUrl,
       profileDir: this.profileDir,
       debuggingPort: this.debuggingPort,
-      minimized: false // Visible window for user to sign in
+      minimized: false
     });
 
     this.startStateMonitor();
@@ -165,18 +150,13 @@ export class GmailBrowserAutomator {
       url: 'https://mail.google.com/mail/u/0/#inbox',
       profileDir: this.profileDir,
       debuggingPort: this.debuggingPort,
-      minimized: true // Launches offscreen at position -2400,-2400
+      minimized: true
     });
 
     this.startStateMonitor();
     this.startExtractionLoop();
   }
 
-  /**
-   * Monitors the browser CDP target to detect when user reaches the inbox.
-   * If login completes in visible window: auto-closes visible window and switches to quiet background process.
-   * If session expires: opens visible window for re-login.
-   */
   startStateMonitor() {
     if (this.checkTimer) clearInterval(this.checkTimer);
 
@@ -217,15 +197,11 @@ export class GmailBrowserAutomator {
           }
         }
       } catch {
-        // Target busy or initializing
       }
     }, 2000);
     if (this.checkTimer.unref) this.checkTimer.unref();
   }
 
-  /**
-   * Continuous background extraction loop for Gmail inbox credit alerts.
-   */
   startExtractionLoop() {
     if (this.extractionTimer) clearInterval(this.extractionTimer);
 
@@ -233,7 +209,6 @@ export class GmailBrowserAutomator {
       try {
         await this.pollInboxEmails();
       } catch {
-        // Session idle or updating
       }
     }, 3000);
     if (this.extractionTimer.unref) this.extractionTimer.unref();
@@ -251,11 +226,9 @@ export class GmailBrowserAutomator {
 
     this.lastCheckedAt = new Date();
 
-    // Fetch active payment sessions currently waiting for payment or in verification
     const activeSessions = await this.fetchActivePaymentAmounts();
     const targetAmounts = activeSessions.map(s => s.amount);
 
-    // Universal DOM evaluation: deeply inspects inbox table rows, open emails, and body lines
     const script = `
       (() => {
         const results = [];
@@ -333,12 +306,8 @@ export class GmailBrowserAutomator {
             this.processedHashes.delete(first);
           }
 
-          // 1. Try standard bank email parser
           let parsed = BankEmailParser.parse(email);
 
-          // 2. Intelligent Active Window Fallback:
-          // If customer sent custom/dummy email (e.g. "20.00 received" or body contains "20.00")
-          // match it directly against the active payment window running right now!
           if (!parsed && activeSessions.length > 0) {
             for (const s of activeSessions) {
               const intVal = String(Math.floor(Number(s.amount)));

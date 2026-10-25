@@ -78,7 +78,6 @@ export const TOOLS_DEFINITIONS = [
   }
 ];
 
-/** The only hosts the health probe may target. */
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
 
 export function verifyWebhookSignature({ rawPayload, signature, secret, timestamp, maxAgeSeconds = 300 }) {
@@ -102,9 +101,6 @@ export function verifyWebhookSignature({ rawPayload, signature, secret, timestam
     return { valid: false, error: 'INVALID_SIGNATURE_FORMAT' };
   }
 
-  // Use the shared verifier so this tool can never drift from the contract the gateway
-  // and the merchant SDK implement: HMAC-SHA256(secret, rawBody), constant-time compare.
-  // The length is checked first so a truncated signature is reported distinctly.
   if (sig.length !== 64) {
     return { valid: false, error: 'SIGNATURE_LENGTH_MISMATCH' };
   }
@@ -132,11 +128,6 @@ export function generateBankSmsText({ bank, amount, utr, accountLastDigits = '12
   }
 }
 
-/**
- * Probes a local gateway port. The host is deliberately NOT caller-controlled: the tool
- * exists to report the health of the gateway running next to it, and letting a caller
- * choose the host would turn it into an arbitrary GET probe of other hosts.
- */
 export async function checkPortHealth(port, host = '127.0.0.1') {
   const targetHost = LOOPBACK_HOSTS.has(String(host)) ? String(host) : '127.0.0.1';
   return new Promise((resolve) => {

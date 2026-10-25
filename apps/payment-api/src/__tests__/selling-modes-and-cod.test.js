@@ -68,7 +68,6 @@ describe('Architectural Update: Selling Modes (Online vs Offline), COD Flow, & C
     assert.equal(res.body.account.payeeName, 'SuperStore Retail');
     assert.equal(res.body.account.isActive, true);
 
-    // Verify in upi-settings endpoint
     const getRes = await request('/api/v1/admin/upi-settings');
     assert.equal(getRes.status, 200);
     assert.equal(getRes.body.upiId, 'superstore@okhdfcbank');
@@ -76,7 +75,6 @@ describe('Architectural Update: Selling Modes (Online vs Offline), COD Flow, & C
   });
 
   test('2. Online Selling Mode Configuration & Method Invariants', async () => {
-    // Merchant configures Online Selling Mode with Cash on Delivery enabled
     const saveRes = await request('/api/v1/admin/merchant-settings', {
       method: 'POST',
       body: {
@@ -94,7 +92,6 @@ describe('Architectural Update: Selling Modes (Online vs Offline), COD Flow, & C
     assert.deepEqual(saveRes.body.enabledPaymentMethods, ['UPI', 'COD']);
     assert.equal(saveRes.body.codEnabled, true);
 
-    // Create a payment session
     const payRes = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -107,20 +104,17 @@ describe('Architectural Update: Selling Modes (Online vs Offline), COD Flow, & C
     assert.equal(payRes.status, 201);
     const paymentId = payRes.body.paymentId;
 
-    // Checkout state must return ONLINE mode and enabledMethods: ['UPI', 'COD']
     const stateRes = await request(`/api/v1/checkout/${paymentId}/state`);
     assert.equal(stateRes.status, 200);
     assert.equal(stateRes.body.sellingMode, 'ONLINE');
     assert.deepEqual(stateRes.body.enabledMethods, ['UPI', 'COD']);
 
-    // Attempting to select CASH_COUNTER or CARD_COUNTER in ONLINE mode must be rejected
     const invalidSwitchRes = await request(`/api/v1/checkout/${paymentId}/select-method`, {
       method: 'POST',
       body: { method: 'CASH_COUNTER' }
     });
     assert.equal(invalidSwitchRes.status, 400);
 
-    // Turning off COD in ONLINE mode leaves only UPI
     const codOffRes = await request('/api/v1/admin/merchant-settings', {
       method: 'POST',
       body: {
@@ -136,11 +130,9 @@ describe('Architectural Update: Selling Modes (Online vs Offline), COD Flow, & C
   });
 
   test('3. COD Pre-Purchase Confirmation, Slot Release, & Developer API Endpoints', async () => {
-    // Ensure slot is free
     testDb.execute(`UPDATE payment_sessions SET status = 'CANCELLED' WHERE status IN ('ACTIVE', 'PROCESSING', 'QUEUED')`);
     testDb.execute(`UPDATE payment_receiving_accounts SET is_slot_busy = 0, current_active_session_id = NULL`);
 
-    // Re-enable COD in Online mode
     await request('/api/v1/admin/merchant-settings', {
       method: 'POST',
       body: {
@@ -149,14 +141,12 @@ describe('Architectural Update: Selling Modes (Online vs Offline), COD Flow, & C
       }
     });
 
-    // Create customer to attach to checkout
     testDb.execute(
       `INSERT INTO customers (id, name, mobile_number, email, created_at, updated_at)
        VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))`,
       ['00000000-0000-0000-0000-000000000099', 'Rahul Sharma', '9876543210', 'rahul@example.com']
     );
 
-    // Session A is created and holds the active UPI slot
     const payARes = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -170,7 +160,6 @@ describe('Architectural Update: Selling Modes (Online vs Offline), COD Flow, & C
     const paymentIdA = payARes.body.paymentId;
     assert.equal(payARes.body.status, PaymentStatus.ACTIVE);
 
-    // Session B is created and enters the waiting queue behind Session A
     const payBRes = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -184,7 +173,6 @@ describe('Architectural Update: Selling Modes (Online vs Offline), COD Flow, & C
     assert.equal(payBRes.body.status, PaymentStatus.QUEUED);
     assert.equal(payBRes.body.queuePosition, 1);
 
-    // Customer A switches to COD and confirms Cash on Delivery order
     const confirmCodRes = await request(`/api/v1/checkout/${paymentIdA}/confirm-cod`, {
       method: 'POST'
     });
@@ -195,12 +183,10 @@ describe('Architectural Update: Selling Modes (Online vs Offline), COD Flow, & C
     assert.equal(confirmCodRes.body.status, PaymentStatus.SUCCESS);
     assert.equal(confirmCodRes.body.verificationTag, 'COD_ORDER_PLACED');
 
-    // INVARIANT: When Customer A confirmed COD, Session B must immediately be promoted to ACTIVE!
     const checkBRes = await request(`/api/v1/checkout/${paymentIdB}/state`);
     assert.equal(checkBRes.body.status, PaymentStatus.ACTIVE);
     assert.equal(checkBRes.body.queuePosition, 0);
 
-    // Order ids are guessable, so an anonymous caller must not get the delivery contact or metadata.
     for (const path of ['/api/v1/orders/ORDER-COD-A/cod', `/api/v1/payments/${paymentIdA}/cod`, `/api/v1/checkout/${paymentIdA}/cod`]) {
       const anonRes = await request(path);
       assert.equal(anonRes.status, 200);
@@ -209,7 +195,6 @@ describe('Architectural Update: Selling Modes (Online vs Offline), COD Flow, & C
       assert.equal(anonRes.body.metadata, undefined, `${path} leaked metadata`);
     }
 
-    // Developer API endpoint: GET /api/v1/orders/:orderId/cod (owner credential required for the customer)
     const devOrderRes = await request('/api/v1/orders/ORDER-COD-A/cod', { headers: authHeaders() });
     assert.equal(devOrderRes.status, 200);
     assert.equal(devOrderRes.body.orderId, 'ORDER-COD-A');
@@ -221,7 +206,6 @@ describe('Architectural Update: Selling Modes (Online vs Offline), COD Flow, & C
     assert.equal(devOrderRes.body.customer.name, 'Rahul Sharma');
     assert.equal(devOrderRes.body.customer.mobileNumber, '9876543210');
 
-    // Developer API endpoint: GET /api/v1/payments/:id/cod
     const devPayRes = await request(`/api/v1/payments/${paymentIdA}/cod`, { headers: authHeaders() });
     assert.equal(devPayRes.body.customer.name, 'Rahul Sharma');
     assert.equal(devPayRes.status, 200);
@@ -229,7 +213,6 @@ describe('Architectural Update: Selling Modes (Online vs Offline), COD Flow, & C
     assert.equal(devPayRes.body.orderId, 'ORDER-COD-A');
     assert.equal(devPayRes.body.method, 'COD');
 
-    // Merchant Admin COD Orders listing: GET /api/v1/admin/cod-orders
     const adminCodListRes = await request('/api/v1/admin/cod-orders');
     assert.equal(adminCodListRes.status, 200);
     assert.ok(Array.isArray(adminCodListRes.body.codOrders));
@@ -240,7 +223,6 @@ describe('Architectural Update: Selling Modes (Online vs Offline), COD Flow, & C
   });
 
   test('4. Offline Selling Mode: Cash and Card (renamed), COD completely removed', async () => {
-    // Switch to OFFLINE mode with Cash & Card enabled
     const offlineSaveRes = await request('/api/v1/admin/merchant-settings', {
       method: 'POST',
       body: {
@@ -256,7 +238,6 @@ describe('Architectural Update: Selling Modes (Online vs Offline), COD Flow, & C
     assert.equal(offlineSaveRes.body.cashEnabled, true);
     assert.equal(offlineSaveRes.body.cardEnabled, true);
 
-    // Create session in OFFLINE mode
     const payRes = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -274,13 +255,11 @@ describe('Architectural Update: Selling Modes (Online vs Offline), COD Flow, & C
     assert.deepEqual(stateRes.body.enabledMethods, ['UPI', 'CASH_COUNTER', 'CARD_COUNTER']);
     assert.equal(stateRes.body.enabledMethods.includes('COD'), false);
 
-    // Attempting to confirm COD in OFFLINE mode must be rejected
     const invalidCodRes = await request(`/api/v1/checkout/${paymentId}/confirm-cod`, {
       method: 'POST'
     });
     assert.equal(invalidCodRes.status, 400);
 
-    // Disable Card: only Cash + UPI remain
     const cardOffRes = await request('/api/v1/admin/merchant-settings', {
       method: 'POST',
       body: {
@@ -297,8 +276,6 @@ describe('Architectural Update: Selling Modes (Online vs Offline), COD Flow, & C
   });
 
   test('a settled order cannot be restarted (409, not a 500 from the unique index)', async () => {
-    // Earlier cases in this file switch the merchant's active VPA and leave sessions on it,
-    // so resolve the currently active account and release its slot before this case.
     const activeAccount = testDb.queryOne(
       `SELECT id FROM payment_receiving_accounts WHERE merchant_id = ? AND is_active = 1 LIMIT 1`,
       ['00000000-0000-0000-0000-000000000001']
@@ -322,7 +299,6 @@ describe('Architectural Update: Selling Modes (Online vs Offline), COD Flow, & C
     assert.equal(pay.status, 201);
     const paymentId = pay.body.paymentId;
 
-    // Drive the session to a terminal SUCCESS through the normal verification path.
     await request(`/api/v1/checkout/${paymentId}/payment-done`, { method: 'POST' });
     await request('/api/v1/pollers/events', {
       method: 'POST',
@@ -339,9 +315,6 @@ describe('Architectural Update: Selling Modes (Online vs Offline), COD Flow, & C
     const state = await request(`/api/v1/payments/${paymentId}`, { headers: { 'X-Merchant-Key': merchantSecret } });
     assert.equal(state.body.status, 'SUCCESS');
 
-    // Restarting a paid order must fail cleanly. It reuses the merchant's order reference,
-    // and the unique (merchant_id, order_id) index would otherwise reject the duplicate row
-    // and surface as HTTP 500.
     const restart = await request(`/api/v1/checkout/${paymentId}/end-and-restart-payment`, {
       method: 'POST',
       headers: { 'x-device-id': 'device-restart-b' },
@@ -370,7 +343,6 @@ describe('Architectural Update: Selling Modes (Online vs Offline), COD Flow, & C
       body: { customerId: reg.body.customerId, token: customerToken }
     });
 
-    // 1. Anonymous callers learn nothing about the customer.
     for (const path of [
       `/api/v1/payments/${paymentId}/cod`,
       `/api/v1/orders/COD-PII-ORDER-1/cod`,
@@ -382,28 +354,23 @@ describe('Architectural Update: Selling Modes (Online vs Offline), COD Flow, & C
       assert.equal(res.body.metadata, undefined, `${path} leaked metadata`);
     }
 
-    // 2. The checkout state endpoint must not expose the customer to an anonymous holder
-    //    of the payment id either.
     const anonState = await request(`/api/v1/checkout/${paymentId}/state`);
     assert.equal(anonState.status, 200);
     assert.equal(anonState.body.customer, null, 'checkout state leaked customer');
     assert.deepEqual(anonState.body.metadata, {}, 'checkout state leaked metadata');
 
-    // 3. The owning merchant does get the full view.
     const ownerRes = await request(`/api/v1/payments/${paymentId}/cod`, {
       headers: { 'X-Merchant-Key': merchantSecret }
     });
     assert.equal(ownerRes.status, 200);
     assert.equal(ownerRes.body.customer.mobileNumber, '9111000099');
 
-    // 4. The customer themselves see their own profile.
     const selfRes = await request(`/api/v1/checkout/${paymentId}/state`, {
       headers: { 'x-customer-token': customerToken }
     });
     assert.equal(selfRes.status, 200);
     assert.equal(selfRes.body.customer.mobileNumber, '9111000099');
 
-    // 5. A wrong merchant key is rejected like an anonymous caller.
     const wrongKey = await request(`/api/v1/payments/${paymentId}/cod`, {
       headers: { 'X-Merchant-Key': 'not-the-merchant-secret' }
     });

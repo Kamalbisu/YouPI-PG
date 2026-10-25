@@ -84,7 +84,6 @@ describe('@youpi/db Unit & Integration Tests', () => {
 
   describe('Queue Engine & Concurrency Slot Invariants', () => {
     test('enforces ONE active slot at one time and queues subsequent sessions', () => {
-      // Create session A
       const sessionA = sessionRepo.create({
         merchantId: testMerchant.id,
         receivingAccountId: testAccount.id,
@@ -92,7 +91,6 @@ describe('@youpi/db Unit & Integration Tests', () => {
         amountPaise: 20000n
       });
 
-      // Create session B (same amount, same account)
       const sessionB = sessionRepo.create({
         merchantId: testMerchant.id,
         receivingAccountId: testAccount.id,
@@ -100,7 +98,6 @@ describe('@youpi/db Unit & Integration Tests', () => {
         amountPaise: 20000n
       });
 
-      // Create session C (same amount, same account)
       const sessionC = sessionRepo.create({
         merchantId: testMerchant.id,
         receivingAccountId: testAccount.id,
@@ -108,50 +105,41 @@ describe('@youpi/db Unit & Integration Tests', () => {
         amountPaise: 20000n
       });
 
-      // 1. Session A attempts to acquire slot
       const resA = sessionRepo.acquireSlotAtomic(sessionA.id, testAccount.id, 300000);
       assert.equal(resA.status, PaymentStatus.ACTIVE);
       assert.equal(resA.queuePosition, 0);
       assert.ok(resA.expiresAt instanceof Date);
 
-      // Verify receiving account is marked busy
       const acctAfterA = accountRepo.findById(testAccount.id);
       assert.equal(acctAfterA.isSlotBusy, true);
       assert.equal(acctAfterA.currentActiveSessionId, sessionA.id);
 
-      // 2. Session B attempts to acquire slot -> MUST BE QUEUED at position 1
       const resB = sessionRepo.acquireSlotAtomic(sessionB.id, testAccount.id, 300000);
       assert.equal(resB.status, PaymentStatus.QUEUED);
       assert.equal(resB.queuePosition, 1);
       assert.equal(resB.expiresAt, null);
 
-      // 3. Session C attempts to acquire slot -> MUST BE QUEUED at position 2
       const resC = sessionRepo.acquireSlotAtomic(sessionC.id, testAccount.id, 300000);
       assert.equal(resC.status, PaymentStatus.QUEUED);
       assert.equal(resC.queuePosition, 2);
 
-      // 4. Session A transitions to PROCESSING when customer clicks "Payment Done"
       const procA = sessionRepo.transitionToProcessing(sessionA.id, 30000);
       assert.equal(procA.status, PaymentStatus.PROCESSING);
       assert.ok(procA.processingStartedAt instanceof Date);
       assert.ok(procA.processingExpiresAt instanceof Date);
 
-      // Slot MUST STILL BE BUSY during PROCESSING! Session B cannot steal it
       const acctDuringProc = accountRepo.findById(testAccount.id);
       assert.equal(acctDuringProc.isSlotBusy, true);
       assert.equal(acctDuringProc.currentActiveSessionId, sessionA.id);
 
-      // 5. Session A finishes with SUCCESS
       const successA = sessionRepo.transitionToTerminal(sessionA.id, PaymentStatus.SUCCESS);
       assert.equal(successA.status, PaymentStatus.SUCCESS);
       assert.ok(successA.completedAt instanceof Date);
 
-      // Slot is now released!
       const acctAfterSuccess = accountRepo.findById(testAccount.id);
       assert.equal(acctAfterSuccess.isSlotBusy, false);
       assert.equal(acctAfterSuccess.currentActiveSessionId, null);
 
-      // 6. Promote next queued session (B)
       const nextQueued = sessionRepo.getNextQueuedSession(testAccount.id);
       assert.equal(nextQueued.id, sessionB.id);
 
@@ -159,10 +147,9 @@ describe('@youpi/db Unit & Integration Tests', () => {
       assert.equal(resBAfterPromo.status, PaymentStatus.ACTIVE);
       assert.equal(resBAfterPromo.queuePosition, 0);
 
-      // Re-index remaining queue
       sessionRepo.reindexQueue(testAccount.id);
       const updatedC = sessionRepo.findById(sessionC.id);
-      assert.equal(updatedC.queuePosition, 1); // C promoted from #2 to #1 in waiting line
+      assert.equal(updatedC.queuePosition, 1);
     });
 
     test('transitions to CANCELLED and immediately releases slot', () => {
@@ -229,7 +216,6 @@ describe('@youpi/db Unit & Integration Tests', () => {
       assert.ok(ticket.id);
       assert.equal(ticket.status, TicketStatus.OPEN);
 
-      // Admin replies
       const adminMsg = ticketRepo.addMessage({
         ticketId: ticket.id,
         senderType: SenderType.ADMIN,

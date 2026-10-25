@@ -10,7 +10,6 @@ describe('Checkout Portal Integration Tests', () => {
   let baseUrl;
 
   before(async () => {
-    // Start on high test port (7199)
     serverInstance = await startCheckoutServer(7199);
     baseUrl = `http://localhost:${serverInstance.port}`;
   });
@@ -37,7 +36,6 @@ describe('Checkout Portal Integration Tests', () => {
       assert.equal(matrix.length, 29);
       assert.equal(matrix[0].length, 29);
 
-      // Verify top-left finder pattern corner
       assert.equal(matrix[0][0], 1);
       assert.equal(matrix[0][6], 1);
       assert.equal(matrix[6][0], 1);
@@ -79,7 +77,6 @@ describe('Checkout Portal Integration Tests', () => {
       assert.ok(res.text.includes('id="authStepSignup"'));
       assert.ok(res.text.includes('id="authStepOtp"'));
 
-      // INVARIANT: Zero UPI Offer artifacts
       assert.equal(res.text.includes('6 Offers'), false);
       assert.equal(res.text.includes('View Offers'), false);
       assert.equal(res.text.includes('id="checkoutNoticeText"'), false);
@@ -87,8 +84,6 @@ describe('Checkout Portal Integration Tests', () => {
     });
 
     test('GET /checkout/:id framing is controlled by CHECKOUT_FRAME_ANCESTORS', async () => {
-      // No allowlist configured: the checkout page stays framable by any origin, because
-      // merchant storefronts embed it cross-origin. Deployments can pin the allowlist.
       const before = await get('/checkout/pay_test_uuid_12345');
       assert.equal(before.headers['x-frame-options'], undefined);
       assert.ok(before.headers['content-security-policy'].includes('frame-ancestors *;'));
@@ -98,15 +93,12 @@ describe('Checkout Portal Integration Tests', () => {
         const res = await get('/checkout/pay_test_uuid_12345');
         assert.equal(res.headers['x-frame-options'], undefined);
         assert.ok(res.headers['content-security-policy'].includes("frame-ancestors 'self' https://shop.example.com;"));
-        // The QR image stays unframeable.
         const qr = await get('/checkout/pay_test_uuid_12345/qr.svg');
         assert.equal(qr.headers['x-frame-options'], 'SAMEORIGIN');
       } finally {
         delete process.env.CHECKOUT_FRAME_ANCESTORS;
       }
       assert.deepEqual(frameAncestorOrigins('https://a.test http://localhost:5000/'), ['https://a.test', 'http://localhost:5000']);
-      // Entries that are not a bare http(s) origin are rejected outright, so the value can
-      // never widen the CSP or inject another directive.
       assert.deepEqual(frameAncestorOrigins('javascript:alert(1)'), []);
       assert.deepEqual(frameAncestorOrigins('https://x.test/path'), []);
       assert.deepEqual(frameAncestorOrigins('*'), []);
@@ -152,23 +144,19 @@ describe('Checkout Portal Integration Tests', () => {
       const res = await get('/checkout/pay_test_uuid_12345');
       assert.equal(res.status, 200);
 
-      // Verify PC Redesign sidebar & header exists
       assert.ok(res.text.includes('ypg-pc-sidebar'));
       assert.ok(res.text.includes('id="pcMerchantName"'));
       assert.ok(res.text.includes('id="pcPriceSummaryAmount"'));
       assert.ok(res.text.includes('ypg-pc-topbar'));
 
-      // Verify UPI Server indicator
       assert.ok(res.text.includes('id="upiServerHealthIndicator"'));
       assert.ok(res.text.includes('id="serverStatusLabel"'));
       assert.ok(res.text.includes('id="serverDowntimeAlert"'));
 
-      // Verify Play Store icons are referenced
       assert.ok(res.text.includes('/icons/gpay.png'));
       assert.ok(res.text.includes('/icons/phonepe.png'));
       assert.ok(res.text.includes('/icons/paytm.png'));
 
-      // INVARIANT: Raw Payee VPA / UPI ID row is REMOVED from Order Summary
       assert.equal(res.text.includes('id="drawerVpa"'), false);
     });
 
@@ -183,16 +171,9 @@ describe('Checkout Portal Integration Tests', () => {
       const res = await get('/checkout/pay_test_uuid_12345');
       assert.equal(res.status, 200);
 
-      // The client script lives inline, in the rendered page. A second copy
-      // used to be loaded from /js/checkout.js, and two classic scripts that
-      // both declare `let state` at global scope are a syntax error: the
-      // second one never runs, and the page throws "Identifier 'state' has
-      // already been declared" on every single load.
       assert.equal(res.text.includes('/js/checkout.js'), false);
       assert.equal(res.text.includes('src="/js/'), false);
 
-      // The live copy is the inline one, and it is the hardened one — the
-      // redirect and postMessage guards live here.
       assert.ok(res.text.includes('STORAGE_KEY_IDENTITY'));
       assert.ok(res.text.includes('sanitizeRedirectUrl'));
     });

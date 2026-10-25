@@ -1,31 +1,13 @@
 import crypto from 'node:crypto';
 import { hashPassword, verifyPassword, normalizeEmail, normalizeMobile, isValidEmail, isValidMobile, isValidPassword, safeEqual, encryptAtRest, decryptAtRest } from '@youpi/common';
 
-/** Wrong guesses tolerated per issued OTP before the challenge is burned. */
 const OTP_MAX_ATTEMPTS = 5;
 
 export class CustomerRepository {
-  /**
-   * @param {import('../database.js').Database} db
-   */
   constructor(db) {
     this.db = db;
   }
 
-  /**
-   * Creates a new gateway customer.
-   * @param {{
-   *   id?: string,
-   *   name?: string,
-   *   fullName?: string,
-   *   email?: string,
-   *   mobileNumber?: string,
-   *   phoneNumber?: string,
-   *   password?: string,
-   *   passwordHash?: string,
-   *   status?: string
-   * }} data
-   */
   create(data) {
     const id = data.id || crypto.randomUUID();
     const name = String(data.name || data.fullName || '').trim();
@@ -80,11 +62,6 @@ export class CustomerRepository {
     return this.findById(id);
   }
 
-  /**
-   * Finds customer by unique ID.
-   * @param {string} id
-   * @returns {any | null}
-   */
   findById(id) {
     if (!id) return null;
     const row = this.db.queryOne('SELECT * FROM customers WHERE id = ?', [id]);
@@ -92,11 +69,6 @@ export class CustomerRepository {
     return this.mapRow(row);
   }
 
-  /**
-   * Finds customer by normalized email.
-   * @param {string} email
-   * @returns {any | null}
-   */
   findByEmail(email) {
     const normalized = normalizeEmail(email);
     if (!normalized) return null;
@@ -105,11 +77,6 @@ export class CustomerRepository {
     return this.mapRow(row);
   }
 
-  /**
-   * Finds customer by normalized mobile number.
-   * @param {string} mobileNumber
-   * @returns {any | null}
-   */
   findByMobile(mobileNumber) {
     const normalized = normalizeMobile(mobileNumber);
     if (!normalized) return null;
@@ -122,22 +89,11 @@ export class CustomerRepository {
     return this.mapRow(row);
   }
 
-  /**
-   * Alias for backwards compatibility with tests and callers expecting findByPhone.
-   * @param {string} arg1 merchantId or phoneNumber
-   * @param {string} [arg2] optional phoneNumber if merchantId was first
-   * @returns {any | null}
-   */
   findByPhone(arg1, arg2) {
     const phone = arg2 || arg1;
     return this.findByMobile(phone);
   }
 
-  /**
-   * Finds customer by either email or mobile number identifier.
-   * @param {string} identifier
-   * @returns {any | null}
-   */
   findByIdentifier(identifier) {
     if (!identifier) return null;
     const trimmed = String(identifier).trim();
@@ -149,13 +105,6 @@ export class CustomerRepository {
     return this.findByEmail(trimmed);
   }
 
-  /**
-   * Verifies customer login credentials using email or mobile + password.
-   * @param {string|any} arg1 Identifier or merchantId
-   * @param {string} arg2 Password or phoneNumber
-   * @param {string} [arg3] Optional password if merchantId was first
-   * @returns {any | null} Safe customer profile or null
-   */
   verifyCredentials(arg1, arg2, arg3) {
     let identifier = arg1;
     let password = arg2;
@@ -174,7 +123,6 @@ export class CustomerRepository {
     const isValid = verifyPassword(password, customer.passwordHash);
     if (!isValid) return null;
 
-    // Update last_login_at
     const now = new Date().toISOString();
     try {
       this.db.execute('UPDATE customers SET last_login_at = ?, updated_at = ? WHERE id = ?', [now, now, customer.id]);
@@ -185,20 +133,11 @@ export class CustomerRepository {
     return safeCustomer;
   }
 
-  /**
-   * Stores WhatsApp OTP challenge for a customer mobile number.
-   * @param {string} mobileNumber
-   * @param {string} otpCode
-   * @param {string} expiresAt ISO String
-   * @returns {any | null}
-   */
   setOtp(mobileNumber, otpCode, expiresAt) {
     const normalized = normalizeMobile(mobileNumber);
     if (!normalized) return null;
     const now = new Date().toISOString();
     this.db.execute(
-      // Keep the guess count while the previous code is still live: resending must not refill
-      // the attempt budget, otherwise an attacker gets a fresh set of guesses per resend.
       `UPDATE customers SET otp_code = ?, otp_expires_at = ?,
          otp_attempts = CASE WHEN otp_code IS NOT NULL AND otp_expires_at IS NOT NULL AND otp_expires_at > ? THEN otp_attempts ELSE 0 END,
          updated_at = ? WHERE mobile_number = ?`,
@@ -207,28 +146,17 @@ export class CustomerRepository {
     return this.findByMobile(normalized);
   }
 
-  /**
-   * Verifies WhatsApp OTP for customer login/signup.
-   * Enforces a bounded attempt count per challenge and compares the code in constant time.
-   * Clears the OTP and marks phone as verified on success.
-   * @param {string} mobileNumber
-   * @param {string} otpCode
-   * @returns {any | null}
-   */
   verifyOtp(mobileNumber, otpCode) {
     const normalized = normalizeMobile(mobileNumber);
     if (!normalized || !otpCode) return null;
     const customer = this.findByMobile(normalized);
     if (!customer) return null;
 
-    // A 6-digit code has a 10^6 keyspace and a 5 minute lifetime, so without an attempt
-    // budget it is brute-forceable online. Fail closed once the budget is spent.
     const attempts = Number(customer.otpAttempts || 0);
     if (attempts >= OTP_MAX_ATTEMPTS) return null;
 
     const submitted = String(otpCode).trim();
     const storedOtp = decryptAtRest(customer.otpCode);
-    // `!==` short-circuits on the first differing character; use a constant-time compare.
     const matches = storedOtp ? safeEqual(storedOtp, submitted) : false;
     if (!storedOtp || !matches) {
       this.db.execute(
@@ -238,7 +166,7 @@ export class CustomerRepository {
       return null;
     }
     if (customer.otpExpiresAt && new Date() > customer.otpExpiresAt) {
-      return null; // Expired
+      return null;
     }
 
     const now = new Date().toISOString();
@@ -249,36 +177,16 @@ export class CustomerRepository {
     return this.findById(customer.id);
   }
 
-  /**
-   * Completely wipes all customer identity records.
-   */
   clearAll() {
     this.db.execute('DELETE FROM customer_sessions');
     this.db.execute('DELETE FROM customers');
   }
 
-  /**
-   * Returns count of customers in the database.
-   * @returns {number}
-   */
   count() {
     const row = this.db.queryOne('SELECT COUNT(*) as c FROM customers');
     return row?.c || 0;
   }
 
-  /**
-   * Bans a customer by ID.
-   * @param {string} id
-   * @param {string} [reason]
-   * @returns {any | null}
-   */
-  /**
-   * Bans a customer by ID.
-   * @param {string} id
-   * @param {string} [reason='FRAUDULENT_PAYMENT_INJECTION']
-   * @param {{ lastDevice?: string, deviceInfo?: string }} [options={}]
-   * @returns {any | null}
-   */
   banCustomer(id, reason = 'FRAUDULENT_PAYMENT_INJECTION', options = {}) {
     if (!id) return null;
     const releasedAccounts = [];
@@ -290,7 +198,6 @@ export class CustomerRepository {
         [reason, now, lastDevice, now, id]
       );
 
-      // Immediately transition all existing non-terminal sessions for this customer to EXPIRED
       const activeSessions = this.db.query(
         "SELECT id, receiving_account_id FROM payment_sessions WHERE customer_id = ? AND status IN ('INITIATED', 'QUEUED', 'ACTIVE', 'PROCESSING')",
         [id]
@@ -321,11 +228,6 @@ export class CustomerRepository {
     return this.findById(id);
   }
 
-  /**
-   * Unbans a customer by ID.
-   * @param {string} id
-   * @returns {any | null}
-   */
   unbanCustomer(id) {
     if (!id) return null;
     const now = new Date().toISOString();
@@ -336,39 +238,12 @@ export class CustomerRepository {
     return this.findById(id);
   }
 
-  /**
-   * Checks if customer is banned.
-   * @param {string} id
-   * @returns {boolean}
-   */
   isBanned(id) {
     if (!id) return false;
     const customer = this.findById(id);
     return customer?.status === 'BANNED';
   }
 
-  /**
-   * Creates and persists a security event record with complete forensic evidence.
-   * @param {{
-   *   id?: string,
-   *   merchantId?: string,
-   *   customerId?: string,
-   *   paymentSessionId?: string,
-   *   eventType: string,
-   *   source?: string,
-   *   sender?: string,
-   *   deviceInfo?: string,
-   *   rawMessage: string,
-   *   normalizedMessage?: string,
-   *   extractedAmount?: string,
-   *   extractedReference?: string,
-   *   parserResults?: any,
-   *   verificationResults?: any,
-   *   fraudReason: string,
-   *   metadata?: any
-   * }} data
-   * @returns {any}
-   */
   createSecurityEvent(data) {
     const id = data.id || crypto.randomUUID();
     const now = new Date().toISOString();
@@ -402,12 +277,6 @@ export class CustomerRepository {
     return this.db.queryOne('SELECT * FROM security_events WHERE id = ?', [id]);
   }
 
-  /**
-   * Finds all security events for customer or all security events.
-   * @param {string} [customerId]
-   * @param {number} [limit=100]
-   * @returns {any[]}
-   */
   getSecurityEvents(customerId = null, limit = 100) {
     const mapSecRow = (row) => {
       let meta = {};
@@ -443,11 +312,6 @@ export class CustomerRepository {
     return rows.map(mapSecRow);
   }
 
-  /**
-   * Retrieves all banned customers with their latest security event and payment session details.
-   * @param {string} [searchQuery='']
-   * @returns {any[]}
-   */
   findAllBanned(searchQuery = '') {
     let sql = `
       SELECT c.*,
@@ -498,11 +362,6 @@ export class CustomerRepository {
     }));
   }
 
-  /**
-   * Retrieves complete ban evidence package for a specific customer.
-   * @param {string} customerId
-   * @returns {any | null}
-   */
   getBanEvidence(customerId) {
     const customer = this.findById(customerId);
     if (!customer) return null;
@@ -611,9 +470,6 @@ export class CustomerRepository {
     };
   }
 
-  /**
-   * Maps SQLite row to camelCase domain model with backward-compatibility aliases.
-   */
   mapRow(row) {
     return {
       id: row.id,

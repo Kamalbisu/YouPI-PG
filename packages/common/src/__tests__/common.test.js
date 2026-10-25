@@ -119,7 +119,6 @@ describe('@youpi/common Unit Tests', () => {
       assert.equal(parsed.searchParams.get('am'), '200.00');
       assert.equal(parsed.searchParams.get('tn'), 'ORDER-99');
       assert.equal(parsed.searchParams.get('tr'), null);
-      // Verify no extra noisy parameters
       assert.equal(parsed.searchParams.get('cu'), null);
       assert.deepEqual([...parsed.searchParams.keys()], ['pa', 'pn', 'am', 'tn']);
     });
@@ -139,7 +138,6 @@ describe('@youpi/common Unit Tests', () => {
       assert.equal(parsed.searchParams.get('pn'), 'Demo Store Merchant');
       assert.equal(parsed.searchParams.get('am'), '1.00');
       assert.equal(parsed.searchParams.get('tn'), 'ORDER-123');
-      // Strictly verify NO cu, NO tr, NO extra parameters
       assert.equal(parsed.searchParams.get('cu'), null);
       assert.equal(parsed.searchParams.get('tr'), null);
       assert.deepEqual([...parsed.searchParams.keys()], ['pa', 'pn', 'am', 'tn']);
@@ -159,7 +157,6 @@ describe('@youpi/common Unit Tests', () => {
       assert.ok(intentUri.includes('package=com.phonepe.app'));
       assert.ok(intentUri.includes('scheme=upi'));
       assert.ok(intentUri.endsWith('#Intent;scheme=upi;package=com.phonepe.app;end'));
-      // Underlying query payload inside intent must not have cu or tr
       const queryPart = intentUri.split('#')[0].replace('intent://pay?', '');
       const queryParams = new URLSearchParams(queryPart);
       assert.equal(queryParams.get('cu'), null);
@@ -171,7 +168,6 @@ describe('@youpi/common Unit Tests', () => {
       const providers = getUpiProviders();
       assert.equal(providers.length, 30, 'Must have exactly 30 registered UPI providers');
 
-      // Verify Google Pay, PhonePe, Paytm packages
       const gpay = findUpiProviderByPackage('com.google.android.apps.nbu.paisa.user');
       assert.ok(gpay);
       assert.equal(gpay.name, 'Google Pay');
@@ -186,7 +182,6 @@ describe('@youpi/common Unit Tests', () => {
       assert.ok(paytm);
       assert.equal(paytm.packageName, 'net.one97.paytm');
 
-      // Verify all 30 providers have unique packages, names, and logos
       const packages = new Set();
       for (const p of providers) {
         assert.ok(p.id, `Provider must have an id`);
@@ -203,17 +198,14 @@ describe('@youpi/common Unit Tests', () => {
       assert.ok(Array.isArray(ALLOWED_NOTIFICATION_PACKAGES));
       assert.ok(ALLOWED_NOTIFICATION_PACKAGES.length >= 38);
 
-      // Verify essential UPI and banking packages are included
       assert.equal(isAllowedNotificationPackage('com.phonepe.app'), true);
       assert.equal(isAllowedNotificationPackage('com.google.android.apps.nbu.paisa.user'), true);
       assert.equal(isAllowedNotificationPackage('net.one97.paytm'), true);
       assert.equal(isAllowedNotificationPackage('com.google.android.apps.messaging'), true);
       assert.equal(isAllowedNotificationPackage('com.sbi.lotusintouch'), true);
 
-      // Case-insensitivity and trim handling
       assert.equal(isAllowedNotificationPackage('  COM.PHONEPE.APP  '), true);
 
-      // Rejects spoofed or unlisted apps
       assert.equal(isAllowedNotificationPackage('com.attacker.fake.app'), false);
       assert.equal(isAllowedNotificationPackage(''), false);
       assert.equal(isAllowedNotificationPackage(null), false);

@@ -4,13 +4,6 @@ import { SmsObserverService } from './sms-service.js';
 import { GoogleMessagesAutomator } from './browser-automator.js';
 
 export class SmsObserverServer {
-  /**
-   * @param {{
-   *   service?: SmsObserverService,
-   *   apiBaseUrl?: string,
-   *   receivingAccountId?: string
-   * }} options
-   */
   constructor(options = {}) {
     this.service = options.service || new SmsObserverService(options);
     this.automator = new GoogleMessagesAutomator({ smsService: this.service });
@@ -32,7 +25,6 @@ export class SmsObserverServer {
         return;
       }
 
-      // GET /health
       if (pathname === '/health') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
@@ -45,9 +37,7 @@ export class SmsObserverServer {
         return;
       }
 
-      // GET /api/browser/status
       if (pathname === '/api/browser/status') {
-        // Only trigger a background connection attempt when an authenticated observer/admin asks
         if (hasBearer(req, getObserverToken(), getAdminToken()) && this.automator.mode === 'STANDBY' && !this.automator.isEnsuring) {
           this.automator.autoEnsureConnection().catch(() => {});
         }
@@ -59,7 +49,6 @@ export class SmsObserverServer {
         return;
       }
 
-      // POST /api/browser/auto-ensure
       if (pathname === '/api/browser/auto-ensure' && method === 'POST') {
         if (!hasBearer(req, getObserverToken(), getAdminToken())) {
           res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -80,7 +69,6 @@ export class SmsObserverServer {
         return;
       }
 
-      // POST /api/browser/launch-pairing
       if (pathname === '/api/browser/launch-pairing' && req.method === 'POST') {
         if (!hasBearer(req, getObserverToken(), getAdminToken())) {
           res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -101,7 +89,6 @@ export class SmsObserverServer {
         return;
       }
 
-      // POST /api/sweep (Active sweep trigger during 30-second verification window)
       if (pathname === '/api/sweep' && method === 'POST') {
         if (!hasBearer(req, getObserverToken(), getAdminToken())) {
           res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -119,9 +106,7 @@ export class SmsObserverServer {
         return;
       }
 
-      // POST /process-sms (Direct SMS intake / Google Messages Web bridge)
       if (pathname === '/process-sms' && req.method === 'POST') {
-        // Direct ingestion feeds the payment pipeline: only the local operator/test tooling may call it.
         if (!hasBearer(req, getObserverToken(), getAdminToken())) {
           res.writeHead(401, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Unauthorized' }));
