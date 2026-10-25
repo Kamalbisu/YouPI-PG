@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import dns from 'node:dns';
 import { fileURLToPath } from 'node:url';
 import { encrypt, decrypt } from './crypto.js';
 
@@ -311,10 +312,35 @@ export function hasBearer(req, ...tokens) {
 
 const BLOCKED_HOSTNAMES = new Set(['localhost', 'localhost.localdomain', 'ip6-localhost', 'ip6-loopback']);
 
+function hexPairToIPv4(hi, lo) {
+  const h = parseInt(hi, 16);
+  const l = parseInt(lo, 16);
+  return `${h >> 8}.${h & 255}.${l >> 8}.${l & 255}`;
+}
+
+/** Returns the embedded IPv4 address of a mapped/compatible/NAT64 IPv6 literal, or null. */
+function embeddedIPv4(lower) {
+  const dotted = lower.match(/^(?:::ffff:|::|64:ff9b::)(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+  if (dotted) return dotted[1];
+  const mapped = lower.match(/^(?:::ffff:|::)([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (mapped) return hexPairToIPv4(mapped[1], mapped[2]);
+  const nat64 = lower.match(/^64:ff9b::([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (nat64) return hexPairToIPv4(nat64[1], nat64[2]);
+  return null;
+}
+
 /** True for loopback, RFC1918, link-local, CGNAT, multicast and reserved IPv4/IPv6 ranges. */
 function isPrivateAddress(hostname) {
   const lower = hostname.toLowerCase().replace(/^\[|\]$/g, '');
   if (lower === '::1' || lower === '::' || lower === '0.0.0.0') return true;
+
+  // IPv4-mapped (::ffff:a.b.c.d or ::ffff:xxxx:xxxx), IPv4-compatible and NAT64 (64:ff9b::/96)
+  // forms embed an IPv4 address: judge that embedded address instead.
+  const embedded = embeddedIPv4(lower);
+  if (embedded) return isPrivateAddress(embedded);
+  // 6to4 (2002::/16) carries an IPv4 address in bits 16-48.
+  const sixToFour = lower.match(/^2002:([0-9a-f]{1,4}):([0-9a-f]{1,4})(?::|$)/);
+  if (sixToFour) return isPrivateAddress(hexPairToIPv4(sixToFour[1], sixToFour[2]));
   if (lower.endsWith('.local') || lower.endsWith('.internal') || lower.endsWith('.localhost')) return true;
 
   const v4 = lower.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
@@ -375,6 +401,32 @@ export function validateOutboundWebhookUrl(value) {
     };
   }
   return { valid: true, url };
+}
+
+/**
+ * Resolves the webhook hostname and refuses it when ANY resolved address is private, so a public
+ * name that points at an internal address is rejected. Literal IPs need no lookup. This narrows but
+ * does not eliminate DNS rebinding (the later fetch resolves again); closing that fully needs the
+ * request to connect to the checked address.
+ * @param {URL} url
+ * @param {{ lookup?: Function }} [options]
+ * @returns {Promise<{ valid: boolean, error?: string }>}
+ */
+export async function assertWebhookHostResolvesPublic(url, options = {}) {
+  if (privateWebhooksAllowed()) return { valid: true };
+  const hostname = (url.hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
+  if (!hostname || /^[\d.]+$/.test(hostname) || hostname.includes(':')) return { valid: true };
+  const lookup = options.lookup || dns.promises.lookup.bind(dns.promises);
+  try {
+    const records = await lookup(hostname, { all: true, verbatim: true });
+    const list = Array.isArray(records) ? records : [records];
+    if (list.some(r => isPrivateAddress(String(r.address || '')))) {
+      return { valid: false, error: 'Webhook hostname resolves to a loopback or private network address.' };
+    }
+  } catch {
+    // An unresolvable host cannot be reached either; delivery will fail on its own.
+  }
+  return { valid: true };
 }
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;

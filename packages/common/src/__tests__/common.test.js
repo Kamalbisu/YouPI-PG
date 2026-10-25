@@ -21,7 +21,9 @@ import {
   findUpiProviderById,
   ALLOWED_NOTIFICATION_PACKAGES,
   isAllowedNotificationPackage,
-  calculateObservationFingerprint
+  calculateObservationFingerprint,
+  validateOutboundWebhookUrl,
+  assertWebhookHostResolvesPublic
 } from '../index.js';
 
 describe('@youpi/common Unit Tests', () => {
@@ -318,5 +320,36 @@ describe('placeholder secrets', async () => {
       if (prev === undefined) delete process.env.YOUPI_TEST_PLACEHOLDER_SECRET;
       else process.env.YOUPI_TEST_PLACEHOLDER_SECRET = prev;
     }
+  });
+});
+
+describe('webhook SSRF guard', () => {
+  async function withPrivateWebhooksBlocked(fn) {
+    const prev = process.env.YOUPI_ALLOW_PRIVATE_WEBHOOKS;
+    delete process.env.YOUPI_ALLOW_PRIVATE_WEBHOOKS;
+    try { return await fn(); } finally {
+      if (prev === undefined) delete process.env.YOUPI_ALLOW_PRIVATE_WEBHOOKS;
+      else process.env.YOUPI_ALLOW_PRIVATE_WEBHOOKS = prev;
+    }
+  }
+
+  test('rejects IPv4-mapped, compatible, NAT64 and 6to4 forms of private addresses', async () => {
+    await withPrivateWebhooksBlocked(() => {
+      for (const host of ['[::ffff:127.0.0.1]', '[::ffff:169.254.169.254]', '[::ffff:10.0.0.1]', '[::127.0.0.1]', '[64:ff9b::7f00:1]', '[2002:7f00:1::]', '127.0.0.1', '[::1]', 'localhost']) {
+        assert.equal(validateOutboundWebhookUrl(`http://${host}/hook`).valid, false, host);
+      }
+      for (const host of ['[::ffff:8.8.8.8]', '8.8.8.8', 'example.com']) {
+        assert.equal(validateOutboundWebhookUrl(`https://${host}/hook`).valid, true, host);
+      }
+    });
+  });
+
+  test('rejects a public hostname that resolves to a private address', async () => {
+    await withPrivateWebhooksBlocked(async () => {
+      const bad = await assertWebhookHostResolvesPublic(new URL('https://hook.example/x'), { lookup: async () => [{ address: '93.184.216.34' }, { address: '10.0.0.5' }] });
+      assert.equal(bad.valid, false);
+      const good = await assertWebhookHostResolvesPublic(new URL('https://hook.example/x'), { lookup: async () => [{ address: '93.184.216.34' }] });
+      assert.equal(good.valid, true);
+    });
   });
 });
