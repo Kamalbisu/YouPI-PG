@@ -1,32 +1,18 @@
 import crypto from 'node:crypto';
 import { blindIndex } from '@youpi/common';
 
-/** Namespace so session-token and device-token digests can never collide. */
 const INDEX_NS = 'csess';
 
 export class CustomerSessionRepository {
-  /**
-   * @param {import('../database.js').Database} db
-   * @param {import('./customer.repository.js').CustomerRepository} [customerRepo]
-   */
   constructor(db, customerRepo = null) {
     this.db = db;
     this.customerRepo = customerRepo;
   }
 
-  /**
-   * Creates an active server-authoritative session for an authenticated customer.
-   * @param {{
-   *   customerId: string,
-   *   ipAddress?: string,
-   *   userAgent?: string,
-   *   ttlHours?: number
-   * }} data
-   */
   create(data) {
     const id = crypto.randomUUID();
     const token = `csess_${crypto.randomBytes(32).toString('hex')}`;
-    const ttlHours = data.ttlHours || 720; // 30 days default
+    const ttlHours = data.ttlHours || 720;
     const now = new Date();
     const expiresAt = new Date(now.getTime() + ttlHours * 3600 * 1000);
 
@@ -35,9 +21,6 @@ export class CustomerSessionRepository {
       VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)
     `;
 
-    // The bearer token is returned to the client once and never read back from the database,
-    // so only a keyed blind index is stored. A database dump therefore cannot be replayed
-    // as valid sessions, which a plaintext (or plain-hashed) column would allow.
     this.db.execute(sql, [
       id,
       data.customerId,
@@ -59,11 +42,6 @@ export class CustomerSessionRepository {
     };
   }
 
-  /**
-   * Validates a session token and retrieves associated customer profile.
-   * @param {string} token
-   * @returns {{ session: any, customer: any } | null}
-   */
   findByToken(token) {
     if (!token || typeof token !== 'string') return null;
 
@@ -72,14 +50,12 @@ export class CustomerSessionRepository {
       [blindIndex(token, INDEX_NS)]
     );
 
-    // Rows written before index-only storage held the raw token.
     if (!row && typeof token === 'string' && token.startsWith('csess_') && token.length < 100) {
       const legacy = this.db.queryOne(
         'SELECT * FROM customer_sessions WHERE token = ? AND is_active = 1',
         [token]
       );
       if (legacy) {
-        // Re-index on first successful use so the plaintext row does not linger.
         try {
           this.db.execute('UPDATE customer_sessions SET token = ? WHERE id = ?', [blindIndex(token, INDEX_NS), legacy.id]);
         } catch {}
@@ -91,7 +67,6 @@ export class CustomerSessionRepository {
 
     const expiresAt = new Date(row.expires_at);
     if (expiresAt.getTime() <= Date.now()) {
-      // Mark expired
       try {
         this.db.execute('UPDATE customer_sessions SET is_active = 0, updated_at = ? WHERE id = ?', [
           new Date().toISOString(),
@@ -134,11 +109,6 @@ export class CustomerSessionRepository {
     return { session, customer };
   }
 
-  /**
-   * Revokes a session token (logout).
-   * @param {string} token
-   * @returns {boolean}
-   */
   revokeToken(token) {
     if (!token) return false;
     const now = new Date().toISOString();
@@ -146,7 +116,6 @@ export class CustomerSessionRepository {
       'UPDATE customer_sessions SET is_active = 0, updated_at = ? WHERE token = ?',
       [now, blindIndex(token, INDEX_NS)]
     );
-    // Also clear any legacy plaintext row so logout always revokes.
     this.db.execute(
       'UPDATE customer_sessions SET is_active = 0, updated_at = ? WHERE token = ?',
       [now, token]
@@ -154,10 +123,6 @@ export class CustomerSessionRepository {
     return true;
   }
 
-  /**
-   * Revokes all active sessions for a customer.
-   * @param {string} customerId
-   */
   revokeAllForCustomer(customerId) {
     if (!customerId) return;
     const now = new Date().toISOString();
@@ -167,10 +132,6 @@ export class CustomerSessionRepository {
     );
   }
 
-  /**
-   * Returns count of currently active sessions.
-   * @returns {number}
-   */
   countActive() {
     const row = this.db.queryOne(
       'SELECT COUNT(*) as c FROM customer_sessions WHERE is_active = 1 AND expires_at > ?',

@@ -1,17 +1,6 @@
-/**
- * Authentic ISO/IEC 18004 Compliant QR Code Engine (Pure JavaScript).
- * Supports Versions 1 through 40, Error Correction Levels L/M/Q/H.
- * Produces 100% genuine scannable QR codes for all UPI apps and Android Device Pairing.
- */
 import { qrcode } from './qr-lib.js';
 
 export class QrCode {
-  /**
-   * Generates a 2D binary matrix for the input text.
-   * @param {string} text
-   * @param {'L'|'M'|'Q'|'H'} [errorCorrection='M']
-   * @returns {number[][]} 2D matrix (1 = dark, 0 = light)
-   */
   static encode(text, errorCorrection = 'M') {
     const qr = qrcode(0, errorCorrection);
     qr.addData(text);
@@ -29,13 +18,6 @@ export class QrCode {
   }
 }
 
-/**
- * Generates valid, crisp SVG markup for an authentic QR Code.
- * @param {string} text
- * @param {number} [boxSize=240]
- * @param {'L'|'M'|'Q'|'H'} [errorCorrection='M']
- * @returns {string} SVG markup string
- */
 export function generateQrSvg(text, boxSize = 240, errorCorrection = 'M') {
   const matrix = QrCode.encode(text, errorCorrection);
   const numModules = matrix.length;

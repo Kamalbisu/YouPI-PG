@@ -8,7 +8,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, '../../..');
 
-// In production, reliably ensure environment variables from .env are loaded if not already provided
 if (!process.env.BASE_CHECKOUT_URL && typeof process.loadEnvFile === 'function') {
   try {
     const rootEnv = path.resolve(rootDir, '.env');
@@ -74,9 +73,6 @@ export function createPaymentApp(customDb = null, options = {}) {
 
   const eventEmitter = new EventEmitter();
 
-  // The active window and the processing window drive the slot expiry that is written to
-  // the database, so a malformed value must not reach it: a negative value would expire
-  // every session instantly and Infinity would throw a RangeError on toISOString().
   const parseWindowMs = (raw, fallback, label) => {
     if (raw === undefined || raw === null || String(raw).trim() === '') return fallback;
     const value = Number(raw);
@@ -148,7 +144,6 @@ export function createPaymentApp(customDb = null, options = {}) {
     }
   } catch {}
 
-  // BULLETPROOF QUEUE PROMOTION HANDLER
   function handleSlotFreedAndPromote(receivingAccountId) {
     if (!receivingAccountId) return null;
     const promoted = queueEngine.promoteNext(receivingAccountId);
@@ -168,7 +163,6 @@ export function createPaymentApp(customDb = null, options = {}) {
     return promoted;
   }
 
-  // When a payment succeeds, fails, expires, or cancels: dispatch webhook & promote next queued customer
   eventEmitter.on('PAYMENT.SUCCESS', (data) => {
     const session = sessionRepo.findById(data.paymentId);
     if (session) {
@@ -248,12 +242,10 @@ export function createPaymentApp(customDb = null, options = {}) {
   });
 
 
-  // Continuous 1-second background queue sync and auto-expiry daemon
   const queueSyncDaemon = setInterval(() => {
     try {
       const nowIso = new Date().toISOString();
 
-      // Sweep expired ACTIVE sessions
       const expiredActive = db.query(`
         SELECT id, merchant_id, order_id, receiving_account_id FROM payment_sessions
         WHERE status = 'ACTIVE' AND expires_at <= ?
@@ -270,7 +262,6 @@ export function createPaymentApp(customDb = null, options = {}) {
         handleSlotFreedAndPromote(row.receiving_account_id);
       }
 
-      // Sweep failed PROCESSING sessions
       const failedProc = db.query(`
         SELECT id, merchant_id, order_id, receiving_account_id FROM payment_sessions
         WHERE status = 'PROCESSING' AND processing_expires_at <= ?
@@ -287,7 +278,6 @@ export function createPaymentApp(customDb = null, options = {}) {
         handleSlotFreedAndPromote(row.receiving_account_id);
       }
 
-      // Scan for vacant receiving accounts that have waiting queued sessions
       const vacantAccounts = db.query(`
         SELECT id FROM payment_receiving_accounts
         WHERE is_active = 1 AND (is_slot_busy = 0 OR current_active_session_id IS NULL)
@@ -301,12 +291,6 @@ export function createPaymentApp(customDb = null, options = {}) {
 
   if (queueSyncDaemon.unref) queueSyncDaemon.unref();
 
-  // Continuous Recurring Webhook Retry Daemon (Sweeps and dispatches pending webhook deliveries every 5s)
-  //
-  // The tick is defensive: `retryPending()` is expected to return a promise,
-  // but a throw inside it — or a non-promise return — must not escape the
-  // interval callback, because an exception thrown from a timer callback is
-  // an unhandled error that can take the process down.
   const webhookRetryDaemon = setInterval(() => {
     try {
       const outcome = webhookEngine.retryPending();
@@ -316,8 +300,6 @@ export function createPaymentApp(customDb = null, options = {}) {
 
   if (webhookRetryDaemon.unref) webhookRetryDaemon.unref();
 
-  // Consolidated, Coordinated Observer Polling & Verification Daemon
-  // Eliminates duplicate HTTP sweeps, enforces 1.5s-2s cooldown, and prevents SQLite write contention
   const observerPollerService = new ObserverPollerService({
     db,
     sessionRepo,
@@ -330,10 +312,8 @@ export function createPaymentApp(customDb = null, options = {}) {
     gmailPort: Number(process.env.GMAIL_OBSERVER_PORT || 6003)
   });
 
-  // Execute crash recovery on boot
   const recoveryStats = recoveryEngine.recover();
 
-  // Health check routes
   const healthHandler = (req, res) => {
     HttpServer.json(res, 200, {
       status: 'UP',
@@ -415,7 +395,6 @@ export function startServer(port = null, customDb = null) {
   const app = createPaymentApp(customDb);
 
   return new Promise(resolve => {
-    // Loopback by default; reach this service via the local Cloudflare Tunnel, not 0.0.0.0.
     const bindHost = process.env.YOUPI_BIND_HOST || '127.0.0.1';
     const instance = app.rawServer.listen(finalPort, bindHost, () => {
       console.log(`[Payment API] Server listening on port ${finalPort}`);
@@ -431,7 +410,6 @@ export function startServer(port = null, customDb = null) {
   });
 }
 
-// Auto-run if executed directly as main script
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   startServer();
 }

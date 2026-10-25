@@ -59,7 +59,6 @@ describe('@youpi/common Unit Tests', () => {
     test('fails decryption if ciphertext or auth tag is tampered', () => {
       const encrypted = encrypt('sensitive data', testMasterKey);
       const parts = encrypted.split(':');
-      // Tamper with cipher part
       const tampered = `${parts[0]}:${parts[1]}:${parts[2]}ab`;
       assert.throws(() => decrypt(tampered, testMasterKey));
     });
@@ -127,7 +126,7 @@ describe('@youpi/common Unit Tests', () => {
         receivingAccountId: 'acc_1',
         amountPaise: 20000n,
         bankReferenceNumber: 'UTR12345678',
-        observedAt: new Date('2026-09-08T10:02:00Z') // even 2 mins later, same UTR = same fingerprint
+        observedAt: new Date('2026-09-08T10:02:00Z')
       });
 
       assert.equal(fp1, fp2);
@@ -143,7 +142,7 @@ describe('@youpi/common Unit Tests', () => {
       const fp2 = calculateObservationFingerprint({
         receivingAccountId: 'acc_1',
         amountPaise: 20000n,
-        observedAt: new Date('2026-09-08T10:00:45Z') // within same minute
+        observedAt: new Date('2026-09-08T10:00:45Z')
       });
 
       assert.equal(fp1, fp2);
@@ -151,7 +150,7 @@ describe('@youpi/common Unit Tests', () => {
       const fpDiffTime = calculateObservationFingerprint({
         receivingAccountId: 'acc_1',
         amountPaise: 20000n,
-        observedAt: new Date('2026-09-08T10:05:00Z') // 5 minutes later
+        observedAt: new Date('2026-09-08T10:05:00Z')
       });
 
       assert.notEqual(fp1, fpDiffTime);

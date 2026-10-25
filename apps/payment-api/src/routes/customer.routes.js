@@ -3,16 +3,9 @@ import { HttpServer } from '../server.js';
 import { createRateLimiter, envLimit, getClientIp } from '../rate-limit.js';
 import { normalizeEmail, normalizeMobile, isValidEmail, isValidMobile, isValidPassword, safeEqual } from '@youpi/common';
 
-/** Wrong guesses tolerated per issued OTP challenge. */
 const OTP_MAX_ATTEMPTS = 5;
-/** Minimum gap between OTP requests for the same mobile number. */
 const OTP_RESEND_COOLDOWN_MS = 30 * 1000;
 
-/**
- * Safely masks customer email address for public responses without leaking length or erroring on short strings.
- * @param {string} email
- * @returns {string | null}
- */
 function maskEmail(email) {
   if (!email || typeof email !== 'string') return null;
   const atIndex = email.indexOf('@');
@@ -23,18 +16,7 @@ function maskEmail(email) {
   return `${visible}***@${domain || '***'}`;
 }
 
-/**
- * Registers gateway-owned customer identity and session routes.
- * @param {HttpServer} server
- * @param {{
- *   customerRepo: import('@youpi/db').CustomerRepository,
- *   customerSessionRepo: import('@youpi/db').CustomerSessionRepository,
- *   sessionRepo: import('@youpi/db').PaymentSessionRepository,
- *   auditRepo: import('@youpi/db').AuditLogRepository
- * }} ctx
- */
 export function registerCustomerRoutes(server, ctx) {
-  // Helper to extract session token from Authorization header or Cookie
   function extractSessionToken(req) {
     const authHeader = req.headers['authorization'] || '';
     if (authHeader.startsWith('Bearer ')) {
@@ -48,33 +30,23 @@ export function registerCustomerRoutes(server, ctx) {
     return null;
   }
 
-  // Helper to set session cookie header
   function buildSessionCookie(token, maxAgeSeconds = 30 * 24 * 3600) {
     const isProd = process.env.NODE_ENV === 'production';
     return `youpi_session=${token}; Path=/; Max-Age=${maxAgeSeconds}; HttpOnly; SameSite=Lax${isProd ? '; Secure' : ''}`;
   }
 
-  // Pending signup challenges cache: mobileNumber -> { otpCode, expiresAt, name, email }
   const pendingOtpChallenges = new Map();
 
-  // Throttles OTP dispatch per mobile number so the WhatsApp channel cannot be flooded/cost-abused.
   const otpRequestLog = new Map();
 
-  // Bounded limiters (the key tables are capped, see rate-limit.js). All of them key on the
-  // client address from getClientIp, which honours CF-Connecting-IP only when
-  // YOUPI_TRUST_PROXY_HEADERS=true.
-  // check-user: prevents bulk mobile number scanning / user enumeration.
   const checkUserMax = envLimit('YOUPI_RATE_LIMIT_CHECK_USER_PER_MIN', 60);
   const checkUserLimiter = createRateLimiter({ windowMs: 60 * 1000, max: checkUserMax });
-  // send-otp: caps WhatsApp OTP dispatch per number and per client address per hour.
   const otpPerMobileMax = envLimit('YOUPI_RATE_LIMIT_OTP_PER_MOBILE_PER_HOUR', 5);
   const otpPerMobileLimiter = createRateLimiter({ windowMs: 60 * 60 * 1000, max: otpPerMobileMax });
   const otpPerIpMax = envLimit('YOUPI_RATE_LIMIT_OTP_PER_IP_PER_HOUR', 30);
   const otpPerIpLimiter = createRateLimiter({ windowMs: 60 * 60 * 1000, max: otpPerIpMax });
-  // verify-otp / login / register: slow down guessing and mass account creation.
   const authAttemptMax = envLimit('YOUPI_RATE_LIMIT_AUTH_PER_IP_PER_15MIN', 30);
   const authAttemptLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: authAttemptMax });
-  // login failures per account identifier (lockout with the window as the backoff).
   const loginFailureMax = envLimit('YOUPI_RATE_LIMIT_LOGIN_FAILURES_PER_15MIN', 10);
   const loginFailureLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: loginFailureMax });
 
@@ -87,11 +59,6 @@ export function registerCustomerRoutes(server, ctx) {
     return false;
   }
 
-  /**
-   * Resolves the configured cooldown between consecutive OTP dispatches.
-   * Prioritizes explicit runtime options (ctx.otpCooldownMs), environment overrides
-   * (OTP_RESEND_COOLDOWN_MS), and defaults to 30 seconds.
-   */
   function getOtpCooldownMs() {
     if (ctx && typeof ctx.otpCooldownMs === 'number' && ctx.otpCooldownMs >= 0) {
       return ctx.otpCooldownMs;
@@ -105,10 +72,6 @@ export function registerCustomerRoutes(server, ctx) {
     return OTP_RESEND_COOLDOWN_MS;
   }
 
-  /**
-   * Records an OTP request and reports whether the caller is within the resend cooldown.
-   * Entries older than the cooldown are pruned on each call.
-   */
   function isOtpThrottled(mobile) {
     const cooldownMs = getOtpCooldownMs();
     if (cooldownMs === 0) {
@@ -123,7 +86,6 @@ export function registerCustomerRoutes(server, ctx) {
     return false;
   }
 
-  // Expose reset helper for tests to reset rate-limiting state deterministically
   if (ctx) {
     ctx.resetOtpCooldown = (mobile) => {
       if (mobile) {
@@ -134,13 +96,10 @@ export function registerCustomerRoutes(server, ctx) {
     };
   }
 
-  // Helper to get Berry Service
   function getBerry() {
     return ctx.whatsappBerryService || null;
   }
 
-  // 1. POST /api/v1/customer/check-user
-  // Check whether a customer exists by mobile number
   server.post('/api/v1/customer/check-user', async (req, res) => {
     const body = await HttpServer.parseBody(req).catch(() => ({}));
     const rawMobile = body.mobileNumber || body.phoneNumber || body.mobile || body.phone;
@@ -176,8 +135,6 @@ export function registerCustomerRoutes(server, ctx) {
     });
   });
 
-  // 2. POST /api/v1/customer/send-otp
-  // Dispatches 6-digit verification code to customer's WhatsApp via Berry Protocol
   server.post('/api/v1/customer/send-otp', async (req, res) => {
     const body = await HttpServer.parseBody(req).catch(() => ({}));
     const rawMobile = body.mobileNumber || body.phoneNumber || body.mobile || body.phone;
@@ -198,14 +155,11 @@ export function registerCustomerRoutes(server, ctx) {
 
     const existingUser = ctx.customerRepo.findByMobile(cleanMobile);
 
-    // Throttle before doing any work: otherwise this endpoint can be used to flood a
-    // customer's WhatsApp with OTPs (harassment) or burn merchant messaging credits.
     if (isOtpThrottled(cleanMobile)) {
       HttpServer.json(res, 429, { error: `Please wait ${Math.ceil(OTP_RESEND_COOLDOWN_MS / 1000)} seconds before requesting another code.` });
       return;
     }
 
-    // Hourly caps per number and per client address, on top of the resend cooldown.
     if ((otpPerMobileMax > 0 && !otpPerMobileLimiter.allow(cleanMobile)) ||
         (otpPerIpMax > 0 && !otpPerIpLimiter.allow(getClientIp(req)))) {
       res.setHeader('Retry-After', '3600');
@@ -213,7 +167,6 @@ export function registerCustomerRoutes(server, ctx) {
       return;
     }
 
-    // If new user signing up, validate name and email
     if (!existingUser && isNewUser) {
       if (!name) {
         HttpServer.json(res, 400, { error: 'Full name is required for registration.' });
@@ -223,7 +176,6 @@ export function registerCustomerRoutes(server, ctx) {
         HttpServer.json(res, 400, { error: 'A valid email address is required for registration.' });
         return;
       }
-      // Check unique email
       const existingByEmail = ctx.customerRepo.findByEmail(email);
       if (existingByEmail) {
         HttpServer.json(res, 409, { error: 'An account with this email address already exists. Please log in.' });
@@ -231,14 +183,12 @@ export function registerCustomerRoutes(server, ctx) {
       }
     }
 
-    // Generate 6-digit cryptographic OTP
     const otpCode = crypto.randomInt(100000, 1000000).toString();
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
 
     if (existingUser) {
       ctx.customerRepo.setOtp(cleanMobile, otpCode, expiresAt);
     } else {
-      // A resend must not hand out a fresh guess budget while the previous code is still live.
       const previous = pendingOtpChallenges.get(cleanMobile);
       const previousLive = previous && new Date(previous.expiresAt) > new Date();
       pendingOtpChallenges.set(cleanMobile, {
@@ -250,7 +200,6 @@ export function registerCustomerRoutes(server, ctx) {
       });
     }
 
-    // Dispatch via WhatsApp Berry Protocol
     const berry = getBerry();
     let dispatchResult = { success: true, delivered: false, simulated: true };
     const displayName = existingUser?.name || name || '';
@@ -272,14 +221,11 @@ export function registerCustomerRoutes(server, ctx) {
       message: 'OTP sent to your WhatsApp number.',
       mobileNumber: cleanMobile,
       expiresInSeconds: 300,
-      // Returning the OTP lets anyone log in as any number: only on explicit opt-in, never in production.
       devOtp: (process.env.YOUPI_EXPOSE_DEV_OTP === 'true' && process.env.NODE_ENV !== 'production' ? otpCode : undefined),
       dispatch: dispatchResult
     });
   });
 
-  // 3. POST /api/v1/customer/verify-otp
-  // Verifies 6-digit WhatsApp OTP, registers new user if needed, and logs them in
   server.post('/api/v1/customer/verify-otp', async (req, res) => {
     const body = await HttpServer.parseBody(req).catch(() => ({}));
     const rawMobile = body.mobileNumber || body.phoneNumber || body.mobile || body.phone;
@@ -300,7 +246,6 @@ export function registerCustomerRoutes(server, ctx) {
     let customer = ctx.customerRepo.findByMobile(cleanMobile);
 
     if (customer) {
-      // Existing User Verification
       const verified = ctx.customerRepo.verifyOtp(cleanMobile, otp);
       if (!verified) {
         HttpServer.json(res, 400, { error: 'Invalid or expired verification code. Please request a new OTP.' });
@@ -308,13 +253,11 @@ export function registerCustomerRoutes(server, ctx) {
       }
       customer = verified;
     } else {
-      // New User Registration Verification
       const pending = pendingOtpChallenges.get(cleanMobile);
       if (!pending) {
         HttpServer.json(res, 400, { error: 'No active OTP request found. Please request a new OTP.' });
         return;
       }
-      // Budget the guesses: a 6-digit code is brute-forceable within its window otherwise.
       if ((pending.attempts || 0) >= OTP_MAX_ATTEMPTS) {
         pendingOtpChallenges.delete(cleanMobile);
         HttpServer.json(res, 429, { error: 'Too many incorrect attempts. Please request a new OTP.' });
@@ -331,7 +274,6 @@ export function registerCustomerRoutes(server, ctx) {
         return;
       }
 
-      // Create new customer account in DB
       const resolvedName = (body.name || body.fullName || pending.name || `Customer ${cleanMobile.slice(-4)}`).trim();
       const resolvedEmail = normalizeEmail(body.email || pending.email) || `${cleanMobile}@customer.youpi.local`;
 
@@ -350,7 +292,6 @@ export function registerCustomerRoutes(server, ctx) {
       pendingOtpChallenges.delete(cleanMobile);
     }
 
-    // Server-side Ban Enforcement (Section 3)
     if (customer.status === 'BANNED') {
       HttpServer.json(res, 403, {
         error: 'ACCESS BLOCKED',
@@ -360,7 +301,6 @@ export function registerCustomerRoutes(server, ctx) {
       return;
     }
 
-    // Issue server-authoritative session
     const ipAddress = getClientIp(req) || null;
     const userAgent = req.headers['user-agent'] || null;
     const session = ctx.customerSessionRepo.create({
@@ -399,14 +339,11 @@ export function registerCustomerRoutes(server, ctx) {
     });
   });
 
-  // POST /api/v1/customer/register (Gateway-owned Sign Up)
-  // Input: exactly name, email, mobileNumber, password
   server.post('/api/v1/customer/register', async (req, res) => {
     if (tooManyAuthAttempts(req, res)) return;
     const body = await HttpServer.parseBody(req);
     const { name, email, mobileNumber, password } = body;
 
-    // Backward-compatibility field fallback if legacy fields are sent
     const resolvedName = (name || body.fullName || '').trim();
     const resolvedMobile = normalizeMobile(mobileNumber || body.phoneNumber);
     let resolvedEmail = normalizeEmail(email);
@@ -432,14 +369,12 @@ export function registerCustomerRoutes(server, ctx) {
       return;
     }
 
-    // Check unique email
     const existingByEmail = ctx.customerRepo.findByEmail(resolvedEmail);
     if (existingByEmail) {
       HttpServer.json(res, 409, { error: 'An account with this email address already exists.' });
       return;
     }
 
-    // Check unique mobile
     const existingByMobile = ctx.customerRepo.findByMobile(resolvedMobile);
     if (existingByMobile) {
       HttpServer.json(res, 409, { error: 'An account with this mobile number already exists.' });
@@ -459,7 +394,6 @@ export function registerCustomerRoutes(server, ctx) {
       return;
     }
 
-    // Create authenticated server-authoritative session
     const ipAddress = getClientIp(req) || null;
     const userAgent = req.headers['user-agent'] || null;
     const session = ctx.customerSessionRepo.create({
@@ -498,8 +432,6 @@ export function registerCustomerRoutes(server, ctx) {
     });
   });
 
-  // POST /api/v1/customer/login (Gateway-owned Sign In)
-  // Input: identifier (email or mobile) + password
   server.post('/api/v1/customer/login', async (req, res) => {
     const body = await HttpServer.parseBody(req);
     const identifier = (body.identifier || body.email || body.mobileNumber || body.phoneNumber || '').trim();
@@ -511,8 +443,6 @@ export function registerCustomerRoutes(server, ctx) {
       return;
     }
 
-    // Per-account lockout: repeated failures lock the identifier for the rest of the window,
-    // whichever address the guesses come from.
     const lockKey = identifier.toLowerCase();
     if (loginFailureMax > 0 && loginFailureLimiter.isLimited(lockKey)) {
       res.setHeader('Retry-After', '900');
@@ -527,7 +457,6 @@ export function registerCustomerRoutes(server, ctx) {
       return;
     }
 
-    // Server-side Ban Enforcement (Section 3)
     if (verified.status === 'BANNED') {
       HttpServer.json(res, 403, {
         error: 'ACCESS BLOCKED',
@@ -539,7 +468,6 @@ export function registerCustomerRoutes(server, ctx) {
 
     loginFailureLimiter.clear(lockKey);
 
-    // Create session
     const ipAddress = getClientIp(req) || null;
     const userAgent = req.headers['user-agent'] || null;
     const session = ctx.customerSessionRepo.create({
@@ -578,7 +506,6 @@ export function registerCustomerRoutes(server, ctx) {
     });
   });
 
-  // GET /api/v1/customer/me (Verify active session & return profile)
   server.get('/api/v1/customer/me', async (req, res) => {
     const token = extractSessionToken(req);
     if (!token) {
@@ -610,7 +537,6 @@ export function registerCustomerRoutes(server, ctx) {
     });
   });
 
-  // POST /api/v1/customer/logout (Revoke active session token)
   server.post('/api/v1/customer/logout', async (req, res) => {
     const body = await HttpServer.parseBody(req).catch(() => ({}));
     const token = extractSessionToken(req) || body.token;
@@ -623,7 +549,6 @@ export function registerCustomerRoutes(server, ctx) {
     HttpServer.json(res, 200, { success: true, message: 'Logged out successfully.' });
   });
 
-  // POST /api/v1/customer/switch-account (Validates target saved account token)
   server.post('/api/v1/customer/switch-account', async (req, res) => {
     const body = await HttpServer.parseBody(req);
     const targetToken = body.token || body.sessionToken;
@@ -653,7 +578,6 @@ export function registerCustomerRoutes(server, ctx) {
     });
   });
 
-  // Decommissioned Customer Endpoints (HTTP 404)
   server.get('/api/v1/customer/payments', async (req, res) => {
     HttpServer.json(res, 404, { error: 'Feature not available' });
   });

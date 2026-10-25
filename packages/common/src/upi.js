@@ -1,30 +1,11 @@
 import { toRupeesString } from './money.js';
 
-/**
- * Validates whether a given string is a syntactically valid UPI Virtual Payment Address (VPA).
- * Format: username@bank
- * @param {string} vpa
- * @returns {boolean}
- */
 export function isValidVpa(vpa) {
   if (!vpa || typeof vpa !== 'string') return false;
   const clean = vpa.trim();
   return /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z0-9.\-_]{2,64}$/.test(clean);
 }
 
-/**
- * Builds a canonical upi://pay URI dynamically from server-validated parameters.
- * Amount is derived exclusively from server-side integer paise.
- * @param {{
- *   payeeVpa: string,
- *   payeeName: string,
- *   amountPaise: bigint,
- *   transactionRef: string,
- *   transactionNote?: string,
- *   currency?: string
- * }} options
- * @returns {string}
- */
 export function buildUpiUri(options) {
   if (!isValidVpa(options.payeeVpa)) {
     throw new Error(`Invalid payee VPA: ${options.payeeVpa}`);
@@ -44,20 +25,6 @@ export function buildUpiUri(options) {
   return `upi://pay?${params.toString()}`;
 }
 
-/**
- * Builds an Android intent URI for launching a specific UPI application.
- * Format: intent://pay?<UPI_PARAMS>#Intent;scheme=upi;package=<PACKAGE>;end
- * @param {{
- *   payeeVpa: string,
- *   payeeName: string,
- *   amountPaise: bigint,
- *   transactionRef?: string,
- *   transactionNote?: string,
- *   currency?: string,
- *   packageName: string
- * }} options
- * @returns {string}
- */
 export function buildUpiIntentUri(options) {
   if (!options.packageName || !options.packageName.trim()) {
     throw new Error('Package name is required for Android UPI intent URI');

@@ -12,7 +12,6 @@ export class ProcessManager extends EventEmitter {
   constructor() {
     super();
 
-    // Registry of managed native host services
     this.services = [
       {
         id: 'payment-api',
@@ -82,7 +81,7 @@ export class ProcessManager extends EventEmitter {
       }
     ];
 
-    this.logs = []; // Circular buffer of log entries
+    this.logs = [];
     this.maxLogs = 500;
   }
 
@@ -118,10 +117,6 @@ export class ProcessManager extends EventEmitter {
     }));
   }
 
-  /**
-   * Starts a managed service by spawning a native Node.js child process.
-   * @param {string} id
-   */
   async startService(id) {
     const svc = this.getService(id);
     if (!svc) throw new Error(`Unknown service: ${id}`);
@@ -153,9 +148,6 @@ export class ProcessManager extends EventEmitter {
     const supervisorOverrides = {};
     if (process.env.NODE_ENV) supervisorOverrides.NODE_ENV = process.env.NODE_ENV;
     if (process.env.YOUPI_MODE) supervisorOverrides.YOUPI_MODE = process.env.YOUPI_MODE;
-    // Re-apply the shared .env file as a child-process argument unless the caller already
-    // supplied one. Without this declaration the fork() below referenced an undefined
-    // variable and crashed every service start (ReferenceError: execArgv is not defined).
     const hasEnvArg = process.execArgv.some(arg => String(arg).startsWith('--env-file'));
     const execArgv = (!hasEnvArg && fs.existsSync(envFile)) ? [`--env-file=${envFile}`] : [];
 
@@ -188,10 +180,6 @@ export class ProcessManager extends EventEmitter {
     return svc;
   }
 
-  /**
-   * Stops a managed service gracefully.
-   * @param {string} id
-   */
   async stopService(id) {
     const svc = this.getService(id);
     if (!svc) throw new Error(`Unknown service: ${id}`);
@@ -223,9 +211,6 @@ export class ProcessManager extends EventEmitter {
     return await this.startService(id);
   }
 
-  /**
-   * Starts all managed services.
-   */
   async startAll() {
     for (const svc of this.services) {
       if (svc.legacy && process.env.ENABLE_LEGACY_CHROME_OBSERVERS !== 'true') {
@@ -239,10 +224,6 @@ export class ProcessManager extends EventEmitter {
     }
   }
 
-  /**
-   * Stops all managed services.
-   * INVARIANT: Never stops or terminates the Control Center itself!
-   */
   async stopAll() {
     for (const svc of this.services) {
       if (svc.child) {

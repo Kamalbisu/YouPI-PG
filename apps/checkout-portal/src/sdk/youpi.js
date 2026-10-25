@@ -1,20 +1,6 @@
-/**
- * YOUPI PG V2 — Universal One-Script Integration SDK
- *
- * Official Distributable Browser Script (youpi.js / youpi-checkout.js)
- * Provides zero-JavaScript button configuration [data-youpi-pay] and programmatic Youpi.pay({...})
- * Launches the responsive iframe checkout modal with background blur.
- * Emits normalized browser payment events and manages checkout modal lifecycle.
- *
- * IMPORTANT SECURITY NOTE:
- * Browser events and client-side callbacks are strictly for UI and user experience.
- * Authoritative proof of payment MUST ALWAYS come from server-to-server HMAC-SHA256 signed webhooks.
- */
-
 (function (globalScope) {
   'use strict';
 
-  // Prevent multiple initializations
   if (globalScope.__YOUPI_SDK_INITIALIZED__) {
     return;
   }
@@ -22,9 +8,6 @@
 
   const isBrowser = typeof window !== 'undefined' && typeof document !== 'undefined';
 
-  /**
-   * Helper: extract configuration from the <script> tag loading this file.
-   */
   function getScriptConfig() {
     if (!isBrowser) return {};
 
@@ -57,41 +40,7 @@
 
   const scriptConfig = getScriptConfig();
 
-  /**
-   * YoupiCheckout class
-   */
   class YoupiCheckout {
-    /**
-     * @param {{
-     *   key?: string,
-     *   order_id?: string,
-     *   orderId?: string,
-     *   amount?: number | string,
-     *   currency?: string,
-     *   name?: string,
-     *   description?: string,
-     *   customer?: { name?: string, email?: string, phone?: string },
-     *   metadata?: Record<string, any>,
-     *   paymentId?: string,
-     *   checkoutUrl?: string,
-     *   portalUrl?: string,
-     *   apiUrl?: string,
-     *   theme?: { color?: string },
-     *   handler?: (result: any) => void,
-     *   onSuccess?: (result: any) => void,
-     *   onFailed?: (result: any) => void,
-     *   onPaymentFailed?: (result: any) => void,
-     *   onSuspicious?: (result: any) => void,
-     *   onExpired?: (result: any) => void,
-     *   onCancelled?: (result: any) => void,
-     *   onClose?: () => void,
-     *   successUrl?: string,
-     *   failedUrl?: string,
-     *   suspiciousUrl?: string,
-     *   expiredUrl?: string,
-     *   cancelledUrl?: string
-     * }} options
-     */
     constructor(options = {}) {
       const defaultPortal = isBrowser
         ? (scriptConfig.portalUrl || (window.location.protocol + '//' + window.location.hostname + ':7000'))
@@ -131,7 +80,6 @@
         cancelledUrl: scriptConfig.cancelledUrl || ''
       }, options);
 
-      // Normalize order ID
       if (!this.options.orderId && this.options.order_id) {
         this.options.orderId = this.options.order_id;
       }
@@ -147,26 +95,20 @@
       this._handleMessage = this._handleMessage.bind(this);
     }
 
-    /**
-     * Primary static programmatic entry point: Youpi.pay(options)
-     */
     static async pay(options = {}) {
       const instance = new YoupiCheckout(options);
 
-      // If checkoutUrl is already provided, open modal directly
       if (instance.options.checkoutUrl) {
         instance.open();
         return instance;
       }
 
-      // If paymentId is already provided, construct checkoutUrl and open
       if (instance.options.paymentId) {
         instance.options.checkoutUrl = `${instance.options.portalUrl}/checkout/${instance.options.paymentId}`;
         instance.open();
         return instance;
       }
 
-      // Otherwise, call YOUPI PG to create the payment session
       try {
         const orderId = instance.options.orderId || `ORDER-${Date.now()}`;
         instance.options.orderId = orderId;
@@ -222,18 +164,12 @@
       }
     }
 
-    /**
-     * Backward-compatible static entry point: YoupiCheckout.open(options)
-     */
     static open(options) {
       const instance = new YoupiCheckout(options);
       instance.open();
       return instance;
     }
 
-    /**
-     * Opens the responsive iframe checkout modal
-     */
     open() {
       if (!isBrowser) {
         console.warn('YoupiCheckout.open() can only be invoked in a browser DOM environment.');
@@ -253,7 +189,6 @@
         targetUrl = `${this.options.portalUrl}/checkout/demo`;
       }
 
-      // If running on localhost / 127.0.0.1 and targetUrl points to remote external origin, keep path and point to local host
       if (isBrowser && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
         try {
           const parsed = new URL(targetUrl, window.location.origin);
@@ -263,7 +198,6 @@
         } catch {}
       }
 
-      // Add embedded flag and custom params
       const sep = targetUrl.includes('?') ? '&' : '?';
       targetUrl = `${targetUrl}${sep}embedded=1`;
 
@@ -278,9 +212,6 @@
       window.addEventListener('message', this._handleMessage);
     }
 
-    /**
-     * Closes the checkout modal
-     */
     close(callback) {
       if (!isBrowser || !this.isOpen) return;
       this.isOpen = false;
@@ -340,7 +271,6 @@
       const iframe = document.createElement('iframe');
       iframe.className = 'youpi-checkout-iframe';
       iframe.src = targetUrl;
-      // Only messages from this exact iframe/origin are trusted (see _handleMessage).
       this._iframe = iframe;
       try { this._iframeOrigin = new URL(targetUrl, window.location.href).origin; } catch { this._iframeOrigin = null; }
       iframe.allow = 'payment';
@@ -357,8 +287,6 @@
       this.container = container;
       this.iframe = iframe;
 
-      // Invariant: ONLY the cross (X) button exits the payment gateway!
-      // Prevent outside touch/click on backdrop from closing the checkout modal.
       const stopOutsideDismiss = (e) => {
         if (e.target === backdrop) {
           e.preventDefault();
@@ -387,7 +315,6 @@
     }
 
     _handleMessage(e) {
-      // Ignore messages from any window other than our checkout iframe (spoofed success events).
       if (!this._iframe || e.source !== this._iframe.contentWindow) return;
       if (!this._iframeOrigin || e.origin !== this._iframeOrigin) return;
       if (!e.data || typeof e.data !== 'object') return;
@@ -543,9 +470,6 @@
       } catch (e) { }
     }
 
-    /**
-     * Handles clicks on elements with [data-youpi-pay] attribute
-     */
     static handleButtonClick(btn) {
       if (!btn) return;
 
@@ -555,14 +479,12 @@
       const name = btn.getAttribute('data-name') || scriptConfig.name || 'Merchant Store';
       const description = btn.getAttribute('data-description') || 'Order Payment';
 
-      // Customer info
       const customer = {
         name: btn.getAttribute('data-customer-name') || '',
         email: btn.getAttribute('data-customer-email') || '',
         phone: btn.getAttribute('data-customer-phone') || btn.getAttribute('data-customer-mobile') || ''
       };
 
-      // Metadata parsing
       let metadata = {};
       const rawMeta = btn.getAttribute('data-metadata');
       if (rawMeta) {
@@ -572,7 +494,6 @@
           metadata = { raw: rawMeta };
         }
       }
-      // Gather any data-meta-* attributes
       for (const attr of btn.attributes) {
         if (attr.name.startsWith('data-meta-')) {
           const key = attr.name.slice(10);
@@ -755,7 +676,6 @@
     }
   }
 
-  // Auto-bind click listener for all [data-youpi-pay] buttons on page
   if (isBrowser) {
     document.addEventListener('click', function (e) {
       const btn = e.target && e.target.closest && e.target.closest('[data-youpi-pay]');
@@ -766,7 +686,6 @@
     });
   }
 
-  // Export globals
   globalScope.YoupiCheckout = YoupiCheckout;
   globalScope.Youpi = YoupiCheckout;
   if (typeof module !== 'undefined' && module.exports) {

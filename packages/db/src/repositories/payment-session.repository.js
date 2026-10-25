@@ -2,9 +2,6 @@ import crypto from 'node:crypto';
 import { PaymentStatus, PaymentMethod, isValidTransition, TERMINAL_STATES } from '@youpi/common';
 
 export class PaymentSessionRepository {
-  /**
-   * @param {import('../database.js').Database} db
-   */
   constructor(db) {
     this.db = db;
   }
@@ -54,9 +51,6 @@ export class PaymentSessionRepository {
   }
 
   findByOrderId(merchantId, orderId) {
-    // The schema allows a second row for the same (merchant, order) once the previous one
-    // is terminal, so the newest row must win. Without an explicit ordering a stale
-    // terminal row could be returned and the caller would miss a SUCCESS session.
     const row = this.db.queryOne(
       'SELECT * FROM payment_sessions WHERE merchant_id = ? AND order_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1',
       [merchantId, orderId]
@@ -81,18 +75,11 @@ export class PaymentSessionRepository {
     return rows.map(r => this.mapRow(r));
   }
 
-  /**
-   * Atomic slot acquisition transaction for UPI payments.
-   * Invariant: Only ONE active or processing session per receiving account.
-   * If slot is free, session transitions to ACTIVE with 5:00 window.
-   * If slot is occupied, session transitions to QUEUED with sequence position.
-   */
   acquireSlotAtomic(sessionId, receivingAccountId, durationMs = 300000) {
     return this.db.transaction(() => {
       const now = new Date();
       const nowIso = now.toISOString();
 
-      // Check for current active or processing session on this receiving account
       let activeRow = this.db.queryOne(`
         SELECT id, status, expires_at, processing_expires_at
         FROM payment_sessions
@@ -117,7 +104,6 @@ export class PaymentSessionRepository {
         }
       }
 
-      // CRITICAL GUARD: If activeRow is THIS session itself, it's ALREADY ACTIVE! Do not demote to QUEUED!
       if (activeRow && activeRow.id === sessionId) {
         return {
           status: PaymentStatus.ACTIVE,
@@ -127,9 +113,6 @@ export class PaymentSessionRepository {
       }
 
       if (!activeRow) {
-        // Slot is vacant! Grant ACTIVE slot.
-        // Enforce the transition graph: a terminal or PROCESSING session must never be
-        // revived to ACTIVE by a concurrent queue tick.
         const currentStatus = this.findById(sessionId)?.status;
         if (currentStatus && !isValidTransition(currentStatus, PaymentStatus.ACTIVE)) {
           throw new Error(`Illegal payment state transition: cannot move from '${currentStatus}' to 'ACTIVE'.`);
@@ -143,7 +126,6 @@ export class PaymentSessionRepository {
           WHERE id = ?
         `, [PaymentStatus.ACTIVE, nowIso, expiresAt, nowIso, sessionId]);
 
-        // Mark receiving account as busy
         this.db.execute(`
           UPDATE payment_receiving_accounts
           SET is_slot_busy = 1, current_active_session_id = ?, updated_at = ?
@@ -156,7 +138,6 @@ export class PaymentSessionRepository {
           expiresAt: new Date(expiresAt)
         };
       } else {
-        // Slot is busy! Place in QUEUED
         const existingSession = this.findById(sessionId);
         let queuePosition = existingSession?.queuePosition;
         if (!queuePosition || queuePosition <= 0) {
@@ -188,16 +169,11 @@ export class PaymentSessionRepository {
     });
   }
 
-  /**
-   * Transitions an ACTIVE session to PROCESSING upon customer clicking Payment Done.
-   * Starts independent 30-second verification timer.
-   */
   transitionToProcessing(sessionId, durationMs = 30000) {
     return this.db.transaction(() => {
       const session = this.findById(sessionId);
       if (!session) throw new Error(`Session not found: ${sessionId}`);
 
-      // Idempotency: if already processing, return existing
       if (session.status === PaymentStatus.PROCESSING) {
         return session;
       }
@@ -220,16 +196,11 @@ export class PaymentSessionRepository {
     });
   }
 
-  /**
-   * Transitions session to terminal state (SUCCESS, FAILED, EXPIRED, CANCELLED).
-   * Atomically releases receiving account slot.
-   */
   transitionToTerminal(sessionId, targetStatus, options = {}) {
     return this.db.transaction(() => {
       const session = this.findById(sessionId);
       if (!session) throw new Error(`Session not found: ${sessionId}`);
 
-      // Terminal states are final
       const terminalStates = [
         PaymentStatus.SUCCESS,
         PaymentStatus.FAILED,
@@ -238,11 +209,9 @@ export class PaymentSessionRepository {
       ];
 
       if (terminalStates.includes(session.status)) {
-        return session; // already terminal, idempotent
+        return session;
       }
 
-      // The state machine is enforced here rather than merely documented: without this,
-      // any caller could move a live session straight to SUCCESS and bypass verification.
       if (!TERMINAL_STATES.includes(targetStatus)) {
         throw new Error(`Not a terminal target status: ${targetStatus}`);
       }
@@ -273,7 +242,6 @@ export class PaymentSessionRepository {
         WHERE id = ?
       `, [targetStatus, now, attributedObsId, JSON.stringify(metadata), now, sessionId]);
 
-      // Release slot on receiving account if this session owned it
       if (session.receivingAccountId) {
         this.db.execute(`
           UPDATE payment_receiving_accounts
@@ -446,9 +414,6 @@ export class PaymentSessionRepository {
     return this.mapRow(row);
   }
 
-  /**
-   * Re-indexes remaining queued sessions after a promotion.
-   */
   reindexQueue(receivingAccountId) {
     const queued = this.findQueuedSessions(receivingAccountId);
     let pos = 1;
@@ -473,26 +438,11 @@ export class PaymentSessionRepository {
     return rows.map(r => this.mapRow(r));
   }
 
-  /**
-   * Records observation confirmation, calculates 2-level verification tier (SMS + Gmail),
-   * updates the verification tag, and transitions to SUCCESS if level >= 1 and shouldFinalize is true.
-   * @param {string} sessionId
-   * @param {string} source E.g. 'GMAIL', 'GOOGLE_MESSAGES'
-   * @param {string} observationId
-   * @param {{ finalizeSuccess?: boolean }} [options={}]
-   * @returns {{ session: any, level: number, sources: string[], tag: string, isFirstSuccess: boolean }}
-   */
   recordVerificationSource(sessionId, source, observationId, options = {}) {
     return this.db.transaction(() => {
       const session = this.findById(sessionId);
       if (!session) throw new Error(`Payment session not found: ${sessionId}`);
 
-      // A dead outcome is final. recordVerificationSource is called from the attribution engine
-      // on previously attributed sessions with no status check, so without this guard an
-      // out-of-window or duplicated observation flips an EXPIRED/FAILED/CANCELLED session back
-      // to SUCCESS and emits a webhook for a payment that was never settled.
-      // An already-SUCCESS session is NOT blocked: recording a second channel there is the
-      // legitimate SMS+Gmail verification upgrade, which must not re-emit SUCCESS.
       const DEAD_STATES = [
         PaymentStatus.FAILED,
         PaymentStatus.EXPIRED,
@@ -508,12 +458,11 @@ export class PaymentSessionRepository {
         };
       }
 
-      // Read current verification sources
       const sourcesSet = new Set(session.verificationSources || []);
       sourcesSet.add(source);
       const sources = Array.from(sourcesSet);
 
-      const level = Math.min(2, sources.length); // 1 or 2 (2-Layer Engine: SMS + Gmail)
+      const level = Math.min(2, sources.length);
       const sourceLabels = sources.map(s => {
         if (s === 'GOOGLE_MESSAGES') return 'SMS';
         if (s === 'GMAIL') return 'Gmail';
@@ -555,7 +504,6 @@ export class PaymentSessionRepository {
         sessionId
       ]);
 
-      // If this transition made it terminal SUCCESS, release slot on receiving account
       if (targetStatus === PaymentStatus.SUCCESS && session.receivingAccountId) {
         this.db.execute(`
           UPDATE payment_receiving_accounts

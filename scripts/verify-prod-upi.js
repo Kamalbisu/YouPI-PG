@@ -14,7 +14,6 @@ async function verifyProductionUpi() {
   const dbPath = path.resolve(process.cwd(), 'data/youpi_pg.sqlite');
   const prodDb = new Database({ dbPath });
 
-  // Verify preserved merchant and receiving account
   const merchant = prodDb.queryOne('SELECT id, business_name FROM merchants');
   const account = prodDb.queryOne('SELECT id, upi_id, payee_name FROM payment_receiving_accounts WHERE is_active = 1');
 
@@ -23,11 +22,9 @@ async function verifyProductionUpi() {
   assert.ok(account.upi_id);
   assert.ok(account.payee_name);
 
-  // Start Payment API on test port 6197 using production database
   const paymentApi = await startPaymentApi(6197, prodDb);
   console.log('[✓] Payment API started on port', paymentApi.port);
 
-  // Start Checkout Portal on test port 7097 pointing to Payment API
   const checkoutApp = new CheckoutServer({
     apiBaseUrl: `http://127.0.0.1:${paymentApi.port}`
   });
@@ -39,7 +36,6 @@ async function verifyProductionUpi() {
   let testCustomerId = null;
 
   try {
-    // 1. Create a dynamic customer
     const custRepo = new CustomerRepository(prodDb);
     const cust = custRepo.create({
       merchantId: merchant.id,
@@ -50,7 +46,6 @@ async function verifyProductionUpi() {
     testCustomerId = cust.id;
     console.log('[✓] Temporary test customer created:', testCustomerId);
 
-    // 2. Create a dynamic payment
     const testOrderId = 'COIN-ORD-1788969252735';
     const testAmount = '1.00';
 
@@ -85,7 +80,6 @@ async function verifyProductionUpi() {
       `Expected production checkout URL, got: ${payRes.checkoutUrl}`
     );
 
-    // 3. Bind customer to activate session and acquire UPI receiving slot
     const bindPayload = JSON.stringify({ customerId: testCustomerId });
     const bindRes = await new Promise((resolve, reject) => {
       const req = http.request(`http://127.0.0.1:${paymentApi.port}/api/v1/checkout/${testPaymentId}/bind-customer`, {
@@ -105,7 +99,6 @@ async function verifyProductionUpi() {
     });
     console.log('[✓] Customer bound and session activated:', bindRes.status || 'ACTIVE');
 
-    // 4. Fetch checkout state
     const stateRes = await new Promise((resolve, reject) => {
       http.get(`http://127.0.0.1:${paymentApi.port}/api/v1/checkout/${testPaymentId}/state`, res => {
         let data = '';
@@ -128,11 +121,9 @@ async function verifyProductionUpi() {
     assert.equal(stateRes.amount, '1.00');
     assert.equal(stateRes.orderId, testOrderId);
 
-    // 5. Verify UPI URI format and parameter order
     const expectedUpiUri = 'upi://pay?pa=9876543210%40axl&pn=Demo Store+Merchant&am=1.00&tn=COIN-ORD-1788969252735';
     assert.equal(stateRes.upiUri, expectedUpiUri, `UPI URI does not match expected format!\nExpected: ${expectedUpiUri}\nActual:   ${stateRes.upiUri}`);
 
-    // Verify parameter keys and ordering
     const parsedUrl = new URL(stateRes.upiUri);
     const paramKeys = [...parsedUrl.searchParams.keys()];
     console.log('\nParameter keys in order:', paramKeys);
@@ -151,7 +142,6 @@ async function verifyProductionUpi() {
     console.log('[✓] Dynamic Amount verified:', parsedUrl.searchParams.get('am'));
     console.log('[✓] Dynamic Order ID (tn) verified:', parsedUrl.searchParams.get('tn'));
 
-    // 6. Verify QR Code generation from Checkout Portal
     const qrRes = await new Promise((resolve, reject) => {
       http.get(`http://127.0.0.1:7097/checkout/${testPaymentId}/qr.svg`, res => {
         let data = '';
@@ -168,7 +158,6 @@ async function verifyProductionUpi() {
     console.log('[✓] QR SVG dynamically generated from UPI URI (length:', qrRes.body.length, 'bytes)');
 
   } finally {
-    // Clean up test records created during verification
     if (testPaymentId) {
       prodDb.execute('DELETE FROM payment_sessions WHERE id = ?', [testPaymentId]);
     }

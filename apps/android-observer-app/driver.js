@@ -1,18 +1,6 @@
 import { generateHmac } from '@youpi/common';
 
-/**
- * Android Observer Simulator / Driver.
- * Emulates the native Android Kotlin application for headless testing,
- * CI/CD verification, and local development.
- */
 export class AndroidObserverDriver {
-  /**
-   * @param {{
-   *   apiBaseUrl?: string,
-   *   deviceName?: string,
-   *   deviceModel?: string
-   * }} options
-   */
   constructor(options = {}) {
     this.apiBaseUrl = (options.apiBaseUrl || process.env.BASE_PAYMENT_API_URL || 'http://localhost:6100').replace(/\/+$/, '');
     this.deviceName = options.deviceName || 'Pixel 8 Pro';
@@ -23,11 +11,6 @@ export class AndroidObserverDriver {
     this.heartbeatTimer = null;
   }
 
-  /**
-   * Pairs device with self-hosted gateway using enrollment token.
-   * @param {string} enrollmentToken
-   * @param {string} [merchantId]
-   */
   async pair(enrollmentToken, merchantId = null) {
     const url = `${this.apiBaseUrl}/api/v1/pollers/android/pair`;
     const payload = {
@@ -55,19 +38,6 @@ export class AndroidObserverDriver {
     return data;
   }
 
-  /**
-   * Submits a signed payment observation to backend.
-   * @param {{
-   *   amount: string | number,
-   *   amountPaise?: bigint | number,
-   *   receivingAccountId?: string,
-   *   observedAt?: Date | string,
-   *   utr?: string,
-   *   senderVpa?: string,
-   *   notificationText?: string,
-   *   timestampOverride?: number
-   * }} obs
-   */
   async submitObservation(obs) {
     if (!this.deviceId || !this.signingKey) {
       throw new Error('Device must be paired before submitting observations.');
@@ -120,9 +90,6 @@ export class AndroidObserverDriver {
     };
   }
 
-  /**
-   * Submits heartbeat to backend.
-   */
   async sendHeartbeat() {
     if (!this.deviceId) throw new Error('Cannot send heartbeat: device not paired.');
     const url = `${this.apiBaseUrl}/api/v1/pollers/android/heartbeat`;

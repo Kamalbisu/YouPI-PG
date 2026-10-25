@@ -1,21 +1,8 @@
-/**
- * YOUPI PG V2 — Safe Package Synchronization Script
- * Synchronizes from the master repo (repo_clone) to the clean distributable package (YOUPI PG PACKAGE).
- * 
- * Rules:
- * - repo_clone is the sole Source of Truth.
- * - Strips all sensitive, runtime, cache, and state files (.env, active DB, node_modules, sessions, screenshots).
- * - Copies clean production code, SDKs, demo store, outcome pages, openapi.yaml, and documentation.
- * - Preserves existing application architecture without modification.
- */
-
 const fs = require('node:fs');
 const path = require('node:path');
 
-// Root master directory (repo_clone)
 const SOURCE_DIR = path.resolve(__dirname, '..');
 
-// Default target directory: ../YOUPI PG PACKAGE
 const TARGET_DIR = process.env.TARGET_PACKAGE_DIR || 
   process.argv[2] || 
   path.resolve(SOURCE_DIR, '..', 'YOUPI PG PACKAGE');
@@ -36,7 +23,6 @@ if (!fs.existsSync(TARGET_DIR)) {
   console.log(`[+] Created target directory: ${TARGET_DIR}`);
 }
 
-// Top-level files to explicitly include from root
 const ROOT_FILES_TO_INCLUDE = new Set([
   'package.json',
   'tsconfig.json',
@@ -49,7 +35,6 @@ const ROOT_FILES_TO_INCLUDE = new Set([
   '.gitignore'
 ]);
 
-// Top-level directories to traverse and copy
 const ROOT_DIRS_TO_INCLUDE = new Set([
   'apps',
   'packages',
@@ -57,7 +42,6 @@ const ROOT_DIRS_TO_INCLUDE = new Set([
   'scripts'
 ]);
 
-// Exact directory names to completely exclude recursively
 const EXCLUDED_DIR_NAMES = new Set([
   'node_modules',
   '.git',
@@ -76,16 +60,13 @@ const EXCLUDED_DIR_NAMES = new Set([
   '.user_uploaded'
 ]);
 
-// File patterns to ignore recursively
 function isFileExcluded(relPath, fileName) {
   const normalizedRel = relPath.replace(/\\/g, '/');
 
-  // Any .env file except .env.example
   if (fileName.startsWith('.env') && fileName !== '.env.example') {
     return true;
   }
 
-  // Active database files
   if (fileName.endsWith('.sqlite') || 
       fileName.includes('.sqlite-') || 
       fileName.endsWith('.db') || 
@@ -94,17 +75,14 @@ function isFileExcluded(relPath, fileName) {
     return true;
   }
 
-  // Runtime state & logs
   if (fileName.endsWith('.log') || fileName === 'whatsapp_session.json') {
     return true;
   }
 
-  // OS files
   if (fileName === '.DS_Store' || fileName === 'Thumbs.db') {
     return true;
   }
 
-  // Root screenshots and recordings (do not ignore assets in apps/ or docs/)
   if (!normalizedRel.includes('/')) {
     if (/\.(png|jpg|jpeg|mp4|webm|gif)$/i.test(fileName)) {
       return true;
@@ -153,7 +131,6 @@ function syncDirectory(currentSourceDir, currentTargetDir, relPath = '') {
       if (EXCLUDED_DIR_NAMES.has(entryName)) {
         continue;
       }
-      // Never copy the data directory contents, will create clean data/.gitkeep
       if (entryRelPath === 'data' || entryRelPath.startsWith('data/')) {
         continue;
       }
@@ -167,7 +144,6 @@ function syncDirectory(currentSourceDir, currentTargetDir, relPath = '') {
   }
 }
 
-// 1. Sync Root Selected Files
 for (const rootFile of ROOT_FILES_TO_INCLUDE) {
   const src = path.join(SOURCE_DIR, rootFile);
   const dest = path.join(TARGET_DIR, rootFile);
@@ -178,7 +154,6 @@ for (const rootFile of ROOT_FILES_TO_INCLUDE) {
   }
 }
 
-// 2. Sync Selected Root Directories
 for (const rootDir of ROOT_DIRS_TO_INCLUDE) {
   const src = path.join(SOURCE_DIR, rootDir);
   const dest = path.join(TARGET_DIR, rootDir);
@@ -189,7 +164,6 @@ for (const rootDir of ROOT_DIRS_TO_INCLUDE) {
   }
 }
 
-// 3. Ensure clean runtime placeholder directories
 const requiredDirs = ['data', 'logs'];
 for (const d of requiredDirs) {
   const targetDir = path.join(TARGET_DIR, d);
@@ -202,7 +176,6 @@ for (const d of requiredDirs) {
   }
 }
 
-// 4. Strict Safety Assertions on the Destination Package
 console.log('\n[→] Verifying package integrity and sanitation...');
 
 const forbiddenItems = [

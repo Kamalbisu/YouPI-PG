@@ -28,7 +28,6 @@ describe('Universal YOUPI PG One-Script Integration Tests', () => {
   });
 
   test('Youpi.pay creates payment session and resolves checkoutUrl on backend', async () => {
-    // Mock fetch for headless Node environment
     const orderId = `PAY-TEST-${Date.now()}`;
     const instance = new YoupiCheckout({
       apiUrl: `http://localhost:${apiInstance.port}`,
@@ -43,7 +42,6 @@ describe('Universal YOUPI PG One-Script Integration Tests', () => {
   });
 
   test('Button attribute extractor correctly parses customer and metadata attributes', () => {
-    // Mock DOM button element
     const mockAttrs = {
       'data-youpi-pay': '',
       'data-order-id': 'ORD-BTN-101',
@@ -61,7 +59,6 @@ describe('Universal YOUPI PG One-Script Integration Tests', () => {
       attributes: Object.keys(mockAttrs).map(name => ({ name, value: mockAttrs[name] }))
     };
 
-    // Verify attribute extraction logic
     const orderId = mockBtn.getAttribute('data-order-id');
     const amount = mockBtn.getAttribute('data-amount');
     const currency = mockBtn.getAttribute('data-currency');

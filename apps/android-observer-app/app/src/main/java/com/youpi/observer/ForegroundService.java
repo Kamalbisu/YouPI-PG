@@ -29,23 +29,20 @@ public class ForegroundService extends Service {
         super.onCreate();
         apiClient = new ApiClient(this);
 
-        // 1. Acquire WakeLock to prevent CPU sleeping during deep background
         try {
             PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
             if (pm != null) {
                 wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "YoupiGateway::ForegroundWakeLock");
-                wakeLock.acquire(24 * 60 * 60 * 1000L); // 24 hours safeguard
+                wakeLock.acquire(24 * 60 * 60 * 1000L);
             }
         } catch (Exception e) {
             Log.w(TAG, "WakeLock acquisition notice: " + e.getMessage());
         }
 
-        // 2. Create notification channel and start foreground service with persistent sticky notification
         createNotificationChannel();
         Notification notification = buildPersistentNotification();
         startForeground(NOTIFICATION_ID, notification);
 
-        // 3. Heartbeat loop (every 30 seconds)
         heartbeatHandler = new Handler(Looper.getMainLooper());
         heartbeatRunnable = new Runnable() {
             @Override
@@ -67,7 +64,7 @@ public class ForegroundService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        return START_STICKY; // Tell Android to recreate service if killed
+        return START_STICKY;
     }
 
     private void createNotificationChannel() {
@@ -109,7 +106,7 @@ public class ForegroundService extends Service {
                .setContentText("24/7 background listener active for Bank SMS & UPI payments")
                .setSmallIcon(android.R.drawable.stat_notify_chat)
                .setContentIntent(pendingIntent)
-               .setOngoing(true); // Persistent notification cannot be swiped away
+               .setOngoing(true);
 
         return builder.build();
     }

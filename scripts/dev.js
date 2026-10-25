@@ -10,12 +10,10 @@ console.log('====================================================');
 console.log('🚀 Starting YOUPI PG (Development / Localhost Mode)');
 console.log('====================================================');
 
-// 1. Run database migrations & seeds
 console.log('[1/2] Checking and applying database migrations...');
 const migrationResult = runMigrations();
 console.log(`[✓] Database ready. Default merchant: ${migrationResult.defaultMerchant.businessName}`);
 
-// Check for user-configured Cloudflare Tunnel command
 let tunnelProcess = null;
 const branding = migrationResult.defaultMerchant?.branding || {};
 const tunnelCmd = process.env.CLOUDFLARE_TUNNEL_COMMAND || branding.cloudflareTunnelCommand;
@@ -24,11 +22,9 @@ if (tunnelCmd && tunnelCmd.trim()) {
   console.log(`\n[☁️ Cloudflare Tunnel] Executing tunnel command before starting services:`);
   tunnelProcess = startCloudflaredSafely(tunnelCmd, { stdio: 'inherit' });
   if (tunnelProcess) console.log(`[✓] Cloudflare Tunnel process launched (PID: ${tunnelProcess.pid}).\n`);
-  // Brief pause to establish socket before services spin up
   await new Promise(r => setTimeout(r, 1500));
 }
 
-// 2. Start Control Center supervisor and launch all services
 console.log('[2/2] Launching Local Process Control Center on port 8090...');
 const cc = await startControlCenter(8090);
 
@@ -49,7 +45,6 @@ console.log('• Google Messages / SMS Obs:    http://localhost:6002');
 console.log('====================================================');
 console.log('Press Ctrl+C to stop all services gracefully.');
 
-// Handle graceful shutdown
 const shutdown = async () => {
   console.log('\nStopping all services gracefully...');
   if (tunnelProcess && tunnelProcess.pid) {

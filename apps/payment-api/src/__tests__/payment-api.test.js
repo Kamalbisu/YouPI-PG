@@ -7,7 +7,6 @@ import { startServer } from '../index.js';
 import { PaymentStatus, ObserverSource, verifyHmac } from '@youpi/common';
 import { authHeadersFor, merchantHeaders } from '../../../../scripts/test-support.js';
 
-/** A port that is free right now, for a server that is started just for one test. */
 function freePort() {
   return new Promise((resolve, reject) => {
     const probe = net.createServer();
@@ -29,12 +28,8 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
 
   before(async () => {
     testDb = new Database({ inMemory: true });
-    // Use an ephemeral random port (e.g. 0 or high port 6199) to prevent collisions
     serverInstance = await startServer(6199, testDb);
     baseUrl = `http://localhost:${serverInstance.port}`;
-    // Merchant-private fields on GET /payments/:id are only returned to the owning
-    // merchant, so read the seeded secret through the repository (the raw column is
-    // encrypted at rest).
     const seededMerchant = new MerchantRepository(testDb).findAll()[0];
     merchantSecret = seededMerchant.webhookSecret;
     merchantWebhookUrl = seededMerchant.webhookUrl;
@@ -47,7 +42,6 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
 
   function request(path, options = {}) {
     return new Promise((resolve, reject) => {
-      // `options.baseUrl` lets a test talk to a second, isolated server.
       const url = new URL(path, options.baseUrl || baseUrl);
       const reqOpts = {
         method: options.method || 'GET',
@@ -89,7 +83,6 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
   });
 
   test('Complete payment lifecycle: creation, queue, payment-done, observation attribution & promotion', async () => {
-    // 1. Create first payment session (Customer A -> ₹200)
     const payA = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -109,7 +102,6 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
 
     const paymentIdA = payA.body.paymentId;
 
-    // 2. Create second payment session concurrently (Customer B -> ₹200)
     const payB = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -126,7 +118,6 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
 
     const paymentIdB = payB.body.paymentId;
 
-    // 3. Customer A checks checkout state
     const stateA = await request(`/api/v1/checkout/${paymentIdA}/state`);
     assert.equal(stateA.status, 200);
     assert.equal(stateA.body.status, PaymentStatus.ACTIVE);
@@ -134,7 +125,6 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
     assert.equal(stateA.body.canClickPaymentDone, true);
     assert.ok(stateA.body.timeRemainingSeconds > 0);
 
-    // 4. Customer A clicks "PAYMENT DONE — CHECK MY PAYMENT"
     const doneA = await request(`/api/v1/checkout/${paymentIdA}/payment-done`, {
       method: 'POST'
     });
@@ -142,7 +132,6 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
     assert.equal(doneA.status, 200);
     assert.equal(doneA.body.status, PaymentStatus.PROCESSING);
 
-    // 5. Observer reports incoming ₹200 UPI payment
     const obsRes = await request('/api/v1/pollers/events', {
       method: 'POST',
       body: {
@@ -160,13 +149,11 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
     assert.equal(obsRes.body.attribution.outcomeStatus, PaymentStatus.SUCCESS);
     assert.equal(obsRes.body.attribution.paymentSessionId, paymentIdA);
 
-    // 6. Verify Payment A is SUCCESS via public API
     const verifyA = await request(`/api/v1/payments/${paymentIdA}`);
     assert.equal(verifyA.status, 200);
     assert.equal(verifyA.body.status, 'SUCCESS');
     assert.ok(verifyA.body.completedAt);
 
-    // 7. Verify Payment B has been automatically promoted to ACTIVE in the queue!
     const stateB = await request(`/api/v1/checkout/${paymentIdB}/state`);
     assert.equal(stateB.status, 200);
     assert.equal(stateB.body.status, PaymentStatus.ACTIVE);
@@ -175,7 +162,6 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
   });
 
   test('Customer registration, login, and decommissioned customer ticket routes', async () => {
-    // 1. Customer registration
     const regRes = await request('/api/v1/customer/register', {
       method: 'POST',
       body: {
@@ -189,7 +175,6 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
 
     const customerId = regRes.body.customerId;
 
-    // 2. Customer login
     const loginRes = await request('/api/v1/customer/login', {
       method: 'POST',
       body: {
@@ -200,7 +185,6 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
     assert.equal(loginRes.status, 200);
     assert.ok(loginRes.body.token);
 
-    // 3. Customer support ticket endpoints are decommissioned (return 404)
     const ticketRes = await request('/api/v1/customer/tickets', {
       method: 'POST',
       body: {
@@ -225,7 +209,6 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
   });
 
   test('Counter manual payment confirmation flow', async () => {
-    // Create payment session for Cash at Counter
     const payCounter = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -237,7 +220,6 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
     assert.equal(payCounter.status, 201);
     const paymentId = payCounter.body.paymentId;
 
-    // Operator confirms cash received at physical counter
     const confirmRes = await request('/api/v1/admin/counter-confirm', {
       method: 'POST',
       body: {
@@ -256,13 +238,11 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
   });
 
   test('Custom UPI ID persistence & dynamic QR injection', async () => {
-    // Free slot from earlier test runs so session becomes ACTIVE
     const prevActive = serverInstance.app.context.sessionRepo.findCurrentActiveOrProcessing('00000000-0000-0000-0000-000000000002');
     if (prevActive) {
       serverInstance.app.context.sessionRepo.transitionToTerminal(prevActive.id, PaymentStatus.CANCELLED);
     }
 
-    // 1. Update merchant receiving UPI VPA
     const upiUpdateRes = await request('/api/v1/admin/upi-settings', {
       method: 'POST',
       body: {
@@ -275,7 +255,6 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
     assert.equal(upiUpdateRes.body.success, true);
     assert.equal(upiUpdateRes.body.receivingAccount.upiId, 'customstore@okhdfcbank');
 
-    // 2. Create a new payment session
     const payRes = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -288,7 +267,6 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
     assert.equal(payRes.status, 201);
     const paymentId = payRes.body.paymentId;
 
-    // 3. Verify state generates UPI URI with the new custom VPA
     const stateRes = await request(`/api/v1/checkout/${paymentId}/state`);
     assert.equal(stateRes.status, 200);
     assert.equal(stateRes.body.payeeVpa, 'customstore@okhdfcbank');
@@ -296,7 +274,6 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
   });
 
   test('Payment method toggles and white-label branding persistence', async () => {
-    // 1. Merchant disables CASH_COUNTER and customizes all white-label branding elements
     const settingsRes = await request('/api/v1/admin/merchant-settings', {
       method: 'POST',
       body: {
@@ -319,7 +296,6 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
     assert.equal(settingsRes.body.branding.logoUrl, 'https://cdn.example.com/astra-logo.png');
     assert.equal(settingsRes.body.branding.sidebarNotice, 'Exclusive AstraPay UPI Partner');
 
-    // 2. Create payment and inspect checkout state
     const payRes = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -343,7 +319,6 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
   });
 
   test('Customer auth binding and trigger-hook dispatch', async () => {
-    // 1. Create a customer
     const regRes = await request('/api/v1/customer/register', {
       method: 'POST',
       body: {
@@ -355,7 +330,6 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
     assert.equal(regRes.status, 201);
     const customerId = regRes.body.customerId;
 
-    // 2. Create a payment
     const payRes = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -365,7 +339,6 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
     });
     const paymentId = payRes.body.paymentId;
 
-    // 3. Bind customer to payment session
     const bindRes = await request(`/api/v1/checkout/${paymentId}/bind-customer`, {
       method: 'POST',
       body: { customerId, token: regRes.body.token }
@@ -374,24 +347,19 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
     assert.equal(bindRes.body.success, true);
     assert.equal(bindRes.body.customer.phoneNumber, '9111222333');
 
-    // 4. Inspect state: the customer is attached, but their contact details are NOT
-    //    disclosed to an anonymous caller that only holds the payment id.
     const stateRes = await request(`/api/v1/checkout/${paymentId}/state`);
     assert.equal(stateRes.body.customer, null);
 
-    // The customer themselves, presenting their own session token, do see their profile.
     const selfState = await request(`/api/v1/checkout/${paymentId}/state`, {
       headers: { 'x-customer-token': regRes.body.token }
     });
     assert.equal(selfState.body.customer.phoneNumber, '9111222333');
 
-    // The owning merchant, presenting its secret, sees the customer too.
     const ownerState = await request(`/api/v1/checkout/${paymentId}/state`, {
       headers: { 'X-Merchant-Key': merchantSecret }
     });
     assert.equal(ownerState.body.customer.phoneNumber, '9111222333');
 
-    // 5. Test action trigger hook (rejects unauthenticated requests, succeeds with customer token)
     const unauthHookRes = await request(`/api/v1/checkout/${paymentId}/trigger-hook`, {
       method: 'POST',
       body: {
@@ -416,13 +384,11 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
   });
 
   test('Payment timer does not start until customer logs in or signs up', async () => {
-    // Ensure slot is clean
     const prevActive = serverInstance.app.context.sessionRepo.findCurrentActiveOrProcessing('00000000-0000-0000-0000-000000000002');
     if (prevActive) {
       serverInstance.app.context.sessionRepo.transitionToTerminal(prevActive.id, PaymentStatus.CANCELLED);
     }
 
-    // 1. Create a payment without pre-authenticated customer
     const createRes = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -435,14 +401,12 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
     assert.equal(createRes.body.status, 'INITIATED');
     const paymentId = createRes.body.paymentId;
 
-    // 2. Inspect state: timer MUST NOT be running while user is unauthenticated
     const stateBeforeAuth = await request(`/api/v1/checkout/${paymentId}/state`);
     assert.equal(stateBeforeAuth.status, 200);
     assert.equal(stateBeforeAuth.body.status, 'INITIATED');
-    assert.equal(stateBeforeAuth.body.timeRemainingSeconds, 0); // Timer is paused!
+    assert.equal(stateBeforeAuth.body.timeRemainingSeconds, 0);
     assert.equal(stateBeforeAuth.body.canClickPaymentDone, false);
 
-    // 3. User registers or signs in
     const regRes = await request('/api/v1/customer/register', {
       method: 'POST',
       body: {
@@ -453,7 +417,6 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
     });
     const customerId = regRes.body.customerId;
 
-    // 4. User logs in and binds customer to payment session
     const bindRes = await request(`/api/v1/checkout/${paymentId}/bind-customer`, {
       method: 'POST',
       body: { customerId, token: regRes.body.token }
@@ -463,15 +426,13 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
     assert.equal(bindRes.body.status, 'ACTIVE');
     assert.ok(bindRes.body.expiresAt);
 
-    // 5. Inspect state: 5-minute timer is NOW active and counting down!
     const stateAfterAuth = await request(`/api/v1/checkout/${paymentId}/state`);
     assert.equal(stateAfterAuth.body.status, 'ACTIVE');
-    assert.ok(stateAfterAuth.body.timeRemainingSeconds > 280); // Full 5 minutes started only now!
+    assert.ok(stateAfterAuth.body.timeRemainingSeconds > 280);
     assert.equal(stateAfterAuth.body.canClickPaymentDone, true);
   });
 
   test('Queue Sync Invariant: When Session A expires, queued Session B is immediately promoted to ACTIVE with armed timer', async () => {
-    // Ensure slot and queue are clean
     testDb.execute(`
       UPDATE payment_sessions
       SET status = 'CANCELLED'
@@ -483,7 +444,6 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
       WHERE id = ?
     `, ['00000000-0000-0000-0000-000000000002']);
 
-    // 1. Session A is ACTIVE
     const payA = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -495,7 +455,6 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
     assert.equal(payA.body.status, PaymentStatus.ACTIVE);
     assert.equal(payA.body.queuePosition, 0);
 
-    // 2. Session B is created and placed in QUEUED
     const payB = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -507,27 +466,23 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
     assert.equal(payB.body.status, PaymentStatus.QUEUED);
     assert.equal(payB.body.queuePosition, 1);
 
-    // 3. User A expires (via client expiry trigger / endpoint) once the server-side window has elapsed
     testDb.execute(`UPDATE payment_sessions SET expires_at = ? WHERE id = ?`, [new Date(Date.now() - 1000).toISOString(), payA.body.paymentId]);
     const expireRes = await request(`/api/v1/checkout/${payA.body.paymentId}/expire`, {
       method: 'POST'
     });
     assert.equal(expireRes.status, 200);
 
-    // Verify Session A is EXPIRED
     const checkA = await request(`/api/v1/payments/${payA.body.paymentId}`);
     assert.equal(checkA.body.status, 'EXPIRED');
 
-    // 4. Session B MUST now be ACTIVE!
     const checkB = await request(`/api/v1/checkout/${payB.body.paymentId}/state`);
     assert.equal(checkB.body.status, PaymentStatus.ACTIVE);
     assert.equal(checkB.body.queuePosition, 0);
-    assert.ok(checkB.body.timeRemainingSeconds > 280); // Timer started!
-    assert.ok(checkB.body.upiUri); // QR code generated!
+    assert.ok(checkB.body.timeRemainingSeconds > 280);
+    assert.ok(checkB.body.upiUri);
   });
 
   test('2-Level Payment Verification Engine: Upgrades verification tier from L1 (SMS) to L2 (Dual: SMS + Gmail)', async () => {
-    // Ensure slot and queue are clean
     testDb.execute(`
       UPDATE payment_sessions
       SET status = 'CANCELLED'
@@ -539,7 +494,6 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
       WHERE id = ?
     `, ['00000000-0000-0000-0000-000000000002']);
 
-    // 1. Create a payment session for ₹650.00
     const payRes = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -550,10 +504,8 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
     });
     const paymentId = payRes.body.paymentId;
 
-    // 2. Customer clicks Payment Done -> moves to PROCESSING
     await request(`/api/v1/checkout/${paymentId}/payment-done`, { method: 'POST' });
 
-    // 3. Observation 1: Google Messages SMS arrives -> Level 1 (L1 Single Verification)
     const obs1 = await request('/api/v1/pollers/events', {
       method: 'POST',
       body: {
@@ -571,13 +523,11 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
     assert.equal(obs1.body.attribution.verificationLevel, 1);
     assert.ok(obs1.body.attribution.verificationTag.includes('Single Verification') || obs1.body.attribution.verificationTag.includes('SMS'));
 
-    // Check payment status: must be SUCCESS with Level 1
     const checkL1 = await request(`/api/v1/payments/${paymentId}`, { headers: merchantHeaders(merchantSecret) });
     assert.equal(checkL1.body.status, 'SUCCESS');
     assert.equal(checkL1.body.verificationLevel, 1);
     assert.deepEqual(checkL1.body.verificationSources, ['GOOGLE_MESSAGES']);
 
-    // 4. Observation 2: Gmail arrives 2 seconds later -> Upgrades to Level 2 (Dual Verification: SMS + Gmail)
     const obs2 = await request('/api/v1/pollers/events', {
       method: 'POST',
       body: {
@@ -599,7 +549,6 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
     assert.ok(checkL2.body.verificationSources.includes('GOOGLE_MESSAGES'));
     assert.ok(checkL2.body.verificationSources.includes('GMAIL'));
 
-    // Final verification from Admin API: Level 2 Dual Standard
     const adminCheck = await request('/api/v1/admin/payments');
     const pRecord = adminCheck.body.payments.find(p => p.id === paymentId);
     assert.ok(pRecord);
@@ -608,7 +557,6 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
   });
 
   test('Merchant webhook URL & secret persistence and HMAC-SHA256 signed event delivery', async () => {
-    // 1. Start an ephemeral mock webhook receiver
     let receivedPayload = null;
     let receivedHeaders = null;
     let webhookResolve;
@@ -633,7 +581,6 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
     const receiverUrl = `http://localhost:${receiverPort}/api/webhook`;
 
     try {
-      // 2. Persist custom webhook URL and secret via admin API
       const customSecret = 'sec_wh_supersecret_key_778899';
       const updateRes = await request('/api/v1/admin/merchant-settings', {
         method: 'POST',
@@ -647,19 +594,16 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
       assert.equal(updateRes.body.webhookUrl, receiverUrl);
       assert.equal(updateRes.body.webhookSecret, customSecret);
 
-      // 3. Read back via GET /api/v1/admin/merchant-settings
       const getMerchantRes = await request('/api/v1/admin/merchant-settings');
       assert.equal(getMerchantRes.status, 200);
       assert.equal(getMerchantRes.body.webhookUrl, receiverUrl);
       assert.equal(getMerchantRes.body.webhookSecret, customSecret);
 
-      // 4. Also read back via GET /api/v1/admin/all-settings
       const getAllRes = await request('/api/v1/admin/all-settings');
       assert.equal(getAllRes.status, 200);
       assert.equal(getAllRes.body.webhookUrl, receiverUrl);
       assert.equal(getAllRes.body.webhookSecret, customSecret);
 
-      // 5. Create a payment session
       const createRes = await request('/api/v1/payments', {
         method: 'POST',
         body: {
@@ -671,7 +615,6 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
       assert.equal(createRes.status, 201);
       const paymentId = createRes.body.paymentId;
 
-      // 6. Complete payment via counter confirmation to trigger PAYMENT.SUCCESS
       const confirmRes = await request('/api/v1/admin/counter-confirm', {
         method: 'POST',
         body: {
@@ -682,7 +625,6 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
       assert.equal(confirmRes.status, 200);
       assert.equal(confirmRes.body.confirmed, true);
 
-      // 7. Wait for webhook delivery to arrive at mockReceiver
       await Promise.race([
         webhookReceivedPromise,
         new Promise((_, reject) => setTimeout(() => reject(new Error('Webhook delivery timed out')), 5000))
@@ -691,29 +633,24 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
       assert.ok(receivedPayload);
       assert.ok(receivedHeaders);
 
-      // 8. Verify delivery headers
       assert.equal(receivedHeaders['x-gateway-event'], 'SUCCESS');
       assert.ok(receivedHeaders['x-gateway-signature'].startsWith('sha256='));
       assert.ok(receivedHeaders['x-gateway-delivery-id']);
       assert.ok(receivedHeaders['x-gateway-timestamp']);
 
-      // 9. Verify payload contents
       const parsedBody = JSON.parse(receivedPayload);
       assert.equal(parsedBody.event, 'SUCCESS');
       assert.equal(parsedBody.paymentId, paymentId);
       assert.equal(parsedBody.orderId, 'WEBHOOK-TEST-ORD-1');
       assert.equal(parsedBody.amount, '450.00');
 
-      // 10. Cryptographically verify signature using the custom secret
       const sig = receivedHeaders['x-gateway-signature'].replace('sha256=', '');
       const validSig = verifyHmac(receivedPayload, customSecret, sig);
       assert.equal(validSig, true);
 
-      // Verify wrong secret fails
       const invalidSig = verifyHmac(receivedPayload, 'wrong_secret_123', sig);
       assert.equal(invalidSig, false);
 
-      // 11. Test non-destructive update: update only businessName and verify webhook config is preserved!
       const partialUpdate = await request('/api/v1/admin/merchant-settings', {
         method: 'POST',
         body: {
@@ -731,20 +668,6 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
   });
 
   test('A delivery that failed is sent again by the retry daemon', async () => {
-    // The engine knows how to send a failed delivery again — it re-signs the
-    // stored payload and sends it with the same delivery id. But knowing how
-    // is not the same as doing it: the retry has to be *scheduled* by
-    // something, and until the daemon existed nothing scheduled it. A
-    // merchant whose server was restarting at the moment of the event simply
-    // never heard about the payment.
-    //
-    // This is the test for the daemon: the first delivery fails, the second
-    // one succeeds, and nothing but the daemon sends the second one.
-    //
-    // It runs on its own server, with its own database and a shortened daemon
-    // tick, so that the suite's shared server keeps the production default.
-    // A one-second tick on the shared server competes with the timing
-    // sensitive tests for the same event loop and the same SQLite connection.
     const attempts = [];
     let firstAttemptResolve;
     const firstAttemptPromise = new Promise(resolve => { firstAttemptResolve = resolve; });
@@ -755,7 +678,6 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
       req.on('end', () => {
         attempts.push({ headers: req.headers, body });
         if (attempts.length === 1) {
-          // The merchant's server is not up yet.
           res.writeHead(500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'not ready' }));
           firstAttemptResolve();
@@ -773,8 +695,6 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
 
     const retryDb = new Database({ inMemory: true });
     const previousInterval = process.env.WEBHOOK_RETRY_INTERVAL_MS;
-    // The daemon is created when the server starts, so the tick has to be set
-    // before startServer() — and put back afterwards.
     process.env.WEBHOOK_RETRY_INTERVAL_MS = '1000';
     let retryServer = null;
 
@@ -805,15 +725,12 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
       });
       assert.equal(confirmRes.status, 200);
 
-      // The first delivery reaches the receiver and is refused.
       await Promise.race([
         firstAttemptPromise,
         new Promise((_, reject) => setTimeout(() => reject(new Error('The first delivery never arrived')), 5000))
       ]);
       assert.equal(attempts.length, 1);
 
-      // The engine records the delivery once the response has come back, so
-      // the row is waited for rather than read once and called a failure.
       let failedRow = null;
       const rowDeadline = Date.now() + 5000;
       while (Date.now() < rowDeadline) {
@@ -829,21 +746,17 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
       assert.equal(failedRow.attempt_count, 1);
       assert.ok(failedRow.next_retry_at, 'a failed delivery must be scheduled for a retry');
 
-      // Make it due now. The backoff is the engine's business, and waiting it
-      // out would make this test take half a minute for no extra confidence.
       retryDb.execute(
         'UPDATE webhook_deliveries SET next_retry_at = ? WHERE id = ?',
         [new Date(Date.now() - 1000).toISOString(), failedRow.id]
       );
 
-      // The daemon sends it again, on its own.
       const retryDeadline = Date.now() + 10000;
       while (Date.now() < retryDeadline && attempts.length < 2) {
         await new Promise(resolve => setTimeout(resolve, 100));
       }
       assert.equal(attempts.length, 2, 'the failed delivery was never retried');
 
-      // The retry is the *same* delivery: same id, same signed payload.
       assert.equal(attempts[1].headers['x-gateway-delivery-id'], attempts[0].headers['x-gateway-delivery-id']);
       assert.equal(attempts[1].body, attempts[0].body);
       assert.equal(
@@ -872,7 +785,6 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
   });
 
   test('Auto-detection in ACTIVE state without Payment Done click: immediate SUCCESS, L1 to L2 upgrade, exactly 1 webhook', async () => {
-    // 1. Clean slot and queue
     testDb.execute(`
       UPDATE payment_sessions
       SET status = 'CANCELLED'
@@ -884,7 +796,6 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
       WHERE id = ?
     `, ['00000000-0000-0000-0000-000000000002']);
 
-    // 2. Setup mock receiver tracking webhook count
     let webhookDeliveries = [];
     const mockReceiver = http.createServer((req, res) => {
       let body = '';
@@ -901,7 +812,6 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
     const receiverUrl = `http://localhost:${receiverPort}/autodetect-webhook`;
 
     try {
-      // 3. Configure webhook URL
       await request('/api/v1/admin/merchant-settings', {
         method: 'POST',
         body: {
@@ -909,10 +819,8 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
           webhookSecret: 'secret_autodetect_test_9988'
         }
       });
-      // This test rotates the merchant secret; re-read so merchant-scoped reads still pass.
       merchantSecret = new MerchantRepository(testDb).findAll()[0].webhookSecret;
 
-      // 4. Create payment session in ACTIVE state (customer scanning QR, did NOT click Payment Done)
       const payRes = await request('/api/v1/payments', {
         method: 'POST',
         body: {
@@ -925,11 +833,9 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
       assert.equal(payRes.body.status, PaymentStatus.ACTIVE);
       const paymentId = payRes.body.paymentId;
 
-      // Ensure customer is in ACTIVE state, not PROCESSING
       const checkBefore = await request(`/api/v1/payments/${paymentId}`);
       assert.equal(checkBefore.body.status, PaymentStatus.ACTIVE);
 
-      // 5. Channel 1: Google Messages SMS arrives while user is on QR screen (NO manual button click!)
       const obs1 = await request('/api/v1/pollers/events', {
         method: 'POST',
         body: {
@@ -945,23 +851,19 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
       assert.equal(obs1.body.attribution.attributed, true);
       assert.equal(obs1.body.attribution.verificationLevel, 1);
 
-      // Payment MUST be immediately SUCCESS for customer
       const checkAfterObs1 = await request(`/api/v1/payments/${paymentId}`, { headers: merchantHeaders(merchantSecret) });
       assert.equal(checkAfterObs1.body.status, 'SUCCESS');
       assert.equal(checkAfterObs1.body.verificationLevel, 1);
 
-      // Checkout state MUST reflect SUCCESS immediately
       const stateAfterObs1 = await request(`/api/v1/checkout/${paymentId}/state`);
       assert.equal(stateAfterObs1.body.status, 'SUCCESS');
 
-      // Wait 150ms for webhook dispatch
       await new Promise(r => setTimeout(r, 150));
       assert.equal(webhookDeliveries.length, 1);
       assert.equal(webhookDeliveries[0].body.event, 'SUCCESS');
       assert.equal(webhookDeliveries[0].body.orderId, 'AUTODETECT-ORD-777');
       assert.equal(webhookDeliveries[0].body.amount, '320.00');
 
-      // 6. Channel 2: Gmail credit notification arrives 500ms later during verification sweep
       const obs2 = await request('/api/v1/pollers/events', {
         method: 'POST',
         body: {
@@ -976,14 +878,12 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
       assert.equal(obs2.status, 200);
       assert.equal(obs2.body.attribution.verificationLevel, 2);
 
-      // Invariant: Verification level in admin upgrades to L2 (Dual Verification)
       const checkAfterObs2 = await request(`/api/v1/payments/${paymentId}`, { headers: merchantHeaders(merchantSecret) });
       assert.equal(checkAfterObs2.body.verificationLevel, 2);
       assert.deepEqual(checkAfterObs2.body.verificationSources.sort(), ['GMAIL', 'GOOGLE_MESSAGES'].sort());
 
-      // Invariant: Second observation MUST NOT trigger duplicate webhook delivery!
       await new Promise(r => setTimeout(r, 150));
-      assert.equal(webhookDeliveries.length, 1); // Exactly 1 delivery!
+      assert.equal(webhookDeliveries.length, 1);
 
     } finally {
       await new Promise(cb => mockReceiver.close(cb));
@@ -998,7 +898,6 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
         serverInstance.app.context.sessionRepo.transitionToTerminal(prevActive.id, terminalStatus);
       }
 
-      // Create and cancel a payment session
       const createRes = await request('/api/v1/payments', {
         method: 'POST',
         body: {
@@ -1011,13 +910,11 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
       assert.equal(createRes.status, 201);
       const paymentId = createRes.body.paymentId;
 
-      // Cancel the session
       const cancelRes = await request(`/api/v1/checkout/${paymentId}/cancel`, {
         method: 'POST'
       });
       assert.equal(cancelRes.status, 200);
 
-      // Attempt retry-new-payment on the cancelled session
       const retryRes = await request(`/api/v1/checkout/${paymentId}/retry-new-payment`, {
         method: 'POST'
       });
@@ -1032,7 +929,6 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
         serverInstance.app.context.sessionRepo.transitionToTerminal(prevActive.id, terminalStatus);
       }
 
-      // Create and activate a payment session
       const createRes = await request('/api/v1/payments', {
         method: 'POST',
         body: {
@@ -1046,14 +942,12 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
       const paymentId = createRes.body.paymentId;
       assert.equal(createRes.body.status, PaymentStatus.ACTIVE);
 
-      // Move to PROCESSING via payment-done
       const doneRes = await request(`/api/v1/checkout/${paymentId}/payment-done`, {
         method: 'POST'
       });
       assert.equal(doneRes.status, 200);
       assert.equal(doneRes.body.status, PaymentStatus.PROCESSING);
 
-      // Attempt select-method on the processing session
       const switchRes = await request(`/api/v1/checkout/${paymentId}/select-method`, {
         method: 'POST',
         body: { method: 'COD' }
@@ -1069,7 +963,6 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
         serverInstance.app.context.sessionRepo.transitionToTerminal(prevActive.id, terminalStatus);
       }
 
-      // Create and activate a payment session
       const createRes = await request('/api/v1/payments', {
         method: 'POST',
         body: {
@@ -1083,14 +976,12 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
       const paymentId = createRes.body.paymentId;
       assert.equal(createRes.body.status, PaymentStatus.ACTIVE);
 
-      // Move to PROCESSING
       const doneRes = await request(`/api/v1/checkout/${paymentId}/payment-done`, {
         method: 'POST'
       });
       assert.equal(doneRes.status, 200);
       assert.equal(doneRes.body.status, PaymentStatus.PROCESSING);
 
-      // Attempt confirm-cod on processing session
       const codRes = await request(`/api/v1/checkout/${paymentId}/confirm-cod`, {
         method: 'POST'
       });
@@ -1117,13 +1008,11 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
       assert.equal(createRes.status, 201);
       const paymentId = createRes.body.paymentId;
 
-      // Cancel the session
       await request(`/api/v1/checkout/${paymentId}/cancel`, {
         method: 'POST'
       });
 
 
-      // Attempt confirm-cod on cancelled session
       const codRes = await request(`/api/v1/checkout/${paymentId}/confirm-cod`, {
         method: 'POST'
       });

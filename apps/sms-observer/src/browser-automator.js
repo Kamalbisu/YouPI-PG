@@ -10,12 +10,6 @@ const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, '../../..');
 
 export class GoogleMessagesAutomator {
-  /**
-   * @param {{
-   *   smsService: import('./sms-service.js').SmsObserverService,
-   *   debuggingPort?: number
-   * }} options
-   */
   constructor(options) {
     this.smsService = options.smsService;
     this.apiBaseUrl = options.apiBaseUrl || process.env.BASE_PAYMENT_API_URL || 'http://localhost:6100';
@@ -28,7 +22,7 @@ export class GoogleMessagesAutomator {
     this.backgroundProcess = null;
     this.browserProcess = null;
     this.isPaired = this.loadStoredPairedState();
-    this.mode = 'STANDBY'; // 'BACKGROUND' | 'VISIBLE' | 'STANDBY'
+    this.mode = 'STANDBY';
     this.checkTimer = null;
     this.extractionTimer = null;
     this.lastSeenAt = null;
@@ -72,11 +66,6 @@ export class GoogleMessagesAutomator {
     this.isPaired = paired;
   }
 
-  /**
-   * Automatically ensures connection:
-   * - If already paired: launches invisible background browser and starts polling.
-   * - If disconnected/unpaired: automatically launches visible pairing window for user to scan QR.
-   */
   async autoEnsureConnection() {
     if (this.isEnsuring) return this.getStatus();
     if (process.env.ENABLE_LEGACY_CHROME_OBSERVERS !== 'true') return this.getStatus();
@@ -103,7 +92,6 @@ export class GoogleMessagesAutomator {
         }
       }
 
-      // No browser running currently: check stored pairing state
       if (this.isPaired) {
         console.log('[Google Messages Automator] Existing pairing detected. Launching invisible background browser...');
         this.launchBackgroundObserver();
@@ -122,9 +110,6 @@ export class GoogleMessagesAutomator {
     return this.getStatus();
   }
 
-  /**
-   * Opens the visible Google Messages Web pairing browser window on the host.
-   */
   launchPairingWindow() {
     if (process.env.ENABLE_LEGACY_CHROME_OBSERVERS !== 'true') {
       return {
@@ -139,7 +124,7 @@ export class GoogleMessagesAutomator {
       url: this.targetUrl,
       profileDir: this.profileDir,
       debuggingPort: this.debuggingPort,
-      minimized: false // Visible window for user to scan QR code
+      minimized: false
     });
 
     this.startStateMonitor();
@@ -160,18 +145,13 @@ export class GoogleMessagesAutomator {
       url: 'https://messages.google.com/web',
       profileDir: this.profileDir,
       debuggingPort: this.debuggingPort,
-      minimized: true // Launches offscreen at position -2400,-2400
+      minimized: true
     });
 
     this.startStateMonitor();
     this.startExtractionLoop();
   }
 
-  /**
-   * Monitors the browser CDP target to detect when pairing completes.
-   * If pairing completes in visible window: auto-closes visible window and switches to quiet background process.
-   * If background process gets unlinked: immediately triggers visible window for pairing.
-   */
   startStateMonitor() {
     if (this.checkTimer) clearInterval(this.checkTimer);
 
@@ -186,21 +166,17 @@ export class GoogleMessagesAutomator {
           const isPairedUrl = (!msgTarget.url.includes('/authentication') && msgTarget.url.includes('/web'));
 
           if (isPairedUrl && !this.isPaired) {
-            // User just scanned QR in visible window!
             this.saveStoredPairedState(true);
             console.log('[Google Messages Automator] Pairing confirmed! Closing visible window and switching to invisible background observer...');
 
-            // Automatically close the visible pairing window
             if (msgTarget.id) {
               await BrowserLauncher.closeTarget(this.debuggingPort, msgTarget.id);
             }
 
-            // Launch quiet background process
             setTimeout(() => {
               this.launchBackgroundObserver();
             }, 1200);
           } else if (!isPairedUrl && this.isPaired) {
-            // Unpaired / session expired: switch to visible window!
             this.saveStoredPairedState(false);
             console.log('[Google Messages Automator] Session unlinked. Opening visible pairing window...');
             if (msgTarget.id) {
@@ -212,15 +188,11 @@ export class GoogleMessagesAutomator {
           }
         }
       } catch {
-        // Target busy or initializing
       }
     }, 2000);
     if (this.checkTimer.unref) this.checkTimer.unref();
   }
 
-  /**
-   * Continuous background extraction loop for Google Messages SMS conversations.
-   */
   startExtractionLoop() {
     if (this.extractionTimer) clearInterval(this.extractionTimer);
 
@@ -228,7 +200,6 @@ export class GoogleMessagesAutomator {
       try {
         await this.pollRecentMessages();
       } catch (err) {
-        // Target busy or updating
       }
     }, 3000);
     if (this.extractionTimer.unref) this.extractionTimer.unref();
@@ -246,11 +217,9 @@ export class GoogleMessagesAutomator {
 
     this.lastSeenAt = new Date();
 
-    // Fetch active payment sessions currently in progress
     const activeSessions = await this.fetchActivePaymentAmounts();
     const targetAmounts = activeSessions.map(s => s.amount);
 
-    // Universal DOM evaluation: deeply inspects conversation previews, chat bubbles, and full text
     const script = `
       (() => {
         const results = [];
@@ -312,11 +281,8 @@ export class GoogleMessagesAutomator {
             this.processedHashes.delete(first);
           }
 
-          // 1. Try standard bank SMS parser
           let parsed = BankSmsParser.parse({ text: rawText });
 
-          // 2. Intelligent Active Window Fallback:
-          // If message contains the active session's exact amount, match it directly!
           if (!parsed && activeSessions.length > 0) {
             for (const s of activeSessions) {
               const intVal = String(Math.floor(Number(s.amount)));

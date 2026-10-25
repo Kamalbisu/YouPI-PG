@@ -87,7 +87,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
   });
 
   test('2. Checkout session binds to the first device that accesses it', async () => {
-    // Create a payment session
     const createRes = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -103,7 +102,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     const sessionId = createRes.body.paymentId;
     assert.ok(sessionId);
 
-    // Device 1 registers
     const regRes1 = await request('/api/v1/devices/register', {
       method: 'POST',
       body: {
@@ -115,7 +113,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     const dev1Token = regRes1.body.deviceToken;
     dev1TokenShared = dev1Token;
 
-    // Device 1 accesses the checkout session state
     const stateRes1 = await request(`/api/v1/checkout/${sessionId}/state`, {
       headers: {
         'x-device-id': dev1Id,
@@ -127,7 +124,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     assert.equal(stateRes1.body.paymentId, sessionId);
     assert.equal(stateRes1.body.deviceId, dev1Id);
 
-    // Verify session in database is bound to dev1Id
     const row = testDb.db.prepare('SELECT device_id FROM payment_sessions WHERE id = ?').get(sessionId);
     assert.equal(row.device_id, dev1Id);
   });
@@ -137,7 +133,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     const sessionId = row.id;
     const dev1Id = row.device_id;
 
-    // Access again with device 1 and valid token
     const res = await request(`/api/v1/checkout/${sessionId}/state`, {
       headers: {
         'x-device-id': dev1Id,
@@ -146,7 +141,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     });
     assert.equal(res.status, 200);
 
-    // Select payment method with device 1 and valid token
     const methodRes = await request(`/api/v1/checkout/${sessionId}/select-method`, {
       method: 'POST',
       headers: {
@@ -162,7 +156,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     const row = testDb.db.prepare('SELECT id, device_id FROM payment_sessions WHERE order_id = ?').get('ORDER_DEV_001');
     const sessionId = row.id;
 
-    // Device 2 registers
     const regRes2 = await request('/api/v1/devices/register', {
       method: 'POST',
       body: {
@@ -173,7 +166,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     const dev2Id = regRes2.body.deviceId;
     const dev2Token = regRes2.body.deviceToken;
 
-    // Device 2 attempts to fetch state of session bound to Device 1
     const conflictRes = await request(`/api/v1/checkout/${sessionId}/state`, {
       headers: {
         'x-device-id': dev2Id,
@@ -191,7 +183,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     const row = testDb.db.prepare('SELECT id, device_id FROM payment_sessions WHERE order_id = ?').get('ORDER_DEV_001');
     const sessionId = row.id;
 
-    // Device 2 attempts to select method
     const resMethod = await request(`/api/v1/checkout/${sessionId}/select-method`, {
       method: 'POST',
       headers: { 'x-device-id': 'dev_unauthorized_999' },
@@ -200,7 +191,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     assert.equal(resMethod.status, 409);
     assert.equal(resMethod.body.error, 'DUPLICATE_SESSION_DETECTED');
 
-    // Device 2 attempts to confirm COD
     const resCod = await request(`/api/v1/checkout/${sessionId}/confirm-cod`, {
       method: 'POST',
       headers: { 'x-device-id': 'dev_unauthorized_999' }
@@ -224,7 +214,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     const newDevId = regNew.body.deviceId;
     const newDevToken = regNew.body.deviceToken;
 
-    // Call POST /api/v1/checkout/:id/end-and-restart-payment with registered new device
     const restartRes = await request(`/api/v1/checkout/${oldSessionId}/end-and-restart-payment`, {
       method: 'POST',
       headers: {
@@ -241,17 +230,14 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     assert.notEqual(restartRes.body.newSessionId, oldSessionId);
     assert.ok(restartRes.body.checkoutUrl.includes(restartRes.body.newSessionId));
 
-    // Verify old session in DB is terminated
     const oldSessionDb = testDb.db.prepare('SELECT status FROM payment_sessions WHERE id = ?').get(oldSessionId);
     assert.equal(oldSessionDb.status, 'CANCELLED');
 
-    // Verify new session in DB is bound to newDevId
     const newSessionDb = testDb.db.prepare('SELECT id, status, device_id, amount_paise, order_id FROM payment_sessions WHERE id = ?').get(restartRes.body.newSessionId);
     assert.ok(newSessionDb);
     assert.equal(newSessionDb.device_id, newDevId);
     assert.equal(newSessionDb.amount_paise, 49900);
 
-    // Verify new device can seamlessly load new session state
     const newStateRes = await request(`/api/v1/checkout/${restartRes.body.newSessionId}/state`, {
       headers: {
         'x-device-id': newDevId,
@@ -263,7 +249,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
   });
 
   test('7. If a customer binds to a session, another session for the same customer triggers active session conflict', async () => {
-    // Create customer & session token
     const cust = customerRepo.create({
       merchantId,
       name: 'Concurrent User',
@@ -272,7 +257,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     });
     const custSess = customerSessionRepo.create({ customerId: cust.id });
 
-    // Create session 1
     const s1Res = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -285,14 +269,12 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     });
     const s1Id = s1Res.body.paymentId;
 
-    // Bind customer to session 1
     const bind1Res = await request(`/api/v1/checkout/${s1Id}/bind-customer`, {
       method: 'POST',
       body: { customerId: cust.id, token: custSess.token }
     });
     assert.equal(bind1Res.status, 200);
 
-    // Create session 2 for same customer
     const s2Res = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -305,7 +287,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     });
     const s2Id = s2Res.body.paymentId;
 
-    // Bind customer to session 2 -> conflict detected!
     const bind2Res = await request(`/api/v1/checkout/${s2Id}/bind-customer`, {
       method: 'POST',
       body: { customerId: cust.id, token: custSess.token }
@@ -317,11 +298,9 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
   });
 
   test('8. Prompt 64 Regression: Device A creates ACTIVE Session A, Device B attempts access, Device B chooses "End Session & Start New Payment" -> Session A becomes terminal, slot is released, and Device B\'s new Session B becomes ACTIVE immediately (not queued behind Session A)', async () => {
-    // Reset any lingering sessions and clear receiving account slot from prior tests
     testDb.execute("UPDATE payment_sessions SET status = 'CANCELLED' WHERE status IN ('ACTIVE', 'PROCESSING', 'QUEUED')");
     testDb.execute("UPDATE payment_receiving_accounts SET is_slot_busy = 0, current_active_session_id = NULL");
 
-    // 1. Register devices
     const regLaptop = await request('/api/v1/devices/register', {
       method: 'POST',
       body: { publicKey: 'key_laptop_p64', signals: { userAgent: 'Laptop Chrome' } }
@@ -335,7 +314,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     const devMobileId = regMobile.body.deviceId;
     const devMobileToken = regMobile.body.deviceToken;
 
-    // 2. Create customer & session token
     const custP64 = customerRepo.create({
       merchantId,
       name: 'Mohit Laptop User',
@@ -344,7 +322,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     });
     const custP64Sess = customerSessionRepo.create({ customerId: custP64.id });
 
-    // 3. Create Session A with autoActivate: true
     const createRes = await request('/api/v1/payments', {
       method: 'POST',
       headers: {
@@ -365,7 +342,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     const sessionAId = createRes.body.paymentId;
     assert.ok(sessionAId);
 
-    // Bind Session A to Laptop device
     const bindResA = await request(`/api/v1/checkout/${sessionAId}/bind-customer`, {
       method: 'POST',
       headers: {
@@ -376,7 +352,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     });
     assert.equal(bindResA.status, 200);
 
-    // Verify Session A is ACTIVE in database and slot is occupied
     const sessionADbBefore = testDb.db.prepare('SELECT id, status, queue_position, device_id, receiving_account_id FROM payment_sessions WHERE id = ?').get(sessionAId);
     assert.equal(sessionADbBefore.status, 'ACTIVE');
     assert.equal(sessionADbBefore.queue_position, 0);
@@ -386,7 +361,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     assert.equal(receivingAccBefore.is_slot_busy, 1);
     assert.equal(receivingAccBefore.current_active_session_id, sessionAId);
 
-    // 4. Device B attempts to access Session A -> triggers DUPLICATE_SESSION_DETECTED (HTTP 409)
     const accessResB = await request(`/api/v1/checkout/${sessionAId}/state`, {
       headers: {
         'x-device-id': devMobileId,
@@ -398,7 +372,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     assert.equal(accessResB.body.action, 'END_SESSION_AND_CREATE_NEW');
     assert.equal(accessResB.body.boundDeviceId, devLaptopId);
 
-    // 5. Device B chooses "End Session & Start New Payment"
     const restartRes = await request(`/api/v1/checkout/${sessionAId}/end-and-restart-payment`, {
       method: 'POST',
       headers: {
@@ -418,28 +391,22 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     assert.ok(restartRes.body.newSessionId);
     assert.notEqual(restartRes.body.newSessionId, sessionAId);
 
-    // CRITICAL: Session B must become ACTIVE immediately, NOT QUEUED behind Session A!
     assert.equal(restartRes.body.status, 'ACTIVE', 'New session on Device B must become ACTIVE immediately');
     assert.equal(restartRes.body.queuePosition, 0, 'New session must have queuePosition 0, not queued');
 
-    // 6. Verify database invariants
-    // Old Session A must be CANCELLED / terminal
     const sessionADbAfter = testDb.db.prepare('SELECT status, completed_at FROM payment_sessions WHERE id = ?').get(sessionAId);
     assert.equal(sessionADbAfter.status, 'CANCELLED');
     assert.ok(sessionADbAfter.completed_at);
 
-    // Receiving account active slot must be occupied by new Session B
     const receivingAccAfter = testDb.db.prepare('SELECT is_slot_busy, current_active_session_id FROM payment_receiving_accounts WHERE id = ?').get(sessionADbBefore.receiving_account_id);
     assert.equal(receivingAccAfter.is_slot_busy, 1);
     assert.equal(receivingAccAfter.current_active_session_id, restartRes.body.newSessionId);
 
-    // New Session B in DB must be ACTIVE and bound to devMobileId
     const sessionBDb = testDb.db.prepare('SELECT id, status, queue_position, device_id FROM payment_sessions WHERE id = ?').get(restartRes.body.newSessionId);
     assert.equal(sessionBDb.status, 'ACTIVE');
     assert.equal(sessionBDb.queue_position, 0);
     assert.equal(sessionBDb.device_id, devMobileId);
 
-    // 7. Device B loads state for new session seamlessly
     const stateB = await request(`/api/v1/checkout/${restartRes.body.newSessionId}/state`, {
       headers: {
         'x-device-id': devMobileId,
@@ -453,7 +420,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
   });
 
   test('9. Prompt 64 Queue Invariant: When Session A is terminated, existing queued Customer C is promoted to ACTIVE, and new Session B is queued at position 1', async () => {
-    // Reset any lingering sessions and clear receiving account slot from prior tests
     testDb.execute("UPDATE payment_sessions SET status = 'CANCELLED' WHERE status IN ('ACTIVE', 'PROCESSING', 'QUEUED')");
     testDb.execute("UPDATE payment_receiving_accounts SET is_slot_busy = 0, current_active_session_id = NULL");
 
@@ -477,7 +443,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     const devCId = regC.body.deviceId;
     const devCToken = regC.body.deviceToken;
 
-    // 1. Create active Session A on devLId
     const sARes = await request('/api/v1/payments', {
       method: 'POST',
       headers: {
@@ -495,11 +460,9 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     });
     const sAId = sARes.body.paymentId;
 
-    // Verify Session A is active
     const sADb = testDb.db.prepare('SELECT status, receiving_account_id FROM payment_sessions WHERE id = ?').get(sAId);
     assert.equal(sADb.status, 'ACTIVE');
 
-    // 2. Customer C arrives concurrently and gets queued
     const sCRes = await request('/api/v1/payments', {
       method: 'POST',
       headers: {
@@ -520,7 +483,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     assert.equal(sCDb.status, 'QUEUED');
     assert.equal(sCDb.queue_position, 1);
 
-    // 3. User A moves from Laptop (devLId) to Mobile (devMId) and ends Session A
     const restartRes = await request(`/api/v1/checkout/${sAId}/end-and-restart-payment`, {
       method: 'POST',
       headers: {
@@ -537,11 +499,9 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     assert.equal(restartRes.status, 201);
     assert.equal(restartRes.body.success, true);
 
-    // Old Session A must be CANCELLED
     const sADbAfter = testDb.db.prepare('SELECT status FROM payment_sessions WHERE id = ?').get(sAId);
     assert.equal(sADbAfter.status, 'CANCELLED');
 
-    // Customer C must be promoted to ACTIVE with slot
     const sCDbAfter = testDb.db.prepare('SELECT status, queue_position FROM payment_sessions WHERE id = ?').get(sCId);
     assert.equal(sCDbAfter.status, 'ACTIVE');
     assert.equal(sCDbAfter.queue_position, 0);
@@ -550,7 +510,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     assert.equal(receivingAcc.is_slot_busy, 1);
     assert.equal(receivingAcc.current_active_session_id, sCId);
 
-    // New Session B on devMId must be legitimately queued behind Customer C
     assert.equal(restartRes.body.status, 'QUEUED');
     assert.equal(restartRes.body.queuePosition, 1);
 
@@ -561,7 +520,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
   });
 
   test('10. When duplicate payment session is detected and user starts new payment, admin queue receives info about ongoing session', async () => {
-    // Reset sessions and clear slot
     testDb.execute("UPDATE payment_sessions SET status = 'CANCELLED' WHERE status IN ('ACTIVE', 'PROCESSING', 'QUEUED')");
     testDb.execute("UPDATE payment_receiving_accounts SET is_slot_busy = 0, current_active_session_id = NULL");
 
@@ -578,7 +536,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     const devB = regB.body.deviceId;
     const devBToken = regB.body.deviceToken;
 
-    // 1. Create session from scratch
     const createRes = await request('/api/v1/payments', {
       method: 'POST',
       headers: {
@@ -594,14 +551,12 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     assert.equal(createRes.status, 201);
     const session1Id = createRes.body.paymentId;
 
-    // Verify admin queue sees session 1
     const qRes1 = await request('/api/v1/admin/queue');
     assert.equal(qRes1.status, 200);
     assert.ok(qRes1.body.currentSlot);
     assert.equal(qRes1.body.currentSlot.id, session1Id);
     assert.equal(qRes1.body.currentSlot.orderId, 'ORDER_ADMIN_SYNC_001');
 
-    // 2. Duplicate session detected on Device B
     const conflictRes = await request(`/api/v1/checkout/${session1Id}/state`, {
       headers: {
         'x-device-id': devB,
@@ -611,7 +566,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     assert.equal(conflictRes.status, 409);
     assert.equal(conflictRes.body.error, 'DUPLICATE_SESSION_DETECTED');
 
-    // 3. Device B clicks "End Session & Start New Payment"
     const restartRes = await request(`/api/v1/checkout/${session1Id}/end-and-restart-payment`, {
       method: 'POST',
       headers: {
@@ -629,7 +583,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     assert.equal(restartRes.body.status, 'ACTIVE');
     const newSessionId = restartRes.body.newSessionId;
 
-    // 4. CRITICAL: Verify admin queue immediately reflects the new ongoing active session!
     const qRes2 = await request('/api/v1/admin/queue');
     assert.equal(qRes2.status, 200);
     assert.ok(qRes2.body.currentSlot, 'Admin queue currentSlot must not be null');
@@ -647,7 +600,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     const boundId = reg.body.deviceId;
     const boundToken = reg.body.deviceToken;
 
-    // 1. Unregistered deviceId in POST /api/v1/payments is rejected (no adhoc_ auto-creation)
     const spoofPay = await request('/api/v1/payments', {
       method: 'POST',
       headers: { 'x-device-id': 'dev_unregistered_spoof_123' },
@@ -657,7 +609,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     const adhocRow = testDb.db.prepare('SELECT id FROM devices WHERE id = ?').get('dev_unregistered_spoof_123');
     assert.equal(adhocRow, undefined, 'Must not auto-create adhoc_ device row');
 
-    // 2. Registered deviceId without deviceToken in POST /api/v1/payments is rejected
     const missingTokenPay = await request('/api/v1/payments', {
       method: 'POST',
       headers: { 'x-device-id': boundId },
@@ -665,7 +616,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     });
     assert.equal(missingTokenPay.status, 401);
 
-    // 3. Create valid device-bound session
     const validPay = await request('/api/v1/payments', {
       method: 'POST',
       headers: { 'x-device-id': boundId, 'x-device-token': boundToken },
@@ -674,26 +624,22 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     assert.equal(validPay.status, 201);
     const sid = validPay.body.paymentId;
 
-    // 4. Omitting X-Device-Id on a device-bound session is rejected with 409 DUPLICATE_SESSION_DETECTED
     const omitIdState = await request(`/api/v1/checkout/${sid}/state`);
     assert.equal(omitIdState.status, 409);
     assert.equal(omitIdState.body.error, 'DUPLICATE_SESSION_DETECTED');
 
-    // 5. Sending X-Device-Id without X-Device-Token on a device-bound session is rejected with 409
     const omitTokenState = await request(`/api/v1/checkout/${sid}/state`, {
       headers: { 'x-device-id': boundId }
     });
     assert.equal(omitTokenState.status, 409);
     assert.equal(omitTokenState.body.error, 'DUPLICATE_SESSION_DETECTED');
 
-    // 6. Spoofing X-Internal-Render: true without internal token is rejected with 409
     const spoofInternal = await request(`/api/v1/checkout/${sid}/state`, {
       headers: { 'x-internal-render': 'true' }
     });
     assert.equal(spoofInternal.status, 409);
     assert.equal(spoofInternal.body.error, 'DUPLICATE_SESSION_DETECTED');
 
-    // 7. Re-calling POST /api/v1/payments for the same order while omitting deviceId is rejected with 409
     const omitIdReCreate = await request('/api/v1/payments', {
       method: 'POST',
       body: { orderId: 'ORDER_ISSUE8_BOUND_1', amount: 299.00 }
@@ -703,13 +649,11 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
   });
 
   test('12. Issue #8 Security: /devices/register does not leak deviceToken for existing publicKey without signed challenge, and /devices/verify requires valid credentials and nonce+timestamp signatures', async () => {
-    // Generate real ECDSA P-256 keypair
     const { publicKey, privateKey } = crypto.generateKeyPairSync('ec', {
       namedCurve: 'prime256v1'
     });
     const publicKeySpkiBase64 = publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
 
-    // 1. Initial registration succeeds and returns deviceToken
     const reg1 = await request('/api/v1/devices/register', {
       method: 'POST',
       body: { publicKey: publicKeySpkiBase64, signals: { userAgent: 'ECDSA-Agent' } }
@@ -719,7 +663,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     const token1 = reg1.body.deviceToken;
     assert.ok(token1);
 
-    // 2. Re-registering the same publicKey without a signed challenge returns 409 and NO deviceToken
     const regDup = await request('/api/v1/devices/register', {
       method: 'POST',
       body: { publicKey: publicKeySpkiBase64, signals: { userAgent: 'Attacker-Replay' } }
@@ -729,7 +672,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     assert.equal(regDup.body.deviceToken, undefined);
     assert.ok(regDup.body.challenge);
 
-    // 3. Signing the challenge with the ECDSA private key rotates and returns a new deviceToken
     const challengePayload = JSON.stringify({
       deviceId,
       challenge: regDup.body.challenge,
@@ -755,7 +697,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     assert.notEqual(regRotated.body.deviceToken, token1);
     const activeToken = regRotated.body.deviceToken;
 
-    // 4. /devices/verify with no credential returns 401 { valid: false }
     const verifyEmpty = await request('/api/v1/devices/verify', {
       method: 'POST',
       body: { deviceId }
@@ -763,7 +704,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     assert.equal(verifyEmpty.status, 401);
     assert.equal(verifyEmpty.body.valid, false);
 
-    // 5. /devices/verify with old rotated token fails (401) and with new active token succeeds (200)
     const verifyOld = await request('/api/v1/devices/verify', {
       method: 'POST',
       body: { deviceId, deviceToken: token1 }
@@ -778,7 +718,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     assert.equal(verifyNew.status, 200);
     assert.equal(verifyNew.body.valid, true);
 
-    // 6. /devices/verify with signature lacking nonce/timestamp is rejected (401)
     const staticPayload = 'static-message-without-nonce-or-timestamp';
     const staticSig = crypto.sign('SHA256', Buffer.from(staticPayload, 'utf8'), {
       key: privateKey,
@@ -791,7 +730,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     assert.equal(verifyStatic.status, 401);
     assert.equal(verifyStatic.body.valid, false);
 
-    // 7. /devices/verify with fresh nonce + timestamp succeeds once, and replay of same nonce is rejected
     const freshPayload = JSON.stringify({
       deviceId,
       nonce: crypto.randomBytes(12).toString('hex'),
@@ -843,7 +781,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     assert.equal(payRes.status, 201);
     const sid = payRes.body.paymentId;
 
-    // 1. bind-customer with bare customerId (no session token) is rejected with 401
     const bareBind = await request(`/api/v1/checkout/${sid}/bind-customer`, {
       method: 'POST',
       headers: { 'x-device-id': devId, 'x-device-token': devToken },
@@ -851,7 +788,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     });
     assert.equal(bareBind.status, 401);
 
-    // 2. Transition session to PROCESSING via payment-done
     const doneRes = await request(`/api/v1/checkout/${sid}/payment-done`, {
       method: 'POST',
       headers: { 'x-device-id': devId, 'x-device-token': devToken }
@@ -859,7 +795,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     assert.equal(doneRes.status, 200);
     assert.equal(doneRes.body.status, 'PROCESSING');
 
-    // 3. cancel on PROCESSING session is rejected with 409 SESSION_PROCESSING
     const cancelRes = await request(`/api/v1/checkout/${sid}/cancel`, {
       method: 'POST',
       headers: { 'x-device-id': devId, 'x-device-token': devToken }
@@ -867,7 +802,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     assert.equal(cancelRes.status, 409);
     assert.equal(cancelRes.body.error, 'SESSION_PROCESSING');
 
-    // 4. retry-new-payment on PROCESSING session is rejected with 409 SESSION_PROCESSING
     const retryRes = await request(`/api/v1/checkout/${sid}/retry-new-payment`, {
       method: 'POST',
       headers: { 'x-device-id': devId, 'x-device-token': devToken }
@@ -875,7 +809,6 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     assert.equal(retryRes.status, 409);
     assert.equal(retryRes.body.error, 'SESSION_PROCESSING');
 
-    // 5. end-and-restart-payment on PROCESSING session is rejected with 409 SESSION_PROCESSING
     const restartProc = await request(`/api/v1/checkout/${sid}/end-and-restart-payment`, {
       method: 'POST',
       headers: { 'x-device-id': devId, 'x-device-token': devToken },
@@ -884,11 +817,9 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     assert.equal(restartProc.status, 409);
     assert.equal(restartProc.body.error, 'SESSION_PROCESSING');
 
-    // Verify session is still in PROCESSING in DB
     const dbRow = testDb.db.prepare('SELECT status FROM payment_sessions WHERE id = ?').get(sid);
     assert.equal(dbRow.status, 'PROCESSING');
 
-    // 6. end-and-restart-payment with bare customerId in body (no customer token) is rejected with 401
     testDb.execute("UPDATE payment_sessions SET status = 'ACTIVE' WHERE id = ?", [sid]);
     const restartBareCust = await request(`/api/v1/checkout/${sid}/end-and-restart-payment`, {
       method: 'POST',

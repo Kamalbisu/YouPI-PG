@@ -76,7 +76,7 @@ describe('YouPI MCP Server', () => {
   test('rejects signature with mismatched length safely', async () => {
     const result = verifyWebhookSignature({
       rawPayload: '{"test":1}',
-      signature: 'sha256=aabbcc', // 3 bytes vs 32 bytes
+      signature: 'sha256=aabbcc',
       secret: 'test-secret'
     });
 
@@ -88,7 +88,7 @@ describe('YouPI MCP Server', () => {
     const secret = 'test-secret-12345';
     const payload = JSON.stringify({ event: 'SUCCESS' });
     const hmac = crypto.createHmac('sha256', secret).update(payload).digest('hex');
-    const staleTimestamp = Date.now() - 600 * 1000; // 10 minutes ago
+    const staleTimestamp = Date.now() - 600 * 1000;
 
     const result = verifyWebhookSignature({
       rawPayload: payload,

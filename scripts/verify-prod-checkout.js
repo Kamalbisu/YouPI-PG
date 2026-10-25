@@ -19,12 +19,10 @@ async function verifyProductionCheckoutUrl() {
     'BASE_CHECKOUT_URL must be https://checkout.example.com'
   );
 
-  // 2. Start Payment API on test port 6198 with in-memory DB
   const testDb = new Database({ inMemory: true });
   const paymentApi = await startPaymentApi(6198, testDb);
   console.log('[✓] Payment API started on port', paymentApi.port);
 
-  // 3. Create a payment session directly on Payment API
   const payPayload = JSON.stringify({
     orderId: 'VERIFY-PROD-ORD-001',
     amount: '250.00'
@@ -58,7 +56,6 @@ async function verifyProductionCheckoutUrl() {
   );
   console.log('   [✓] Payment API correctly returned production checkout URL!');
 
-  // 4. Start Demo Coin Wallet Store pointing to the Payment API
   const coinStore = new CoinWalletStoreServer({
     gatewayApiUrl: `http://127.0.0.1:${paymentApi.port}`
   });
@@ -66,7 +63,6 @@ async function verifyProductionCheckoutUrl() {
   await new Promise(resolve => coinServer.listen(5098, resolve));
   console.log('[✓] Demo Coin Store started on port 5098');
 
-  // 5. Customer clicks buy coins on Demo Store (POST /api/checkout)
   const storePayload = JSON.stringify({
     price: '100.00',
     coins: 100,
@@ -105,7 +101,6 @@ async function verifyProductionCheckoutUrl() {
   );
   console.log('   [✓] Demo Coin Store checkoutUrl points to https://checkout.example.com/checkout/<id>!');
 
-  // Cleanup
   await paymentApi.close();
   await new Promise(resolve => coinServer.close(resolve));
   testDb.close();

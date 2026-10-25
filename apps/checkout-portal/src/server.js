@@ -8,7 +8,6 @@ import { getInternalServiceToken } from '@youpi/common';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-/** Security headers applied to every response served by the portal. */
 const BASE_SECURITY_HEADERS = Object.freeze({
   'X-Content-Type-Options': 'nosniff',
   'X-Frame-Options': 'SAMEORIGIN',
@@ -18,13 +17,6 @@ const BASE_SECURITY_HEADERS = Object.freeze({
 
 const HTML_ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 
-/**
- * Origins allowed to embed the checkout page, from CHECKOUT_FRAME_ANCESTORS
- * (comma or space separated, e.g. "https://shop.example.com"). youpi.js opens the
- * checkout in an iframe on the merchant's own site, which `frame-ancestors 'self'`
- * blocks whenever the store and the portal are on different origins. Anything that
- * is not a plain http(s) origin is ignored, so the CSP cannot be widened by accident.
- */
 export function frameAncestorOrigins(raw = process.env.CHECKOUT_FRAME_ANCESTORS) {
   const origins = [];
   for (const entry of String(raw || '').split(/[\s,]+/)) {
@@ -39,24 +31,10 @@ export function frameAncestorOrigins(raw = process.env.CHECKOUT_FRAME_ANCESTORS)
   return origins;
 }
 
-/**
- * True for production launches. scripts/start.js sets YOUPI_MODE/NODE_ENV to
- * 'production'; the dev script and the test runner leave them on development/test.
- */
 export function isProductionLike(env = process.env) {
   return env.YOUPI_MODE === 'production' || env.NODE_ENV === 'production';
 }
 
-/**
- * Headers for the embeddable checkout page.
- *
- * The checkout page is embedded cross-origin by merchant storefronts. An explicit
- * CHECKOUT_FRAME_ANCESTORS always wins. Without one, production defaults to
- * frame-ancestors 'self' so unknown sites cannot frame the page, while development
- * stays permissive because the demo storefront (port 5000) embeds the portal
- * (port 7000) across origins. X-Frame-Options is dropped when an allowlist is in
- * effect because it cannot express a list and would block the allowlisted storefronts.
- */
 export function checkoutFrameHeaders(env = process.env) {
   const configured = frameAncestorOrigins(env.CHECKOUT_FRAME_ANCESTORS);
   const frameAncestors = configured.length
@@ -69,21 +47,11 @@ export function checkoutFrameHeaders(env = process.env) {
   };
 }
 
-/**
- * Escapes a value for interpolation into HTML text or attribute context.
- * Order ids, merchant names and branding fields are attacker-influenced, so they must
- * never be injected raw into the checkout template.
- */
 export function escapeHtml(value) {
   if (value === null || value === undefined) return '';
   return String(value).replace(/[&<>"']/g, (ch) => HTML_ESCAPES[ch]);
 }
 
-/**
- * Escapes a value for interpolation into a JavaScript string literal.
- * HTML escaping is useless inside <script>: the parser never decodes entities
- * there, so `</script>` and a bare quote would break out of the literal.
- */
 export function escapeJsString(value) {
   if (value === null || value === undefined) return '';
   return String(value)
@@ -99,11 +67,6 @@ export function escapeJsString(value) {
     .replace(/&/g, '\\u0026');
 }
 
-/**
- * Serialises a value as JSON that is safe to embed in a <script> block.
- * Only `<` matters for tag termination, but U+2028/U+2029 are literal line
- * terminators in older JS parsers, so they are escaped too.
- */
 export function serializeForScript(value) {
   return JSON.stringify(value === undefined ? null : value)
     .replace(/</g, '\\u003c')
@@ -113,16 +76,8 @@ export function serializeForScript(value) {
     .replace(/\u2029/g, '\\u2029');
 }
 
-// Placeholders that land inside a <script> block rather than HTML markup.
 const SCRIPT_PLACEHOLDERS = new Set(['PAYMENT_ID', 'API_BASE_URL', 'AMOUNT']);
 
-/**
- * Replaces {{PLACEHOLDER}} tokens in the checkout template.
- *
- * The replacement is done with a replacer function so that `$&`, `$'` and `` $` ``
- * inside an attacker-controlled value are inserted literally instead of being
- * expanded as replacement patterns.
- */
 export function renderTemplate(template, values) {
   return template.replace(/\{\{([A-Z0-9_]+)\}\}/g, (match, key) => {
     if (!Object.prototype.hasOwnProperty.call(values, key)) return match;
@@ -131,15 +86,10 @@ export function renderTemplate(template, values) {
   });
 }
 
-/**
- * Strips hop-by-hop and spoofable internal headers before proxying to the payment core.
- * Returns a shallow copy so the caller's request object is never mutated.
- */
 function sanitizedForwardHeaders(req, targetHost) {
   const headers = { ...req.headers, host: targetHost };
   for (const name of Object.keys(headers)) {
     const lower = name.toLowerCase();
-    // Never let a browser claim to be an internal renderer or replay a credential we issue.
     if (lower === 'x-internal-render' || lower === 'x-internal-token') {
       delete headers[name];
     }
@@ -147,7 +97,6 @@ function sanitizedForwardHeaders(req, targetHost) {
   return headers;
 }
 
-// In production, reliably ensure environment variables from .env are loaded if not already provided
 if (!process.env.BASE_PAYMENT_API_URL && typeof process.loadEnvFile === 'function') {
   try {
     const rootEnv = path.resolve(__dirname, '../../../.env');
@@ -158,12 +107,6 @@ if (!process.env.BASE_PAYMENT_API_URL && typeof process.loadEnvFile === 'functio
 }
 
 export class CheckoutServer {
-  /**
-   * @param {{
-   *   apiBaseUrl?: string,
-   *   helpPortalUrl?: string
-   * }} options
-   */
   constructor(options = {}) {
     try {
       const rootEnv = path.resolve(__dirname, '../../../.env');
@@ -229,8 +172,6 @@ export class CheckoutServer {
     const counterInstructions = state?.branding?.counterInstructions || 'Please visit the billing counter and present this screen to the cashier.';
     const vpa = state?.payeeVpa || state?.vpa || 'merchant@upi';
 
-    // In production and localhost, use relative '' so browser requests hit the checkout portal /api proxy
-    // This avoids cross-origin blocking, CORS errors, and tunnel DNS resolution issues.
     const clientApiBase = '';
 
     const indicator = state?.upiServerIndicator || { status: 'ISSUES', tier: 'RED', label: 'Server Facing Issues' };
@@ -293,21 +234,18 @@ export class CheckoutServer {
       const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
       const pathname = url.pathname;
 
-      // Health
       if (pathname === '/health') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'UP', service: 'checkout-portal' }));
         return;
       }
 
-      // Keep-alive ping for cron / uptime monitors
       if (pathname === '/ping') {
         res.writeHead(200, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' });
         res.end('ok');
         return;
       }
 
-      // Transparent API Proxy: /api/* -> Payment Core REST API
       if (pathname.startsWith('/api/')) {
         const targetPort = Number(process.env.PAYMENT_API_PORT || 6100);
         const proxyReq = http.request({
@@ -336,7 +274,6 @@ export class CheckoutServer {
         return;
       }
 
-      // Official SDK script: GET /youpi.js or /sdk/youpi-checkout.js
       if (pathname === '/youpi.js' || pathname === '/sdk/youpi.js' || pathname === '/sdk/youpi-checkout.js') {
         try {
           const resolvedSdkPath = fs.existsSync(path.join(__dirname, 'sdk', 'youpi.js'))
@@ -358,7 +295,6 @@ export class CheckoutServer {
         return;
       }
 
-      // Static icons: GET /icons/:filename with path traversal protection
       if (pathname.startsWith('/icons/')) {
         const iconName = path.basename(pathname);
         const iconDir = path.resolve(__dirname, '..', 'public', 'icons');
@@ -378,7 +314,6 @@ export class CheckoutServer {
         }
       }
 
-      // Static CSS & JS Asset Handler with Secure Path Traversal Prevention
       if (pathname.startsWith('/css/') || pathname.startsWith('/js/')) {
         const assetFolder = pathname.startsWith('/css/') ? 'css' : 'js';
         const assetName = path.basename(pathname);
@@ -400,7 +335,6 @@ export class CheckoutServer {
         }
       }
 
-      // QR SVG: GET /checkout/:id/qr.svg (Direct from merchant receiving account)
       const qrMatch = pathname.match(/^\/checkout\/([^/]+)\/qr\.svg$/);
       if (qrMatch) {
         const paymentId = qrMatch[1];
@@ -420,7 +354,6 @@ export class CheckoutServer {
         return;
       }
 
-      // Checkout Page: GET /checkout/:id
       const checkoutMatch = pathname.match(/^\/checkout\/([^/]+)$/);
       if (checkoutMatch) {
         const paymentId = checkoutMatch[1];
@@ -439,7 +372,6 @@ export class CheckoutServer {
         return;
       }
 
-      // Not found
       res.writeHead(404, { 'Content-Type': 'text/plain' });
       res.end('Checkout Page Not Found');
     });

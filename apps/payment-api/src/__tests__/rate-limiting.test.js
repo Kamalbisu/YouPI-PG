@@ -121,7 +121,6 @@ describe('route rate limits', () => {
   test('send-otp is capped per mobile number even when the cooldown is off', async () => {
     const statuses = [];
     for (let i = 0; i < 4; i++) {
-      // OTP_RESEND_COOLDOWN_MS=0 disables the short cooldown so only the hourly cap applies.
       const prev = process.env.OTP_RESEND_COOLDOWN_MS;
       process.env.OTP_RESEND_COOLDOWN_MS = '0';
       const r = await post('/api/v1/customer/send-otp', { mobileNumber: '9123456780', name: 'Rate Test', email: 'rate@example.com', isNewUser: true });
@@ -157,12 +156,12 @@ describe('OTP resend does not refill the guess budget', () => {
       for (let i = 0; i < 3; i++) assert.equal(repo.verifyOtp('9000000001', '000000'), null);
       assert.equal(repo.findByMobile('9000000001').otpAttempts, 3);
 
-      repo.setOtp('9000000001', '222222', future); // resend while still live
+      repo.setOtp('9000000001', '222222', future);
       assert.equal(repo.findByMobile('9000000001').otpAttempts, 3);
 
       const past = new Date(Date.now() - 1000).toISOString();
       db.execute('UPDATE customers SET otp_expires_at = ? WHERE mobile_number = ?', [past, '9000000001']);
-      repo.setOtp('9000000001', '333333', future); // previous code expired: fresh budget
+      repo.setOtp('9000000001', '333333', future);
       assert.equal(repo.findByMobile('9000000001').otpAttempts, 0);
     } finally {
       db.close();

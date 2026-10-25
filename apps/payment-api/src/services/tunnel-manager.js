@@ -2,15 +2,11 @@ import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { buildCloudflaredInvocation } from '@youpi/common';
 
-/**
- * Cloudflare Tunnel Process Manager
- * Manages running user-provided cloudflared commands in the background with live log streaming.
- */
 export class TunnelManager extends EventEmitter {
   constructor() {
     super();
     this.process = null;
-    this.status = 'STOPPED'; // 'STOPPED' | 'STARTING' | 'RUNNING' | 'ERROR'
+    this.status = 'STOPPED';
     this.command = null;
     this.logs = [];
     this.maxLogs = 200;
@@ -33,7 +29,7 @@ export class TunnelManager extends EventEmitter {
   getStatus() {
     return {
       status: this.status,
-      command: this.command, // redacted: never contains the token
+      command: this.command,
       pid: this.pid,
       startedAt: this.startedAt,
       isRunning: this.status === 'RUNNING' || this.status === 'STARTING',
@@ -50,7 +46,6 @@ export class TunnelManager extends EventEmitter {
       this.stop();
     }
 
-    // Only the extracted token is used; the pasted text is never run through a shell.
     const invocation = buildCloudflaredInvocation(rawCommand);
     this.command = invocation.redacted;
     this.status = 'STARTING';
@@ -126,5 +121,4 @@ export class TunnelManager extends EventEmitter {
   }
 }
 
-// Global singleton instance
 export const globalTunnelManager = new TunnelManager();

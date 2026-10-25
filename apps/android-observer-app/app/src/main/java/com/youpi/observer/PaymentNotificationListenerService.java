@@ -16,7 +16,6 @@ public class PaymentNotificationListenerService extends NotificationListenerServ
     private static final String TAG = "YoupiNotifListener";
     private ApiClient apiClient;
 
-    // Generated from packages/common/src/upi-providers.js - Single Source of Truth
     private static final Set<String> ALLOWED_BANKING_PACKAGES = new HashSet<>(Arrays.asList(
         "com.axis.mobile",
         "com.bankofbaroda.mconnect",
@@ -72,7 +71,6 @@ public class PaymentNotificationListenerService extends NotificationListenerServ
     public void onNotificationPosted(StatusBarNotification sbn) {
         if (sbn == null || !apiClient.isPaired()) return;
 
-        // Security Invariant (Issue #24): Strictly discard notifications originating from unverified apps
         final String pkgName = sbn.getPackageName();
         if (pkgName == null || !ALLOWED_BANKING_PACKAGES.contains(pkgName)) {
             return;
@@ -95,7 +93,6 @@ public class PaymentNotificationListenerService extends NotificationListenerServ
         }
 
         String full = (title + " " + text).toLowerCase();
-        // Check if this looks like a credit / payment received notification
         if (!full.contains("received") && !full.contains("credited") && !full.contains("deposit") && !full.contains("paid you")) {
             return;
         }

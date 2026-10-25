@@ -2,13 +2,6 @@ import { PaymentObserverClient } from '@youpi/observer-sdk';
 import { BankSmsParser } from './sms-parser.js';
 
 export class SmsObserverService {
-  /**
-   * @param {{
-   *   apiBaseUrl?: string,
-   *   receivingAccountId?: string,
-   *   pollIntervalMs?: number
-   * }} options
-   */
   constructor(options = {}) {
     this.apiBaseUrl = options.apiBaseUrl || process.env.BASE_PAYMENT_API_URL || 'http://localhost:6100';
     this.receivingAccountId = options.receivingAccountId || '00000000-0000-0000-0000-000000000002';
@@ -37,10 +30,6 @@ export class SmsObserverService {
     return null;
   }
 
-  /**
-   * Processes and ingests an incoming SMS notification.
-   * @param {{ text: string, sender?: string, timestamp?: Date | number | string }} sms
-   */
   async processSms(sms) {
     const parsed = BankSmsParser.parse(sms);
     if (!parsed) return null;
@@ -98,6 +87,5 @@ export class SmsObserverService {
 
   async pollCycle() {
     this.lastPollAt = new Date();
-    // In production, interfaces with Google Messages Web automation session via browser trace / WebSocket
   }
 }

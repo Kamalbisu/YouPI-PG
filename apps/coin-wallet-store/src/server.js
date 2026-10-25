@@ -8,7 +8,6 @@ import { getCoinStoreWebhookSecret } from '@youpi/common';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-/** Security headers applied to every HTML response served by the store. */
 const BASE_SECURITY_HEADERS = Object.freeze({
   'X-Content-Type-Options': 'nosniff',
   'X-Frame-Options': 'SAMEORIGIN',
@@ -16,11 +15,6 @@ const BASE_SECURITY_HEADERS = Object.freeze({
   'Content-Security-Policy': "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; frame-ancestors 'self'; base-uri 'none'; form-action 'self'; object-src 'none'"
 });
 
-/**
- * Escapes a value for interpolation into HTML text or attribute context.
- * Order ids, UTRs and failure reasons arrive from query parameters, so they must never be
- * injected raw into the order-status templates.
- */
 function escapeHtml(value) {
   return String(value ?? '')
     .replaceAll('&', '&amp;')
@@ -30,28 +24,15 @@ function escapeHtml(value) {
     .replaceAll("'", '&#39;');
 }
 
-/** Upper bound for an unauthenticated JSON request body. */
 const MAX_JSON_BODY_BYTES = 64 * 1024;
-/** Largest single top-up the demo store accepts. */
 const MAX_TOPUP_RUPEES = 100000;
-/** Accepted clock skew for an inbound webhook's X-Gateway-Timestamp. */
-// The gateway signs the delivery timestamp into the body and reuses it on every retry, so
-// a retried delivery legitimately arrives with an older timestamp. The window therefore
-// has to cover the gateway's whole retry schedule (backoffs up to 1 hour), otherwise a
-// legitimate retry is rejected as a replay. Replay of the SAME delivery is still caught by
-// the delivery-id dedupe below.
 const WEBHOOK_MAX_SKEW_MS = 2 * 60 * 60 * 1000;
 
-/** Keeps a client-supplied pack name printable and bounded before it is stored as metadata. */
 function sanitizePackName(value) {
   const cleaned = String(value ?? '').replace(/[^\w .&()'-]/g, '').trim().slice(0, 60);
   return cleaned || 'Gamer Pack';
 }
 
-/**
- * Strips headers that would let a browser claim to be an internal renderer before the
- * request is relayed to the payment core.
- */
 function sanitizedForwardHeaders(req, targetHost) {
   const headers = { ...req.headers, host: targetHost };
   for (const name of Object.keys(headers)) {
@@ -63,13 +44,6 @@ function sanitizedForwardHeaders(req, targetHost) {
   return headers;
 }
 
-/**
- * Replaces {{PLACEHOLDER}} tokens with escaped values.
- *
- * The replacement is done with a replacer function so that `$&`, `$'` and `` $` ``
- * inside an attacker-controlled value are inserted literally instead of being
- * expanded as replacement patterns.
- */
 export function renderTemplate(template, values) {
   return template.replace(/\{\{([A-Z0-9_]+)\}\}/g, (match, key) => {
     if (!Object.prototype.hasOwnProperty.call(values, key)) return match;
@@ -77,7 +51,6 @@ export function renderTemplate(template, values) {
   });
 }
 
-// In production, reliably ensure environment variables from .env are loaded if not already provided
 if (!process.env.BASE_PAYMENT_API_URL && typeof process.loadEnvFile === 'function') {
   try {
     const rootEnv = path.resolve(__dirname, '../../../.env');
@@ -88,31 +61,18 @@ if (!process.env.BASE_PAYMENT_API_URL && typeof process.loadEnvFile === 'functio
 }
 
 export class CoinWalletStoreServer {
-  /**
-   * @param {{
-   *   gatewayApiUrl?: string,
-   *   merchantId?: string,
-   *   webhookSecret?: string
-   * }} [options={}]
-   */
   constructor(options = {}) {
     const internalPort = process.env.PAYMENT_API_PORT || 6100;
     this.gatewayApiUrl = options.gatewayApiUrl || process.env.PAYMENT_API_INTERNAL_URL || `http://127.0.0.1:${internalPort}`;
     this.merchantId = options.merchantId || '00000000-0000-0000-0000-000000000001';
     this.webhookSecret = options.webhookSecret || getCoinStoreWebhookSecret();
 
-    // Canonical public origin of this store. Post-payment return URLs are built from this
-    // value rather than from the request's Host / X-Forwarded-* headers, which are
-    // attacker-controllable and would otherwise allow redirecting paying customers elsewhere.
     this.publicBaseUrl = (options.publicBaseUrl || process.env.COIN_STORE_PUBLIC_URL || `http://localhost:${process.env.STORE_PORT || 5000}`)
       .replace(/\/+$/, '');
 
-    // orderId -> gateway paymentId for orders this store created (used to verify payments server-side)
     this.orderPayments = new Map();
-    // orderId -> { orderId, paymentId, amountPaise, coins, packName, createdAt }
     this.orders = new Map();
 
-    // Recently processed X-Gateway-Delivery-Id values, used to reject replayed webhooks.
     this.seenDeliveryIds = new Map();
 
     this.paymentClient = new YoupiPaymentClient({
@@ -121,8 +81,7 @@ export class CoinWalletStoreServer {
       webhookSecret: this.webhookSecret
     });
 
-    // In-memory persistent wallet balance & ledger for demo store
-    this.walletCoins = 50; // default starting balance
+    this.walletCoins = 50;
     this.transactionHistory = [];
 
     this.storeHtml = fs.readFileSync(path.join(__dirname, 'store.html'), 'utf8');
@@ -145,7 +104,6 @@ export class CoinWalletStoreServer {
     });
   }
 
-  /** Records a processed delivery id and prunes entries older than the accepted skew window. */
   rememberDeliveryId(deliveryId) {
     const now = Date.now();
     for (const [id, seenAt] of this.seenDeliveryIds) {
@@ -170,7 +128,6 @@ export class CoinWalletStoreServer {
         return;
       }
 
-      // SERVE LOCAL PUBLIC ASSETS: /assets/*, /css/*, /js/*
       if ((pathname.startsWith('/assets/') || pathname.startsWith('/css/') || pathname.startsWith('/js/')) && (method === 'GET' || method === 'HEAD')) {
         const publicDir = path.resolve(__dirname, '../public');
         const safeRelative = path.normalize(pathname.replace(/^\//, '')).replace(/^(\.\.(\/|\\|$))+/, '');
@@ -196,14 +153,12 @@ export class CoinWalletStoreServer {
         }
       }
 
-      // GET /health
       if (pathname === '/health') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'UP', service: 'coin-wallet-store', coins: this.walletCoins }));
         return;
       }
 
-      // GET /youpi.js or /sdk/youpi-checkout.js (Universal Frontend Integration Script)
       if (pathname === '/youpi.js' || pathname === '/sdk/youpi-checkout.js' || pathname === '/sdk/youpi.js') {
         const sdkPath = path.resolve(__dirname, '../../checkout-portal/src/sdk/youpi.js');
         if (fs.existsSync(sdkPath)) {
@@ -217,7 +172,6 @@ export class CoinWalletStoreServer {
         }
       }
 
-      // GET /openapi.yaml (Public Developer Integration Specification)
       if (pathname === '/openapi.yaml') {
         const openApiPath = path.resolve(__dirname, '../../../openapi.yaml');
         if (fs.existsSync(openApiPath)) {
@@ -230,7 +184,6 @@ export class CoinWalletStoreServer {
         }
       }
 
-      // REVERSE PROXY: /checkout/*, /icons/*, /css/*, and /js/* -> Checkout Portal (Port 7000)
       if (pathname.startsWith('/checkout') || pathname.startsWith('/icons/') || pathname.startsWith('/css/') || pathname.startsWith('/js/')) {
         const portalPort = Number(process.env.CHECKOUT_PORT || 7000);
         const proxyReq = http.request({
@@ -259,7 +212,6 @@ export class CoinWalletStoreServer {
         return;
       }
 
-      // REVERSE PROXY: /api/v1/* -> Payment API (Port 6100 / gatewayApiUrl)
       if (pathname.startsWith('/api/v1/')) {
         try {
           const parsedGateway = new URL(this.gatewayApiUrl);
@@ -294,7 +246,6 @@ export class CoinWalletStoreServer {
         }
       }
 
-      // GET / or /store
       if ((pathname === '/' || pathname === '/store') && (method === 'GET' || method === 'HEAD')) {
         try { this.storeHtml = fs.readFileSync(path.join(__dirname, 'store.html'), 'utf8'); } catch {}
         res.writeHead(200, {
@@ -309,7 +260,6 @@ export class CoinWalletStoreServer {
         return;
       }
 
-      // GET /wallet
       if (pathname === '/wallet' && (method === 'GET' || method === 'HEAD')) {
         try { this.walletHtml = fs.readFileSync(path.join(__dirname, 'wallet.html'), 'utf8'); } catch {}
         res.writeHead(200, {
@@ -324,7 +274,6 @@ export class CoinWalletStoreServer {
         return;
       }
 
-      // GET /order-success or /success
       if ((pathname === '/order-success' || pathname === '/success') && (method === 'GET' || method === 'HEAD')) {
         try { this.orderSuccessHtml = fs.readFileSync(path.join(__dirname, 'order-success.html'), 'utf8'); } catch {}
         const orderId = url.searchParams.get('order_id') || url.searchParams.get('orderId') || 'ORDER-DEMO';
@@ -351,7 +300,6 @@ export class CoinWalletStoreServer {
         return;
       }
 
-      // GET /order-failed or /failed
       if ((pathname === '/order-failed' || pathname === '/failed') && (method === 'GET' || method === 'HEAD')) {
         try { this.orderFailedHtml = fs.readFileSync(path.join(__dirname, 'order-failed.html'), 'utf8'); } catch {}
         const orderId = url.searchParams.get('order_id') || url.searchParams.get('orderId') || 'ORDER-DEMO';
@@ -360,7 +308,6 @@ export class CoinWalletStoreServer {
           ORDER_ID: orderId,
           REASON: reason
         });
-        // Legacy template still carries a literal `ORDER-#` placeholder.
         rendered = rendered.replace(/ORDER-#/g, () => escapeHtml(orderId));
 
         res.writeHead(200, {
@@ -373,7 +320,6 @@ export class CoinWalletStoreServer {
         return;
       }
 
-      // GET /order-suspicious or /suspicious
       if ((pathname === '/order-suspicious' || pathname === '/suspicious') && (method === 'GET' || method === 'HEAD')) {
         try { this.orderSuspiciousHtml = fs.readFileSync(path.join(__dirname, 'order-suspicious.html'), 'utf8'); } catch {}
         const orderId = url.searchParams.get('order_id') || url.searchParams.get('orderId') || 'ORDER-DEMO';
@@ -389,7 +335,6 @@ export class CoinWalletStoreServer {
         return;
       }
 
-      // GET /order-expired or /expired
       if ((pathname === '/order-expired' || pathname === '/expired') && (method === 'GET' || method === 'HEAD')) {
         try { this.orderExpiredHtml = fs.readFileSync(path.join(__dirname, 'order-expired.html'), 'utf8'); } catch {}
         const orderId = url.searchParams.get('order_id') || url.searchParams.get('orderId') || 'ORDER-DEMO';
@@ -405,7 +350,6 @@ export class CoinWalletStoreServer {
         return;
       }
 
-      // GET /order-cancelled or /cancelled
       if ((pathname === '/order-cancelled' || pathname === '/cancelled') && (method === 'GET' || method === 'HEAD')) {
         try { this.orderCancelledHtml = fs.readFileSync(path.join(__dirname, 'order-cancelled.html'), 'utf8'); } catch {}
         const orderId = url.searchParams.get('order_id') || url.searchParams.get('orderId') || 'ORDER-DEMO';
@@ -421,7 +365,6 @@ export class CoinWalletStoreServer {
         return;
       }
 
-      // GET /api/wallet-balance
       if (pathname === '/api/wallet-balance' && method === 'GET') {
         res.writeHead(200, {
           'Content-Type': 'application/json',
@@ -434,7 +377,6 @@ export class CoinWalletStoreServer {
         return;
       }
 
-      // POST /api/checkout (Customer clicks purchase pack)
       if (pathname === '/api/checkout' && method === 'POST') {
         let body = '';
         let bodyTooLarge = false;
@@ -465,18 +407,12 @@ export class CoinWalletStoreServer {
             const orderId = `COIN-ORD-${Date.now()}`;
             const amountStr = price.toFixed(2);
 
-            // The post-payment return target must be derived from the store's own configured
-            // base URL. Building it from Host / X-Forwarded-* lets an attacker choose where a
-            // paying customer is redirected (phishing after a real payment).
             const returnUrl = `${this.publicBaseUrl}/wallet?orderId=${encodeURIComponent(orderId)}`;
 
-            // Coin quantity is derived server-side from the amount paid. A client-supplied
-            // `coins` value would let a buyer pay ₹1 and be credited an arbitrary balance.
             const coins = Math.round(price);
             const amountPaise = Math.round(price * 100);
             const packName = sanitizePackName(data.packName || data.productName);
 
-            // Call YOUPI Payment Gateway via SDK
             const payment = await this.paymentClient.createPayment({
               orderId,
               amount: amountStr,
@@ -498,7 +434,6 @@ export class CoinWalletStoreServer {
               createdAt: Date.now()
             });
 
-            // Normalize checkoutUrl for localhost development / testing to prevent tunnel offline issues
             let resolvedCheckoutUrl = payment.checkoutUrl;
             if (this.publicBaseUrl.includes('localhost') || this.publicBaseUrl.includes('127.0.0.1')) {
               resolvedCheckoutUrl = `${this.publicBaseUrl}/checkout/${payment.paymentId}`;
@@ -521,7 +456,6 @@ export class CoinWalletStoreServer {
         return;
       }
 
-      // POST /api/verify-payment (Instant confirmation & credit from popup drawer handler)
       if (pathname === '/api/verify-payment' && method === 'POST') {
         let body = '';
         let bodyTooLarge = false;
@@ -544,7 +478,6 @@ export class CoinWalletStoreServer {
               res.end(JSON.stringify(payload));
             };
 
-            // The payment id comes from the order this server created, never from the browser.
             const localOrder = clientOrderId ? this.orders.get(clientOrderId) : undefined;
             const paymentId = localOrder?.paymentId || (clientOrderId ? this.orderPayments.get(clientOrderId) : undefined);
             if (!paymentId) {
@@ -552,8 +485,6 @@ export class CoinWalletStoreServer {
               return;
             }
 
-            // Never trust the browser: ask the gateway whether this payment really succeeded,
-            // and take the order id and coin amount from the local order record, not from the request.
             let session;
             try {
               session = await this.paymentClient.getPayment(paymentId);
@@ -582,8 +513,6 @@ export class CoinWalletStoreServer {
               return;
             }
 
-            // Always derive credited coins from the authoritative local order record (or paid amountPaise),
-            // never from untrusted client parameters or out-of-band metadata.
             const paidPaise = Number(localOrder?.amountPaise ?? session.amountPaise);
             const derivedFromAmount = Number.isFinite(paidPaise) && paidPaise > 0
               ? Math.min(Math.max(1, Math.round(paidPaise / 100)), MAX_TOPUP_RUPEES)
@@ -612,7 +541,6 @@ export class CoinWalletStoreServer {
         return;
       }
 
-      // POST /api/webhook or /webhook (Signed webhook listener from YOUPI PG)
       if ((pathname === '/api/webhook' || pathname === '/webhook') && method === 'POST') {
         let rawBody = '';
         let bodyTooLarge = false;
@@ -631,8 +559,6 @@ export class CoinWalletStoreServer {
           const deliveryId = req.headers['x-gateway-delivery-id'] || '';
           const timestamp = req.headers['x-gateway-timestamp'] || '';
 
-          // Reject a replayed delivery. Without this, one captured request can be resent
-          // indefinitely and re-credited after the in-memory dedupe is lost on restart.
           const ts = Number(timestamp);
           if (!Number.isFinite(ts) || Math.abs(Date.now() - ts) > WEBHOOK_MAX_SKEW_MS) {
             res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -646,14 +572,12 @@ export class CoinWalletStoreServer {
           }
 
           try {
-            // Signature is verified over the RAW body, before any JSON parsing.
             const event = this.paymentClient.verifyWebhook(rawBody, signature, timestamp, {
               toleranceMs: WEBHOOK_MAX_SKEW_MS,
               allowUnsignedTimestampHeader: true
             });
 
             const paidMethod = event.method || event.data?.method;
-            // COD / counter 'SUCCESS' means an order was placed, not that money arrived.
             if ((event.event === 'SUCCESS' || event.status === 'SUCCESS') && paidMethod === 'UPI') {
               const orderId = event.orderId || event.data?.orderId;
               const localOrder = orderId ? this.orders.get(orderId) : undefined;

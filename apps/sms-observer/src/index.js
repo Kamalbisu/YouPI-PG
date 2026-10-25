@@ -9,9 +9,6 @@ export function startSmsObserver(port = null, options = {}) {
   const observerServer = new SmsObserverServer({ service, ...options });
   const rawServer = observerServer.createServer();
 
-  // Bind to loopback unless explicitly overridden. These services hold admin/observer
-  // credentials and are reached through a local Cloudflare Tunnel, so exposing every
-  // network interface is unnecessary.
   const bindHost = process.env.YOUPI_BIND_HOST || '127.0.0.1';
 
   return new Promise(resolve => {
@@ -29,7 +26,6 @@ export function startSmsObserver(port = null, options = {}) {
   });
 }
 
-// Auto-run if executed directly as main script
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   startSmsObserver();
 }

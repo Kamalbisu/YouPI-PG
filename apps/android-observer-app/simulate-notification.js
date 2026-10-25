@@ -1,12 +1,6 @@
 import { AndroidObserverDriver } from './driver.js';
 import { resolveSecret } from '@youpi/common';
 
-/**
- * Android Notification Push Simulator CLI.
- * Simulates real status bar notifications being captured on an Android device
- * and dispatched to the self-hosted YOUPI Payment Gateway.
- */
-
 const API_BASE = process.env.BASE_PAYMENT_API_URL || 'http://localhost:6100';
 const ENROLLMENT_SECRET = resolveSecret('android_enrollment_secret', 'ANDROID_ENROLLMENT_SECRET');
 
@@ -21,17 +15,14 @@ async function main() {
     deviceModel: 'Google Pixel 8 Pro'
   });
 
-  // Step 1: Pair simulated device
   console.log('\n[1/3] Enrolling & Pairing Android Device with Gateway...');
   const pairData = await driver.pair(ENROLLMENT_SECRET);
   console.log(`[✓] Device Paired! Assigned ID: ${pairData.deviceId}`);
 
-  // Step 2: Send Heartbeat
   console.log('\n[2/3] Emitting Liveness Heartbeat...');
   const hb = await driver.sendHeartbeat();
   console.log(`[✓] Heartbeat Acknowledged at: ${hb.timestamp}`);
 
-  // Step 3: Simulate Incoming UPI Notification
   console.log('\n[3/3] Simulating Incoming PhonePe UPI Notification...');
   const sampleNotification = {
     amount: '200.00',

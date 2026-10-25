@@ -51,7 +51,6 @@ describe('Phase 15: Counter Payments (Cash & Card at Counter)', () => {
   }
 
   test('Cash at Counter does NOT block the digital UPI queue slot', async () => {
-    // 1. Create a Cash at Counter payment
     const cashRes = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -64,7 +63,6 @@ describe('Phase 15: Counter Payments (Cash & Card at Counter)', () => {
     assert.equal(cashRes.status, 201);
     const cashPaymentId = cashRes.body.paymentId;
 
-    // 2. Concurrently create a digital UPI payment
     const upiRes = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -76,11 +74,9 @@ describe('Phase 15: Counter Payments (Cash & Card at Counter)', () => {
     });
 
     assert.equal(upiRes.status, 201);
-    // The digital UPI payment MUST be able to become ACTIVE because counter payments do not stall the UPI VPA queue!
     assert.equal(upiRes.body.status, PaymentStatus.ACTIVE);
     assert.equal(upiRes.body.queuePosition, 0);
 
-    // 3. Operator manually confirms cash received at desk
     const confirmRes = await request('/api/v1/admin/counter-confirm', {
       method: 'POST',
       body: {
@@ -94,7 +90,6 @@ describe('Phase 15: Counter Payments (Cash & Card at Counter)', () => {
     assert.equal(confirmRes.body.confirmed, true);
     assert.equal(confirmRes.body.status, PaymentStatus.SUCCESS);
 
-    // 4. Verify audit log entry
     const auditLogs = testDb.query(
       'SELECT * FROM audit_logs WHERE entity_id = ? AND action = ?',
       [cashPaymentId, 'COUNTER_MANUAL_PAYMENT_CONFIRMED']
@@ -106,7 +101,6 @@ describe('Phase 15: Counter Payments (Cash & Card at Counter)', () => {
   });
 
   test('Card at Counter manual confirmation flow', async () => {
-    // 1. Create Card at Counter payment
     const cardRes = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -119,7 +113,6 @@ describe('Phase 15: Counter Payments (Cash & Card at Counter)', () => {
     assert.equal(cardRes.status, 201);
     const cardPaymentId = cardRes.body.paymentId;
 
-    // 2. Operator confirms card receipt on physical POS machine
     const confirmRes = await request('/api/v1/admin/counter-confirm', {
       method: 'POST',
       body: {
@@ -138,7 +131,6 @@ describe('Phase 15: Counter Payments (Cash & Card at Counter)', () => {
   });
 
   test('Customer switches from UPI to Cash at Counter via /select-method: unblocks UPI queue and reflects instructions', async () => {
-    // 0. Ensure slot and queue are clean
     testDb.execute(`
       UPDATE payment_sessions
       SET status = 'CANCELLED'
@@ -150,7 +142,6 @@ describe('Phase 15: Counter Payments (Cash & Card at Counter)', () => {
       WHERE id = ?
     `, ['00000000-0000-0000-0000-000000000002']);
 
-    // 1. Set custom counter instructions in merchant settings
     await request('/api/v1/admin/merchant-settings', {
       method: 'POST',
       body: {
@@ -160,7 +151,6 @@ describe('Phase 15: Counter Payments (Cash & Card at Counter)', () => {
       }
     });
 
-    // 2. Customer A creates a digital UPI payment and acquires active slot
     const payA = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -174,7 +164,6 @@ describe('Phase 15: Counter Payments (Cash & Card at Counter)', () => {
     assert.equal(payA.body.status, PaymentStatus.ACTIVE);
     assert.equal(payA.body.queuePosition, 0);
 
-    // 3. Customer B creates a digital UPI payment and is placed in QUEUED
     const payB = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -188,7 +177,6 @@ describe('Phase 15: Counter Payments (Cash & Card at Counter)', () => {
     assert.equal(payB.body.status, PaymentStatus.QUEUED);
     assert.equal(payB.body.queuePosition, 1);
 
-    // 4. Customer A decides to switch to CASH_COUNTER!
     const switchRes = await request(`/api/v1/checkout/${payA.body.paymentId}/select-method`, {
       method: 'POST',
       body: { method: PaymentMethod.CASH_COUNTER }
@@ -198,30 +186,25 @@ describe('Phase 15: Counter Payments (Cash & Card at Counter)', () => {
     assert.equal(switchRes.body.method, PaymentMethod.CASH_COUNTER);
     assert.equal(switchRes.body.counterInstructions, 'Proceed to Cash Counter 4 and show Order ID to Cashier Raman');
 
-    // 5. Invariant: Customer A's session is now CASH_COUNTER
     const checkA = await request(`/api/v1/checkout/${payA.body.paymentId}/state`);
     assert.equal(checkA.body.method, PaymentMethod.CASH_COUNTER);
     assert.equal(checkA.body.status, PaymentStatus.ACTIVE);
     assert.equal(checkA.body.branding.counterInstructions, 'Proceed to Cash Counter 4 and show Order ID to Cashier Raman');
 
-    // 6. Invariant: Customer B MUST now be automatically promoted to ACTIVE because A released the digital UPI slot!
     const checkB = await request(`/api/v1/checkout/${payB.body.paymentId}/state`);
     assert.equal(checkB.body.status, PaymentStatus.ACTIVE);
     assert.equal(checkB.body.queuePosition, 0);
 
-    // 7. Customer A now appears in the live counter payments list on the dashboard!
     const adminPayments = await request('/api/v1/admin/payments');
     const counterReq = adminPayments.body.payments.find(p => p.id === payA.body.paymentId);
     assert.ok(counterReq);
     assert.equal(counterReq.method, PaymentMethod.CASH_COUNTER);
     assert.equal(counterReq.status, 'ACTIVE');
 
-    // Clean up Customer B for subsequent tests
     await request(`/api/v1/checkout/${payB.body.paymentId}/cancel`, { method: 'POST' });
   });
 
   test('Merchant declines counter payment via /counter-decline: updates to FAILED, broadcasts status_change, logs audit', async () => {
-    // 1. Create a Card at Counter payment
     const cardRes = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -233,7 +216,6 @@ describe('Phase 15: Counter Payments (Cash & Card at Counter)', () => {
     assert.equal(cardRes.status, 201);
     const paymentId = cardRes.body.paymentId;
 
-    // 2. Operator declines payment at counter (e.g. card declined or customer walked away)
     const declineRes = await request('/api/v1/admin/counter-decline', {
       method: 'POST',
       body: {
@@ -248,14 +230,12 @@ describe('Phase 15: Counter Payments (Cash & Card at Counter)', () => {
     assert.equal(declineRes.body.status, PaymentStatus.FAILED);
     assert.equal(declineRes.body.reason, 'POS card transaction declined by customer bank');
 
-    // 3. Verify session in DB / state endpoint has transitioned to FAILED
     const checkPayment = await request(`/api/v1/payments/${paymentId}`);
     assert.equal(checkPayment.body.status, PaymentStatus.FAILED);
 
     const checkState = await request(`/api/v1/checkout/${paymentId}/state`);
     assert.equal(checkState.body.status, PaymentStatus.FAILED);
 
-    // 4. Verify audit log entry
     const auditLogs = testDb.query(
       'SELECT * FROM audit_logs WHERE entity_id = ? AND action = ?',
       [paymentId, 'COUNTER_MANUAL_PAYMENT_DECLINED']

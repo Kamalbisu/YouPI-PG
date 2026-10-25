@@ -1,19 +1,8 @@
 import { PaymentStatus } from '@youpi/common';
 
 export class QueueEngine {
-  /**
-   * @param {{
-   *   sessionRepo: import('@youpi/db').PaymentSessionRepository,
-   *   accountRepo: import('@youpi/db').ReceivingAccountRepository,
-   *   eventEmitter?: { emit: (event: string, payload: any) => void },
-   *   auditRepo?: import('@youpi/db').AuditLogRepository,
-   *   activeDurationMs?: number
-   * }} options
-   */
   constructor(options) {
-    // Payment window used whenever a caller does not pass one (PAYMENT_ACTIVE_WINDOW_MS).
     this.activeDurationMs = options.activeDurationMs || 300000;
-    // Verification window for a session that reached PROCESSING (PAYMENT_PROCESSING_WINDOW_MS).
     this.processingDurationMs = options.processingDurationMs || 30000;
     this.sessionRepo = options.sessionRepo;
     this.accountRepo = options.accountRepo;
@@ -21,13 +10,6 @@ export class QueueEngine {
     this.auditRepo = options.auditRepo;
   }
 
-  /**
-   * Attempts to acquire an active slot or places the session into the queue.
-   * @param {string} sessionId
-   * @param {string} receivingAccountId
-   * @param {number} [activeDurationMs] Defaults to the engine's configured payment window
-   * @returns {{ status: string, queuePosition: number, expiresAt: Date | null }}
-   */
   enqueueOrActivate(sessionId, receivingAccountId, activeDurationMs = this.activeDurationMs) {
     const result = this.sessionRepo.acquireSlotAtomic(sessionId, receivingAccountId, activeDurationMs);
 
@@ -68,28 +50,19 @@ export class QueueEngine {
     return result;
   }
 
-  /**
-   * Promotes the next queued session for a receiving account if the slot is free.
-   * @param {string} receivingAccountId
-   * @param {number} [activeDurationMs] Defaults to the engine's configured payment window
-   * @returns {any | null} The newly activated session or null if queue is empty or slot is busy
-   */
   promoteNext(receivingAccountId, activeDurationMs = this.activeDurationMs) {
-    // Check if slot is currently occupied
     const active = this.sessionRepo.findCurrentActiveOrProcessing(receivingAccountId);
     if (active) {
-      return null; // Slot is still owned
+      return null;
     }
 
     const nextQueued = this.sessionRepo.getNextQueuedSession(receivingAccountId);
     if (!nextQueued) {
-      return null; // Queue is empty
+      return null;
     }
 
-    // Atomically activate the queued session
     const res = this.sessionRepo.acquireSlotAtomic(nextQueued.id, receivingAccountId, activeDurationMs);
     if (res.status === PaymentStatus.ACTIVE) {
-      // Re-index remaining queued sessions
       this.sessionRepo.reindexQueue(receivingAccountId);
 
       const activatedSession = this.sessionRepo.findById(nextQueued.id);
@@ -122,12 +95,6 @@ export class QueueEngine {
     return null;
   }
 
-  /**
-   * Calculates estimated wait time in seconds for a queued session.
-   * @param {string} receivingAccountId
-   * @param {number} queuePosition
-   * @returns {number} Estimated seconds until activation
-   */
   calculateEstimatedWaitSeconds(receivingAccountId, queuePosition) {
     if (queuePosition <= 0) return 0;
 
@@ -143,8 +110,6 @@ export class QueueEngine {
       }
     }
 
-    // Average per queued cycle: the configured active window plus the processing window.
-    // Deriving it keeps the estimate correct when PAYMENT_ACTIVE_WINDOW_MS is changed.
     const CYCLE_DURATION_SECONDS = Math.round((this.activeDurationMs + this.processingDurationMs) / 1000);
     const precedingQueuedWait = (queuePosition - 1) * CYCLE_DURATION_SECONDS;
 

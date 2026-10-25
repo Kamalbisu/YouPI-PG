@@ -75,7 +75,6 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
     });
   }
 
-  // Helper to enable Developer Test Mode
   async function enableTestMode() {
     const res = await request('/api/v1/admin/dev/test-mode', {
       method: 'POST',
@@ -86,7 +85,6 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
     return res.body;
   }
 
-  // Helper to disable Developer Test Mode
   async function disableTestMode() {
     const res = await request('/api/v1/admin/dev/test-mode', {
       method: 'POST',
@@ -98,14 +96,12 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
   }
 
   test('34. Security: Unauthorized users and customers cannot call simulator endpoints', async () => {
-    // 1. Missing merchant header -> 401
     const unauthRes = await request('/api/v1/admin/dev/simulator/customers', {
       merchantAuth: false
     });
     assert.equal(unauthRes.status, 401);
     assert.equal(unauthRes.body.success, false);
 
-    // 2. A customer session token is not an admin credential -> 401
     const cust = customerRepo.create({
       merchantId,
       name: 'Regular Customer',
@@ -136,7 +132,6 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
       mobileNumber: '+918796266491'
     });
 
-    // Create an active payment session for Mohit
     const payRes = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -149,7 +144,6 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
     assert.equal(payRes.status, 201);
     const sessionId = payRes.body.paymentId;
 
-    // 1. Search existing customer
     const searchRes = await request(`/api/v1/admin/dev/simulator/customers?q=Mohit`);
     assert.equal(searchRes.status, 200);
     assert.ok(Array.isArray(searchRes.body.customers));
@@ -159,13 +153,11 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
     assert.equal(found.email, 'mohit.dev@example.com');
     assert.ok(found.phone.includes('8796266491'));
 
-    // 2. Retrieve customer's payment sessions
     const sessRes = await request(`/api/v1/admin/dev/simulator/customers/${cust.id}/sessions`);
     assert.equal(sessRes.status, 200);
     assert.ok(Array.isArray(sessRes.body.sessions));
     assert.equal(sessRes.body.customer.name, 'Mohit Developer');
 
-    // 3. Verify active session exists and is marked isProcessable: true
     const activeSess = sessRes.body.sessions.find(s => s.id === sessionId);
     assert.ok(activeSess);
     assert.equal(activeSess.status, 'ACTIVE');
@@ -194,7 +186,6 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
     resetSlot();
     await enableTestMode();
 
-    // Create a session and cancel it
     const payRes = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -205,10 +196,8 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
     });
     const sessId = payRes.body.paymentId;
 
-    // Cancel session
     testDb.execute("UPDATE payment_sessions SET status = 'CANCELLED' WHERE id = ?", [sessId]);
 
-    // Attempt injection
     const res = await request('/api/v1/admin/dev/simulator/inject', {
       method: 'POST',
       body: {
@@ -279,7 +268,7 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
       method: 'POST',
       body: {
         source: 'SMS',
-        sender: '+918888888888', // Ordinary personal phone number not matching customer
+        sender: '+918888888888',
         content: 'A/C XX1234 credited with Rs 499.00 CR. Ref 123456789012'
       }
     });
@@ -298,7 +287,7 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
       method: 'POST',
       body: {
         source: 'GMAIL',
-        sender: 'test@gmail.com', // Not authorized bank domain
+        sender: 'test@gmail.com',
         content: 'INR 499 credited CR 123456789012'
       }
     });
@@ -318,7 +307,7 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
       body: {
         source: 'SMS',
         sender: 'HDFCBK',
-        content: 'A/C credited with 499.00 CR. Ref 123456789012' // Missing Rs/₹/INR
+        content: 'A/C credited with 499.00 CR. Ref 123456789012'
       }
     });
 
@@ -361,7 +350,7 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
       body: {
         source: 'SMS',
         sender: 'HDFCBK',
-        content: 'A/C transfer of Rs 499.00. Ref 123456789012' // Missing credit indicator
+        content: 'A/C transfer of Rs 499.00. Ref 123456789012'
       }
     });
 
@@ -379,7 +368,7 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
       body: {
         source: 'SMS',
         sender: 'HDFCBK',
-        content: 'A/C credited with Rs 499.00 CR. Ref short123' // Missing 12-digit reference
+        content: 'A/C credited with Rs 499.00 CR. Ref short123'
       }
     });
 
@@ -393,7 +382,6 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
     resetSlot();
     await enableTestMode();
 
-    // Create session for ₹500
     const payRes = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -404,7 +392,6 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
     });
     const sessId = payRes.body.paymentId;
 
-    // Inject observation for ₹400
     const res = await request('/api/v1/admin/dev/simulator/inject', {
       method: 'POST',
       body: {
@@ -435,7 +422,6 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
     });
     const sessId = payRes.body.paymentId;
 
-    // Past timestamp (1 hour ago)
     const pastTime = new Date(Date.now() - 3600 * 1000).toISOString();
 
     const res = await request('/api/v1/admin/dev/simulator/inject', {
@@ -469,7 +455,6 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
     });
     const sessId = payRes.body.paymentId;
 
-    // Future timestamp (30 mins in future, past the 5-min timer)
     const futureTime = new Date(Date.now() + 30 * 60 * 1000).toISOString();
 
     const res = await request('/api/v1/admin/dev/simulator/inject', {
@@ -506,7 +491,6 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
     const ref = '990011223344';
     const nowIso = new Date().toISOString();
 
-    // 1st injection -> VERIFIED
     const res1 = await request('/api/v1/admin/dev/simulator/inject', {
       method: 'POST',
       body: {
@@ -520,7 +504,6 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
     assert.equal(res1.status, 200);
     assert.equal(res1.body.status, 'VERIFIED');
 
-    // 2nd identical injection into a new active session -> DUPLICATE_OBSERVATION
     resetSlot();
     const payRes1B = await request('/api/v1/payments', {
       method: 'POST',
@@ -547,7 +530,6 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
     assert.equal(res2.body.failingStage, 4);
     assert.equal(res2.body.reason, 'DUPLICATE_OBSERVATION');
 
-    // 3rd injection on a DIFFERENT session with the SAME reference -> REFERENCE_ALREADY_USED
     resetSlot();
     const payRes2 = await request('/api/v1/payments', {
       method: 'POST',
@@ -589,12 +571,10 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
     });
     const sessId = payRes.body.paymentId;
 
-    // Normal checkout state before injection is ACTIVE
     const stateBefore = await request(`/api/v1/checkout/${sessId}/state`);
     assert.equal(stateBefore.status, 200);
     assert.equal(stateBefore.body.status, 'ACTIVE');
 
-    // Inject valid synthetic SMS
     const res = await request('/api/v1/admin/dev/simulator/inject', {
       method: 'POST',
       body: {
@@ -614,11 +594,9 @@ describe('Feature 65: Developer Payment Simulator Integration & Acceptance Suite
     assert.equal(res.body.stages.stage5.status, 'PASSED');
     assert.equal(res.body.stages.stage6.status, 'ATTRIBUTED');
 
-    // Verify session in database transitioned to SUCCESS
     const sessionDb = testDb.db.prepare('SELECT status FROM payment_sessions WHERE id = ?').get(sessId);
     assert.equal(sessionDb.status, 'SUCCESS');
 
-    // Normal checkout state now reports SUCCESS
     const stateAfter = await request(`/api/v1/checkout/${sessId}/state`);
     assert.equal(stateAfter.status, 200);
     assert.equal(stateAfter.body.status, 'SUCCESS');

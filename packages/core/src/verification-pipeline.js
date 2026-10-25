@@ -7,61 +7,8 @@ import {
 import { extractIntelligentAmount } from './bank-sms-parser.js';
 import { ObservationNormalizer } from './normalizer.js';
 
-/**
- * Universal Institutional Identifier: Every official Indian bank alert domain ends with .bank.in
- * (e.g. alerts@hdfc.bank.in, alerts@sbi.bank.in, example@example.bank.in).
- * No specific banks are hardcoded.
- */
 
-
-/**
- * Complete Payment Verification & Observation Security Pipeline.
- *
- * Core Decision Architecture:
- *
- *                  MESSAGE
- *                     │
- *                     ▼
- *                Parse it
- *                     │
- *           ┌─────────┴─────────┐
- *           │                   │
- *       Doesn't match       Matches parser
- *           │                   │
- *           ▼                   ▼
- *        REJECT           Verification
- *                               │
- *                      ┌────────┴────────┐
- *                      │                 │
- *                   Legitimate       Defined fake
- *                      │              injection
- *                      ▼                 │
- *                   SUCCESS             ▼
- *                                   DO NOT PAY
- *                                       │
- *                                       ▼
- *                                   AUTO BAN
- *
- * Implements 6 Execution Stages:
- * [ Stage 1 ] Load + Normalize + Preserve Raw Evidence
- * [ Stage 2 ] Source / Sender Filtering (reject personal SMS, reject invalid email domain, reject irrelevant sources)
- * [ Stage 3 ] Payment Parser (received_at, exact amount, CR/CREDIT/CREDITED, Rs/₹, 12-digit reference)
- * [ Stage 4 ] Payment Verification (active session?, after session start?, amount matches?, duplicate?, reference already used?)
- * [ Stage 5 ] Security Engine (fraud injection?, banned identity?, device mismatch?, suspicious behavior? auto-banning)
- * [ Stage 6 ] Attribution (SUCCESS / REJECT / SUSPICIOUS / UNRESOLVED)
- */
 export class PaymentVerificationPipeline {
-  /**
-   * @param {{
-   *   db: import('@youpi/db').Database,
-   *   sessionRepo: import('@youpi/db').PaymentSessionRepository,
-   *   obsRepo: import('@youpi/db').ObservationRepository,
-   *   customerRepo?: import('@youpi/db').CustomerRepository,
-   *   attributionEngine: import('./attribution-engine.js').AttributionEngine,
-   *   auditRepo?: import('@youpi/db').AuditLogRepository,
-   *   merchantRepo?: import('@youpi/db').MerchantRepository
-   * }} options
-   */
   constructor(options) {
     this.db = options.db;
     this.sessionRepo = options.sessionRepo;
@@ -74,34 +21,13 @@ export class PaymentVerificationPipeline {
     this.eventEmitter = options.eventEmitter || null;
   }
 
-  /**
-   * Processes a raw incoming observation (real or synthetic test) through the complete 6-stage pipeline.
-   *
-   * @param {{
-   *   source: 'SMS' | 'GMAIL' | 'ANDROID_OBSERVER' | 'SMS_GATEWAY' | string,
-   *   rawText: string,
-   *   sender?: string,
-   *   receivedAt?: Date | string | number,
-   *   receivingAccountId?: string,
-   *   paymentSessionId?: string,
-   *   isTest?: boolean,
-   *   testModeActive?: boolean,
-   *   merchantId?: string
-   * }} input
-   */
   process(input) {
     const isTest = Boolean(input.isTest);
     const isProductionMode = process.env.NODE_ENV === 'production' || process.env.YOUPI_MODE === 'production';
     const testModeActive = Boolean(input.testModeActive);
-    // Bank credit notifications are a few hundred bytes. Capping the text bounds the cost of
-    // the reference-extraction regexes below, which are scanned from every start offset and
-    // would otherwise let one oversized "observation" block the event loop (ReDoS / DoS).
     const MAX_SCAN_CHARS = 8192;
     const rawText = (input.rawText || '').toString().slice(0, MAX_SCAN_CHARS);
 
-    // =========================================================================
-    // [ STAGE 1 ]: Load + Normalize + Preserve Raw Evidence
-    // =========================================================================
     const rawNormalizedSource = (input.source || 'SMS').toUpperCase();
     const isGmailSource = rawNormalizedSource.includes('GMAIL') || rawNormalizedSource.includes('EMAIL');
     const source = isGmailSource ? 'GMAIL' : 'SMS';
@@ -129,7 +55,7 @@ export class PaymentVerificationPipeline {
       sender,
       received_at: receivedAt.toISOString(),
       body: rawText,
-      raw: rawText, // Preserved exact raw text
+      raw: rawText,
       is_simulated: Boolean(input.isSimulated),
       is_test: isTest
     };
@@ -148,7 +74,6 @@ export class PaymentVerificationPipeline {
       }
     };
 
-    // Helper for structured return
     const buildResult = ({
       finalStatus,
       failingStage,
@@ -165,7 +90,7 @@ export class PaymentVerificationPipeline {
     }) => {
       return {
         success: finalStatus === 'VERIFIED',
-        status: finalStatus, // 'VERIFIED' | 'REJECTED' | 'SUSPICIOUS' | 'UNRESOLVED'
+        status: finalStatus,
         source,
         messageId,
         receivedAt: observation.received_at,
@@ -197,7 +122,6 @@ export class PaymentVerificationPipeline {
       };
     };
 
-    // Invariant Guard: Bounded rawText boundary to prevent ReDoS (CWE-400)
     if (input.rawText && typeof input.rawText === 'string' && input.rawText.length > MAX_SCAN_CHARS) {
       return buildResult({
         finalStatus: 'REJECTED',
@@ -207,11 +131,8 @@ export class PaymentVerificationPipeline {
       });
     }
 
-    // 0. Resolve Payment Session and Customer Context early for security attribution
     let session = null;
 
-    // The VPA the credit actually landed on. Every fallback below is scoped by it so an
-    // observation can never be attributed to another merchant's in-flight session.
     const observedVpa = ((rawText.match(/[a-zA-Z0-9._-]{2,64}@[a-zA-Z0-9._-]{2,32}/) || [])[0] || '').toLowerCase() || null;
 
     if (input.paymentSessionId) {
@@ -221,7 +142,6 @@ export class PaymentVerificationPipeline {
     }
 
     if (!session) {
-      // 1. Try finding active or processing session for this specific receiving account
       if (input.receivingAccountId) {
         const row = this.db.queryOne(
           `SELECT * FROM payment_sessions WHERE receiving_account_id = ? AND status IN ('ACTIVE', 'PROCESSING') ORDER BY created_at DESC LIMIT 1`,
@@ -229,9 +149,6 @@ export class PaymentVerificationPipeline {
         );
         if (row) session = this.sessionRepo.mapRow(row);
       }
-      // 2. Otherwise resolve through the VPA named in the message. Scoping by VPA keeps the
-      //    lookup inside a single merchant; the previous gateway-wide "any active receiving
-      //    account" query could settle an unrelated merchant's live session.
       if (!session && observedVpa) {
         const row = this.db.queryOne(`
           SELECT ps.* FROM payment_sessions ps
@@ -241,7 +158,6 @@ export class PaymentVerificationPipeline {
         `, [observedVpa]);
         if (row) session = this.sessionRepo.mapRow(row);
       }
-      // 3. Check for recently completed session on this receiving account for dual verification upgrade
       if (!session && input.receivingAccountId) {
         const sixtySecsAgo = new Date(Date.now() - 60000).toISOString();
         const row = this.db.queryOne(
@@ -261,7 +177,6 @@ export class PaymentVerificationPipeline {
       customer = this.customerRepo.findByIdentifier(sender);
     }
 
-    // Determine attribution to customer's registered identity (Phone, Email, or Submission Token)
     let isAttributableToCustomer = false;
     let matchedCustomerChannel = null;
     if (customer) {
@@ -290,20 +205,15 @@ export class PaymentVerificationPipeline {
       }
     }
 
-    // =========================================================================
-    // [ STAGE 2 ]: Source / Sender Filtering
-    // =========================================================================
     let stage2;
     if (source === 'SMS') {
       const cleanSender = (sender || '').trim();
       const digitsOnly = cleanSender.replace(/[\s+-]/g, '');
 
-      // Pure numeric check: Any string consisting solely of numbers (personal mobile numbers or +91 prefixed values)
       const isPureNumeric = /^\d+$/.test(digitsOnly) && !/[a-zA-Z]/.test(cleanSender);
 
       if (isPureNumeric) {
         if (!isAttributableToCustomer) {
-          // Unknown sender pure numeric SMS: Reject immediately, NO AUTO-BAN
           stage2 = {
             stage: 2,
             name: 'FILTER',
@@ -319,7 +229,6 @@ export class PaymentVerificationPipeline {
             stage2
           });
         }
-        // Attributable to active customer: allow inspection under Defined Fraud Scenario
         stage2 = {
           stage: 2,
           name: 'FILTER',
@@ -327,7 +236,6 @@ export class PaymentVerificationPipeline {
           details: `Sender '${sender}' matches customer registered mobile number. Proceeding to fraud verification.`
         };
       } else {
-        // Any pure alphabetic or alphanumeric string of any length containing letters (e.g. HDFCBK, SBI, VM-HDFCBK, AXIS123, etc.)
         const isValidSenderCode = /[a-zA-Z]/.test(cleanSender) && /^[a-zA-Z0-9_\-\.]+$/.test(cleanSender);
 
         if (!isValidSenderCode) {
@@ -357,7 +265,6 @@ export class PaymentVerificationPipeline {
         emailDomain = cleanEmail.toLowerCase().trim().replace(/[>]/g, '');
       }
 
-      // Universal Bank Identifier: Email domain ends with .bank.in/.fin.in or is an official verified Indian bank domain
       const KNOWN_BANK_DOMAINS = new Set([
         'hdfcbank.net', 'hdfcbank.com',
         'icicibank.com',
@@ -380,14 +287,11 @@ export class PaymentVerificationPipeline {
         emailDomain === 'bank.in' ||
         emailDomain === 'fin.in' ||
         Array.from(KNOWN_BANK_DOMAINS).some(root => emailDomain === root || emailDomain.endsWith('.' + root));
-      // In automated test suite or local dev, allow TEST sender and legacy test fixture domains
-      // These fixture senders are never honoured in production, so they cannot be spoofed there.
       const allowTestSenders = !isProductionMode;
       const isValidDomain = isBankDomain || (allowTestSenders && (sender === 'TEST' || cleanEmail === 'TEST' || sender === 'gmail-browser-automator' || emailDomain.endsWith('.youpi.local')));
 
       if (!isValidDomain) {
         if (!isAttributableToCustomer) {
-          // Unknown sender unauthorized email domain: Reject immediately, NO AUTO-BAN
           stage2 = {
             stage: 2,
             name: 'FILTER',
@@ -403,7 +307,6 @@ export class PaymentVerificationPipeline {
             stage2
           });
         }
-        // Attributable to active customer: allow inspection under Defined Fraud Scenario
         stage2 = {
           stage: 2,
           name: 'FILTER',
@@ -437,12 +340,8 @@ export class PaymentVerificationPipeline {
       };
     }
 
-    // =========================================================================
-    // [ STAGE 3 ]: Payment Parser
-    // =========================================================================
     let stage3;
 
-    // Invariant 1: Check CR/CREDIT/CREDITED indicator
     const creditKeywords = /(?:credited|credit|cr\b|deposit|deposited|received|transferred)/i;
     if (!creditKeywords.test(rawText)) {
       stage3 = {
@@ -463,8 +362,6 @@ export class PaymentVerificationPipeline {
       });
     }
 
-    // A debit indicator that appears before any credit indicator means money left the account
-    // (same rule as the standalone bank SMS parser), so it must never settle a payment.
     const debitIdx = rawText.search(/\b(?:debited|withdrawn|deducted|spent|paid rs|sent rs)\b/i);
     const creditIdx = rawText.search(creditKeywords);
     if (debitIdx !== -1 && debitIdx < creditIdx) {
@@ -486,7 +383,6 @@ export class PaymentVerificationPipeline {
       });
     }
 
-    // Invariant 2: Check Indian currency indicator (Rs, Rs., ₹, or INR)
     const currencyKeywords = /(?:\b(?:rs\.?|inr)\b|₹|(?:rs\.?|inr|₹)\s*\d|\d\s*(?:rs\.?|inr|₹))/i;
     if (!currencyKeywords.test(rawText)) {
       stage3 = {
@@ -507,9 +403,6 @@ export class PaymentVerificationPipeline {
       });
     }
 
-    // Invariant 3: Check 12-digit reference (UTR / RRN)
-    // A reference printed in the message itself wins over a caller-supplied one, so a caller
-    // cannot attach an arbitrary value to a real credit to dodge the duplicate checks.
     const labelledRefMatch = rawText.match(/(?:upi\s*ref(?:erence)?\s*(?:no\.?|num)?|utr(?:\s*no\.?)?|rrn(?:\s*no\.?)?|txn\s*(?:id|ref)?|ref\s*no\.?)[\s:=-]+([0-9]{12})\b/i);
     let bankRef = (labelledRefMatch && labelledRefMatch[1]) || input.bankReferenceNumber || input.utr || null;
     if (!bankRef) {
@@ -554,7 +447,6 @@ export class PaymentVerificationPipeline {
       });
     }
 
-    // Invariant 4: Extract exact monetary amount
     const parsedAmount = extractIntelligentAmount(rawText);
     if (!parsedAmount || !parsedAmount.amountPaise || parsedAmount.amountPaise <= 0n) {
       stage3 = {
@@ -575,7 +467,6 @@ export class PaymentVerificationPipeline {
       });
     }
 
-    // Sender VPA optional
     let senderVpa = null;
     const vpaMatch = rawText.match(/(?:from|by|vpa)\s+([a-zA-Z0-9.\-_]{2,64}@[a-zA-Z0-9.\-_]{2,32})/i);
     if (vpaMatch && vpaMatch[1]) {
@@ -602,15 +493,9 @@ export class PaymentVerificationPipeline {
       }
     };
 
-    // =========================================================================
-    // [ STAGE 4 ]: Payment Verification
-    // =========================================================================
     let stage4;
 
     if (!session && parsedData?.amountPaise) {
-      // Amount alone is not an identifier: two merchants can legitimately have an identical
-      // in-flight amount. Only fall back on amount when the VPA the credit landed on is known,
-      // and then only within that VPA's merchant.
       const scopeByVpa = observedVpa || (parsedData.vpa ? String(parsedData.vpa).toLowerCase() : null);
       if (scopeByVpa) {
         const matchRow = this.db.queryOne(`
@@ -668,7 +553,6 @@ export class PaymentVerificationPipeline {
       });
     }
 
-    // 2. Timestamp check: after session start? (Reject if received before session creation)
     const parseSessionTime = (t) => {
       if (!t) return new Date();
       if (t instanceof Date) return t;
@@ -731,7 +615,6 @@ export class PaymentVerificationPipeline {
       }
     }
 
-    // 3. Amount Match Check
     if (BigInt(session.amountPaise) !== BigInt(parsedData.amountPaise)) {
       const expectedAmount = (Number(session.amountPaise) / 100).toFixed(2);
       const gotAmount = (Number(parsedData.amountPaise) / 100).toFixed(2);
@@ -755,7 +638,6 @@ export class PaymentVerificationPipeline {
       });
     }
 
-    // 4. Duplicate Check
     const receivingAccountId = session.receivingAccountId || input.receivingAccountId || '00000000-0000-0000-0000-000000000002';
     let observerSourceEnum;
     if (isGmailSource) {
@@ -797,7 +679,6 @@ export class PaymentVerificationPipeline {
       });
     }
 
-    // 5. Transaction Reference Already Used Check
     const priorUsedSession = this.db.queryOne(`
       SELECT ps.id, ps.order_id
       FROM payment_sessions ps
@@ -842,15 +723,11 @@ export class PaymentVerificationPipeline {
       }
     };
 
-    // =========================================================================
-    // [ STAGE 5 ]: Security Engine (EXACT Defined Fraud Scenario Only)
-    // =========================================================================
     let stage5;
     let isFraudulentInjection = false;
     let threatType = null;
     let threatDetails = null;
 
-    // Check if customer identity is already banned
     if (customer && customer.status === 'BANNED') {
       stage5 = {
         stage: 5,
@@ -873,23 +750,14 @@ export class PaymentVerificationPipeline {
       });
     }
 
-    // -------------------------------------------------------------------------
-    // DEFINED FRAUD DETECTION CONDITIONS (ALL 6 MUST APPLY):
-    // 1. There is an active or recently active payment session:
     const isSessionActiveOrRecent = Boolean(session && (session.status === 'ACTIVE' || session.status === 'PROCESSING'));
 
-    // 2. The observation is associated with that customer's payment-session identity:
     const hasAssociatedCustomer = Boolean(customer && customer.id);
 
-    // 3. The incoming observation is attributable to customer's registered email or phone:
-    // (calculated above as isAttributableToCustomer)
-
-    // 4. The content is attempting to represent a payment/credit transaction rather than being an ordinary unrelated message:
     const isAttemptingCreditMessage = creditKeywords.test(rawText) && (
       Boolean(bankRef) || Boolean(parsedData?.amountPaise) || currencyKeywords.test(rawText)
     );
 
-    // 5. The observation is not a legitimate bank-originated transaction observation:
     let isNotLegitimateBank = false;
     if (source === 'SMS') {
       const cleanSender = (sender || '').trim();
@@ -903,14 +771,12 @@ export class PaymentVerificationPipeline {
       isNotLegitimateBank = true;
     }
 
-    // 6. The observation is being used to falsely satisfy payment verification for that customer's session:
     const targetsCustomerSession = Boolean(session && (
       session.customerId === customer?.id ||
       input.paymentSessionId === session.id ||
       (parsedData?.amountPaise && session.amountPaise && BigInt(parsedData.amountPaise) === BigInt(session.amountPaise))
     ));
 
-    // Automatic banning should occur ONLY when all 6 conditions are positively established
     if (isSessionActiveOrRecent &&
         hasAssociatedCustomer &&
         isAttributableToCustomer &&
@@ -922,7 +788,6 @@ export class PaymentVerificationPipeline {
       threatDetails = `Customer '${customer.name}' attempted to inject fake payment notification attributable to registered identity (${matchedCustomerChannel}).`;
     }
 
-    // Complete evidence preservation package
     const evidence = {
       customerId: customer?.id || null,
       customerName: customer?.name || null,
@@ -938,7 +803,7 @@ export class PaymentVerificationPipeline {
       source,
       originatingSender: sender,
       receivedAt: observation.received_at,
-      rawMessage: observation.raw, // EXACT RAW MESSAGE VERBATIM!
+      rawMessage: observation.raw,
       normalizedMessage: observation.body,
       extractedAmount: parsedData?.amount ? `₹${parsedData.amount}` : null,
       extractedReference: bankRef || null,
@@ -954,7 +819,6 @@ export class PaymentVerificationPipeline {
     if (isFraudulentInjection) {
       const isExplicitlySuppressed = Boolean(input.suppressBan);
 
-      // Store security event in DB
       if (this.customerRepo && typeof this.customerRepo.createSecurityEvent === 'function') {
         this.customerRepo.createSecurityEvent({
           merchantId: session.merchantId,
@@ -981,7 +845,6 @@ export class PaymentVerificationPipeline {
       }
 
       if (isExplicitlySuppressed) {
-        // Explicitly suppressed ban (e.g. for specialized mock tests)
         autoBanApplied = false;
         securityDiagnostic = 'FRAUDULENT_PAYMENT_INJECTION detected. Automatic banning suppressed by explicit request parameter.';
 
@@ -1008,7 +871,6 @@ export class PaymentVerificationPipeline {
           });
         }
       } else {
-        // Automatic banning is ENABLED: Ban user instantly right away!
         autoBanApplied = true;
         this.customerRepo.banCustomer(customer.id, 'FRAUDULENT_PAYMENT_INJECTION', { lastDevice: evidence.deviceInfo });
         securityDiagnostic = 'FRAUDULENT_PAYMENT_INJECTION detected. Associated customer identity has been automatically BANNED by Security Engine.';
@@ -1036,7 +898,6 @@ export class PaymentVerificationPipeline {
           });
         }
 
-        // Broadcast instant real-time termination to active client over SSE
         if (this.server && session?.id) {
           this.server.broadcastSse(session.id, 'status_change', {
             status: 'BLOCKED',
@@ -1067,7 +928,6 @@ export class PaymentVerificationPipeline {
           });
         }
 
-        // DO NOT CONFIRM PAYMENT - RETURN REJECTED IMMEDIATELY
         return buildResult({
           finalStatus: 'REJECTED',
           failingStage: 5,
@@ -1092,13 +952,9 @@ export class PaymentVerificationPipeline {
       };
     }
 
-    // =========================================================================
-    // [ STAGE 6 ]: Attribution
-    // =========================================================================
     let stage6;
 
     if (isFraudulentInjection) {
-      // In Test Mode where auto-ban is suppressed: STILL DO NOT CONFIRM PAYMENT!
       stage6 = {
         stage: 6,
         name: 'ATTRIBUTION',
@@ -1122,7 +978,6 @@ export class PaymentVerificationPipeline {
       });
     }
 
-    // Execute standard attribution engine process
     const normalized = ObservationNormalizer.normalize({
       source: observerSourceEnum,
       receivingAccountId: session?.receivingAccountId || receivingAccountId,
@@ -1168,7 +1023,6 @@ export class PaymentVerificationPipeline {
 
     const finalStatus = attributionResult.attributed ? 'VERIFIED' : 'UNRESOLVED';
 
-    // Refresh session state after attribution
     const updatedSession = this.sessionRepo.findById(session.id);
 
     return buildResult({

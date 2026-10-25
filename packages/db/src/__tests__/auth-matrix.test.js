@@ -121,8 +121,6 @@ test('Full 53-Point Customer Identity, Authentication & Payment Invariant Matrix
   }
 
   try {
-    // --- AUTH CREATION (1 - 6) ---
-    // 1. Signup with valid name/email/mobile/password
     const reg1 = await httpReq('POST', `${apiBase}/api/v1/customer/register`, {
       name: 'Gaurav Sharma',
       email: 'Gaurav.Sharma@Example.COM',
@@ -135,19 +133,16 @@ test('Full 53-Point Customer Identity, Authentication & Payment Invariant Matrix
     assert.equal(reg1.body.customer.email, 'gaurav.sharma@example.com');
     assert.equal(reg1.body.customer.mobileNumber, '9876543210');
 
-    // 2. Password is hashed
     const custInDb = testDb.queryOne('SELECT * FROM customers WHERE id = ?', [reg1.body.customer.id]);
     assert.ok(custInDb.password_hash);
     assert.notEqual(custInDb.password_hash, 'StrongPassword123!');
     assert.ok(custInDb.password_hash.includes(':'));
 
-    // 3. Plaintext password is never persisted or returned
     assert.equal(reg1.body.password, undefined);
     assert.equal(reg1.body.customer.password, undefined);
     assert.equal(reg1.body.customer.passwordHash, undefined);
     assert.equal(JSON.stringify(custInDb).includes('StrongPassword123!'), false);
 
-    // 4. Duplicate email is rejected
     const dupEmail = await httpReq('POST', `${apiBase}/api/v1/customer/register`, {
       name: 'Another Person',
       email: 'gaurav.sharma@example.com',
@@ -156,7 +151,6 @@ test('Full 53-Point Customer Identity, Authentication & Payment Invariant Matrix
     });
     assert.equal(dupEmail.status, 409);
 
-    // 5. Duplicate mobile is rejected
     const dupMobile = await httpReq('POST', `${apiBase}/api/v1/customer/register`, {
       name: 'Another Person',
       email: 'another.unique@example.com',
@@ -165,20 +159,16 @@ test('Full 53-Point Customer Identity, Authentication & Payment Invariant Matrix
     });
     assert.equal(dupMobile.status, 409);
 
-    // 5.5 Email normalization
     assert.equal(normalizeEmail('  USER.Name+tag@DOMAIN.Co.In  '), 'user.name+tag@domain.co.in');
     assert.equal(isValidEmail('not-an-email'), false);
     assert.equal(isValidEmail('valid.user@sub.domain.org'), true);
 
-    // 6. Mobile normalization
     assert.equal(normalizeMobile('+91 98765-43210'), '9876543210');
     assert.equal(normalizeMobile('09876543210'), '9876543210');
     assert.equal(normalizeMobile('919876543210'), '9876543210');
     assert.equal(isValidMobile('9876543210'), true);
     assert.equal(isValidMobile('12345'), false);
 
-    // --- LOGIN (7 - 10) ---
-    // 7. Login with valid credentials (email & mobile)
     const loginEmail = await httpReq('POST', `${apiBase}/api/v1/customer/login`, {
       identifier: 'gaurav.sharma@example.com',
       password: 'StrongPassword123!'
@@ -193,21 +183,18 @@ test('Full 53-Point Customer Identity, Authentication & Payment Invariant Matrix
     assert.equal(loginMobile.status, 200);
     assert.ok(loginMobile.body.token);
 
-    // 8. Invalid password rejected
     const badPass = await httpReq('POST', `${apiBase}/api/v1/customer/login`, {
       identifier: 'gaurav.sharma@example.com',
       password: 'WrongPassword999!'
     });
     assert.equal(badPass.status, 401);
 
-    // 9. Unknown account rejected safely
     const unknownAcc = await httpReq('POST', `${apiBase}/api/v1/customer/login`, {
       identifier: 'nonexistent@example.com',
       password: 'AnyPassword123!'
     });
     assert.equal(unknownAcc.status, 401);
 
-    // 10. Valid session can be restored
     const restoreSession = await httpReq('GET', `${apiBase}/api/v1/customer/me`, null, {
       'Authorization': `Bearer ${loginEmail.body.token}`
     });
@@ -215,13 +202,10 @@ test('Full 53-Point Customer Identity, Authentication & Payment Invariant Matrix
     assert.equal(restoreSession.body.authenticated, true);
     assert.equal(restoreSession.body.customer.id, reg1.body.customer.id);
 
-    // --- AUTO LOGIN (11 - 14) ---
-    // 11 & 12. Return to checkout with valid remembered session
     const autoVerify = customerSessionRepo.findByToken(loginEmail.body.token);
     assert.ok(autoVerify);
     assert.equal(autoVerify.customer.name, 'Gaurav Sharma');
 
-    // 13. Payment session does NOT need recreation on page refresh
     const paymentClient = new YoupiPaymentClient({
       apiUrl: apiBase,
       merchantId: merchant.id,
@@ -239,7 +223,6 @@ test('Full 53-Point Customer Identity, Authentication & Payment Invariant Matrix
     assert.equal(p1StateB.body.paymentId, p1.paymentId);
     sessionRepo.transitionToTerminal(p1.paymentId, PaymentStatus.CANCELLED);
 
-    // 14. Expired auth session requires reauthentication
     const expiredSess = customerSessionRepo.create({
       customerId: reg1.body.customer.id,
       ttlHours: -1
@@ -250,8 +233,6 @@ test('Full 53-Point Customer Identity, Authentication & Payment Invariant Matrix
     });
     assert.equal(meExpired.status, 401);
 
-    // --- PAYMENT GATE (15 - 19) ---
-    // 15, 16, 17. Unauthenticated checkout does not start session, timer or queue
     const unauthPayment = await paymentClient.createPayment({
       orderId: 'ORD-GATE-01',
       amount: '200.00',
@@ -264,11 +245,9 @@ test('Full 53-Point Customer Identity, Authentication & Payment Invariant Matrix
     const accountStateBefore = accountRepo.findById(receivingAccount.id);
     assert.equal(accountStateBefore.isSlotBusy, false);
 
-    // 18. Customer authenticates successfully
     const authSess = customerSessionRepo.create({ customerId: reg1.body.customer.id });
     assert.ok(authSess.token);
 
-    // 19. Payment session then starts
     const bindRes = await httpReq('POST', `${apiBase}/api/v1/checkout/${unauthPayment.paymentId}/bind-customer`, {
       token: authSess.token
     });
@@ -282,8 +261,6 @@ test('Full 53-Point Customer Identity, Authentication & Payment Invariant Matrix
     const accountStateAfter = accountRepo.findById(receivingAccount.id);
     assert.equal(accountStateAfter.isSlotBusy, true);
 
-    // --- ACCOUNT SWITCHING (20 - 26) ---
-    // 20, 21, 22. 2-Account browser limit enforcement
     const reg2 = await httpReq('POST', `${apiBase}/api/v1/customer/register`, {
       name: 'Pooja Verma',
       email: 'pooja.verma@example.com',
@@ -320,7 +297,6 @@ test('Full 53-Point Customer Identity, Authentication & Payment Invariant Matrix
     accountsStore = simulateSave(accountsStore, reg3.body.customer, reg3.body.token);
     assert.equal(accountsStore.length, 2);
 
-    // 23 & 24. Switch from Account A to Account B, and Account B to Account A
     const switchResB = await httpReq('POST', `${apiBase}/api/v1/customer/switch-account`, {
       token: reg2.body.token
     });
@@ -333,21 +309,17 @@ test('Full 53-Point Customer Identity, Authentication & Payment Invariant Matrix
     assert.equal(switchResA.status, 200);
     assert.equal(switchResA.body.customer.email, 'gaurav.sharma@example.com');
 
-    // 25. Expired account session asks for reauthentication
     const switchExpired = await httpReq('POST', `${apiBase}/api/v1/customer/switch-account`, {
       token: expiredSess.token
     });
     assert.equal(switchExpired.status, 401);
 
-    // 26. Switching account does not mutate another account's data
     const c1 = customerRepo.findById(reg1.body.customer.id);
     const c2 = customerRepo.findById(reg2.body.customer.id);
     assert.equal(c1.name, 'Gaurav Sharma');
     assert.equal(c2.name, 'Pooja Verma');
     assert.notEqual(c1.email, c2.email);
 
-    // --- LOGOUT (27 - 31) ---
-    // 27. Logout invalidates current session
     const logoutRes = await httpReq('POST', `${apiBase}/api/v1/customer/logout`, {
       token: reg1.body.token
     });
@@ -357,20 +329,16 @@ test('Full 53-Point Customer Identity, Authentication & Payment Invariant Matrix
     });
     assert.equal(afterLogout.status, 401);
 
-    // 28. Saved account remains available
     assert.equal(accountsStore.length, 2);
 
-    // 29. Logout does not delete customer database record
     assert.ok(customerRepo.findById(reg1.body.customer.id));
 
-    // 30. User can log back into saved account
     const reLogin = await httpReq('POST', `${apiBase}/api/v1/customer/login`, {
       identifier: 'gaurav.sharma@example.com',
       password: 'StrongPassword123!'
     });
     assert.equal(reLogin.status, 200);
 
-    // 31. User can sign in/create another account
     const reg4 = await httpReq('POST', `${apiBase}/api/v1/customer/register`, {
       name: 'Fourth Customer',
       email: 'fourth@example.com',
@@ -379,8 +347,6 @@ test('Full 53-Point Customer Identity, Authentication & Payment Invariant Matrix
     });
     assert.equal(reg4.status, 201);
 
-    // --- PAYMENT INTEGRITY (32 - 36) ---
-    // 32, 33, 34, 35. Identity immutability and anti-hijacking
     const payActive = sessionRepo.findById(unauthPayment.paymentId);
     assert.equal(payActive.customerId, reg1.body.customer.id);
 
@@ -395,7 +361,6 @@ test('Full 53-Point Customer Identity, Authentication & Payment Invariant Matrix
     assert.equal(tamperRes.status, 409);
     assert.equal(sessionRepo.findById(unauthPayment.paymentId).customerId, reg1.body.customer.id);
 
-    // 36. Existing payment verification continues working
     const obs = attributionEngine.processObservation({
       receivingAccountId: receivingAccount.id,
       source: 'ANDROID_OBSERVER',
@@ -410,8 +375,6 @@ test('Full 53-Point Customer Identity, Authentication & Payment Invariant Matrix
     assert.equal(obs.paymentSessionId, unauthPayment.paymentId);
     assert.equal(obs.outcomeStatus, PaymentStatus.SUCCESS);
 
-    // --- DEMO STORE (37 - 40) ---
-    // 37 & 38. Demo Purchase redirects without storefront auth
     const demoBuy = await httpReq('POST', `${demoBase}/api/checkout`, {
       packName: 'Gamer Pack',
       coins: 500,
@@ -420,12 +383,10 @@ test('Full 53-Point Customer Identity, Authentication & Payment Invariant Matrix
     assert.equal(demoBuy.status, 200);
     assert.ok(demoBuy.body.checkoutUrl);
 
-    // 39. Checkout authentication appears
     const demoState = await httpReq('GET', `${apiBase}/api/v1/checkout/${demoBuy.body.paymentId}/state`);
     assert.equal(demoState.body.customer, null);
     assert.equal(demoState.body.status, 'INITIATED');
 
-    // 40. Payment begins only after authentication
     const bindDemo = await httpReq('POST', `${apiBase}/api/v1/checkout/${demoBuy.body.paymentId}/bind-customer`, {
       token: reLogin.body.token
     });
@@ -433,12 +394,9 @@ test('Full 53-Point Customer Identity, Authentication & Payment Invariant Matrix
     assert.equal(bindDemo.body.status, PaymentStatus.ACTIVE);
     assert.ok(bindDemo.body.expiresAt);
 
-    // Complete demo payment to free slot for next test
     sessionRepo.transitionToTerminal(demoBuy.body.paymentId, PaymentStatus.SUCCESS);
     testDb.execute('UPDATE payment_receiving_accounts SET is_slot_busy = 0, current_active_session_id = NULL WHERE id = ?', [receivingAccount.id]);
 
-    // --- MERCHANT INTEGRATION (41 - 43) ---
-    // 41, 42, 43. Generic merchant integration creates payment without customer auth
     const genericPay = await paymentClient.createPayment({
       orderId: 'EXT-MERCHANT-ORD-101',
       amount: '50.00',
@@ -455,12 +413,9 @@ test('Full 53-Point Customer Identity, Authentication & Payment Invariant Matrix
     assert.equal(genericBind.body.status, 'ACTIVE');
     assert.equal(genericBind.body.customer.name, 'Gaurav Sharma');
 
-    // Complete generic payment to free slot for queue tests
     sessionRepo.transitionToTerminal(genericPay.paymentId, PaymentStatus.SUCCESS);
     testDb.execute('UPDATE payment_receiving_accounts SET is_slot_busy = 0, current_active_session_id = NULL WHERE id = ?', [receivingAccount.id]);
 
-    // --- REGRESSION (44 - 53) ---
-    // 44. UPI QR works
     const upiUri = buildUpiUri({
       payeeVpa: receivingAccount.upiId,
       payeeName: receivingAccount.payeeName,
@@ -472,7 +427,6 @@ test('Full 53-Point Customer Identity, Authentication & Payment Invariant Matrix
     const qrSvg = generateQrSvg(upiUri, 220);
     assert.ok(qrSvg.includes('<svg') && qrSvg.includes('</svg>'));
 
-    // 45. UPI provider buttons work
     const providers = getUpiProviders();
     assert.equal(providers.length, 30);
     const gpay = findUpiProviderById('google-pay');
@@ -487,7 +441,6 @@ test('Full 53-Point Customer Identity, Authentication & Payment Invariant Matrix
     assert.ok(intent.includes('package=' + gpay.packageName));
     assert.equal(intent.includes('cu='), false);
 
-    // 46. Existing merchant/non-merchant UPI behavior works
     const nonMerchantAccount = accountRepo.create({
       merchantId: merchant.id,
       upiId: 'personal.store@okhdfcbank',
@@ -497,7 +450,6 @@ test('Full 53-Point Customer Identity, Authentication & Payment Invariant Matrix
     });
     assert.equal(nonMerchantAccount.isMerchantEnabled, false);
 
-    // 47. Queue logic works
     const qPay1 = sessionRepo.create({
       merchantId: merchant.id,
       receivingAccountId: receivingAccount.id,
@@ -519,12 +471,10 @@ test('Full 53-Point Customer Identity, Authentication & Payment Invariant Matrix
     assert.equal(qRes2.status, PaymentStatus.QUEUED);
     assert.equal(qRes2.queuePosition, 1);
 
-    // 48. Timing logic works
     const proc = timingEngine.handlePaymentDone(qPay1.id);
     assert.equal(proc.status, PaymentStatus.PROCESSING);
     assert.ok(proc.processingExpiresAt);
 
-    // 49. Verification works
     const qObs = attributionEngine.processObservation({
       receivingAccountId: receivingAccount.id,
       source: 'GMAIL_OBSERVER',
@@ -537,21 +487,17 @@ test('Full 53-Point Customer Identity, Authentication & Payment Invariant Matrix
     assert.equal(qObs.attributed, true);
     assert.equal(qObs.paymentSessionId, qPay1.id);
 
-    // 50. Webhook delivery works
     const whResult = await webhookEngine.dispatch('SUCCESS', sessionRepo.findById(qPay1.id));
     assert.ok(whResult.deliveryId);
 
-    // 51. Merchant dashboard works
     const dashSettings = await httpReq('GET', `${apiBase}/api/v1/admin/merchant-settings?merchantId=${merchant.id}`);
     assert.equal(dashSettings.status, 200);
     assert.equal(dashSettings.body.businessName, 'Nova Commerce Ltd');
 
-    // 52. Observer services work
     const pollerActive = await httpReq('GET', `${apiBase}/api/v1/pollers/active-window`);
     assert.equal(pollerActive.status, 200);
     assert.ok(Array.isArray(pollerActive.body.sessions));
 
-    // 53. Control center works
     const health = await httpReq('GET', `${apiBase}/health`);
     assert.equal(health.status, 200);
     assert.equal(health.body.status, 'UP');

@@ -33,10 +33,6 @@ import com.google.zxing.qrcode.QRCodeReader;
 
 import java.util.List;
 
-/**
- * Native Camera QR Scanner for SMS Gateway Device Pairing.
- * Uses Camera preview stream with Google ZXing QR decoder for instantaneous pairing.
- */
 @SuppressWarnings("deprecation")
 public class QrScannerActivity extends Activity implements SurfaceHolder.Callback, Camera.PreviewCallback {
     private static final String TAG = "QrScannerActivity";
@@ -56,7 +52,6 @@ public class QrScannerActivity extends Activity implements SurfaceHolder.Callbac
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Color.BLACK);
 
-        // 1. Camera Preview Surface
         surfaceView = new SurfaceView(this);
         surfaceHolder = surfaceView.getHolder();
         surfaceHolder.addCallback(this);
@@ -65,14 +60,12 @@ public class QrScannerActivity extends Activity implements SurfaceHolder.Callbac
             ViewGroup.LayoutParams.MATCH_PARENT
         ));
 
-        // 2. Custom Reticle Overlay View
         ReticleOverlayView overlayView = new ReticleOverlayView(this);
         root.addView(overlayView, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT
         ));
 
-        // 3. Header & Controls
         LinearLayout controls = new LinearLayout(this);
         controls.setOrientation(LinearLayout.VERTICAL);
         controls.setPadding(32, 64, 32, 32);
@@ -98,7 +91,6 @@ public class QrScannerActivity extends Activity implements SurfaceHolder.Callbac
             Gravity.TOP
         ));
 
-        // 4. Cancel / Close Button at bottom
         Button btnCancel = new Button(this);
         btnCancel.setText("Cancel");
         btnCancel.setTextColor(Color.WHITE);
@@ -142,7 +134,6 @@ public class QrScannerActivity extends Activity implements SurfaceHolder.Callbac
             Camera.Parameters params = camera.getParameters();
             List<Camera.Size> sizes = params.getSupportedPreviewSizes();
             if (sizes != null && !sizes.isEmpty()) {
-                // Select optimal preview size
                 Camera.Size optimal = sizes.get(0);
                 for (Camera.Size s : sizes) {
                     if (s.width >= 1280 && s.width <= 1920) {
@@ -153,7 +144,6 @@ public class QrScannerActivity extends Activity implements SurfaceHolder.Callbac
                 params.setPreviewSize(optimal.width, optimal.height);
             }
 
-            // Continuous autofocus if supported
             List<String> focusModes = params.getSupportedFocusModes();
             if (focusModes != null && focusModes.contains(Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE)) {
                 params.setFocusMode(Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE);
@@ -210,10 +200,8 @@ public class QrScannerActivity extends Activity implements SurfaceHolder.Callbac
                         return;
                     }
                 } catch (Exception ignored) {
-                    // Normal when QR code is not in frame
                 }
 
-                // If not found, request next frame
                 if (!isFinishing()) {
                     runOnUiThread(new Runnable() {
                         @Override
@@ -245,9 +233,6 @@ public class QrScannerActivity extends Activity implements SurfaceHolder.Callbac
         finish();
     }
 
-    /**
-     * Dark translucent HUD overlay with clear reticle framing.
-     */
     private static class ReticleOverlayView extends View {
         private final Paint maskPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint borderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -280,29 +265,21 @@ public class QrScannerActivity extends Activity implements SurfaceHolder.Callbac
             float top = (height - boxSize) / 2f;
             frameRect.set(left, top, left + boxSize, top + boxSize);
 
-            // Semi-transparent blackout
             canvas.drawRect(0, 0, width, height, maskPaint);
 
-            // Punch hole in center for QR view
             Paint clearPaint = new Paint();
             clearPaint.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.CLEAR));
             canvas.drawRoundRect(frameRect, 24f, 24f, clearPaint);
 
-            // Thin frame border
             canvas.drawRoundRect(frameRect, 24f, 24f, borderPaint);
 
-            // Green targeting corner accents
             float cornerLen = 36f;
-            // Top-Left
             canvas.drawLine(left, top + cornerLen, left, top, cornerPaint);
             canvas.drawLine(left, top, left + cornerLen, top, cornerPaint);
-            // Top-Right
             canvas.drawLine(left + boxSize - cornerLen, top, left + boxSize, top, cornerPaint);
             canvas.drawLine(left + boxSize, top, left + boxSize, top + cornerLen, cornerPaint);
-            // Bottom-Left
             canvas.drawLine(left, top + boxSize - cornerLen, left, top + boxSize, cornerPaint);
             canvas.drawLine(left, top + boxSize, left + cornerLen, top + boxSize, cornerPaint);
-            // Bottom-Right
             canvas.drawLine(left + boxSize - cornerLen, top + boxSize, left + boxSize, top + boxSize, cornerPaint);
             canvas.drawLine(left + boxSize, top + boxSize - cornerLen, left + boxSize, top + boxSize, cornerPaint);
         }

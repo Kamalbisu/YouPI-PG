@@ -8,7 +8,6 @@ import { getAdminToken, safeEqual } from '@youpi/common';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-/** Security headers applied to every response served by the control center. */
 const BASE_SECURITY_HEADERS = Object.freeze({
   'X-Content-Type-Options': 'nosniff',
   'X-Frame-Options': 'SAMEORIGIN',
@@ -16,33 +15,23 @@ const BASE_SECURITY_HEADERS = Object.freeze({
   'Content-Security-Policy': "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"
 });
 
-/** Routes reachable without a credential (liveness probe and the dashboard shell). */
 const PUBLIC_PATHS = new Set(['/health', '/', '/dashboard', '/fonts/dm-sans.woff2', '/fonts/sora.woff2']);
 
-/** True when the caller presented the admin bearer token in constant time (or ?token= on GET SSE). */
 function hasAdminToken(req, url = null, pathname = '') {
   const match = /^Bearer\s+(.+)$/i.exec(req.headers?.['authorization'] || '');
   if (match) {
     return safeEqual(match[1].trim(), getAdminToken());
   }
-  // NOTE: the stream token is deliberately NOT accepted from a query parameter. A
-  // credential in the URL ends up in access logs, browser history and Referer headers.
-  // The dashboards now open the stream with fetch() so the token travels in the
-  // Authorization header only.
   return false;
 }
 
 export class ControlCenterServer {
-  /**
-   * @param {{ processManager?: ProcessManager }} [options={}]
-   */
   constructor(options = {}) {
     this.processManager = options.processManager || new ProcessManager();
     this.htmlTemplatePath = path.join(__dirname, 'views', 'dashboard.html');
     this.template = fs.readFileSync(this.htmlTemplatePath, 'utf8');
     this.sseClients = new Set();
 
-    // Broadcast log events to all connected SSE clients
     this.processManager.on('log', (logEntry) => {
       this.broadcastSse('log', logEntry);
     });
@@ -80,23 +69,18 @@ export class ControlCenterServer {
         return;
       }
 
-      // GET /health
       if (pathname === '/health') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'UP', service: 'control-center' }));
         return;
       }
 
-      // Every remaining route controls processes, streams service logs or exposes internal
-      // state. Without a token these are a remote denial-of-service and a log-exfiltration
-      // primitive, so the admin bearer is required.
       if (!PUBLIC_PATHS.has(pathname) && !hasAdminToken(req, url, pathname)) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Unauthorized', code: 'AUTH_REQUIRED' }));
         return;
       }
 
-      // GET /api/services
       if (pathname === '/api/services' && method === 'GET') {
         res.writeHead(200, {
           'Content-Type': 'application/json',
@@ -106,7 +90,6 @@ export class ControlCenterServer {
         return;
       }
 
-      // POST /api/services/start-all
       if (pathname === '/api/services/start-all' && method === 'POST') {
         await this.processManager.startAll();
         res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
@@ -114,7 +97,6 @@ export class ControlCenterServer {
         return;
       }
 
-      // POST /api/services/stop-all
       if (pathname === '/api/services/stop-all' && method === 'POST') {
         await this.processManager.stopAll();
         res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
@@ -122,7 +104,6 @@ export class ControlCenterServer {
         return;
       }
 
-      // POST /api/services/:id/start
       const startMatch = pathname.match(/^\/api\/services\/([a-zA-Z0-9_\-]+)\/start$/);
       if (startMatch && method === 'POST') {
         const id = startMatch[1];
@@ -137,7 +118,6 @@ export class ControlCenterServer {
         return;
       }
 
-      // POST /api/services/:id/stop
       const stopMatch = pathname.match(/^\/api\/services\/([a-zA-Z0-9_\-]+)\/stop$/);
       if (stopMatch && method === 'POST') {
         const id = stopMatch[1];
@@ -152,7 +132,6 @@ export class ControlCenterServer {
         return;
       }
 
-      // POST /api/services/:id/restart
       const restartMatch = pathname.match(/^\/api\/services\/([a-zA-Z0-9_\-]+)\/restart$/);
       if (restartMatch && method === 'POST') {
         const id = restartMatch[1];
@@ -167,19 +146,15 @@ export class ControlCenterServer {
         return;
       }
 
-      // GET /api/logs/stream (SSE)
       if (pathname === '/api/logs/stream') {
         res.writeHead(200, {
           'Content-Type': 'text/event-stream',
           'Cache-Control': 'no-cache',
           'Connection': 'keep-alive',
-          // Not wildcard: EventSource cannot send an Authorization header from a browser
-          // dashboard, but the stream still carries every service's stdout/stderr.
           'Access-Control-Allow-Origin': 'null',
           ...BASE_SECURITY_HEADERS
         });
 
-        // Send existing logs
         for (const log of this.processManager.logs.slice(-50)) {
           res.write(`event: log\ndata: ${JSON.stringify(log)}\n\n`);
         }
@@ -198,7 +173,6 @@ export class ControlCenterServer {
         return;
       }
 
-      // Self-hosted UI fonts (CSP blocks third-party font CDNs)
       const fontMatch = /^\/fonts\/(dm-sans|sora)\.woff2$/.exec(pathname);
       if (fontMatch && method === 'GET') {
         const fontPath = path.resolve(__dirname, '../public/fonts', `${fontMatch[1]}.woff2`);
@@ -213,7 +187,6 @@ export class ControlCenterServer {
         }
       }
 
-      // Web Dashboard View: GET /
       if (pathname === '/' || pathname === '/dashboard') {
         res.writeHead(200, {
           'Content-Type': 'text/html; charset=utf-8',

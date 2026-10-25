@@ -30,7 +30,6 @@ function cleanDir(dir) {
 console.log('Cleaning build artifacts and caches across workspace...');
 cleanDir(root);
 
-// Also clean Chrome browser session caches (preserves login sessions and cookies)
 const browserSessionsDir = path.join(root, 'data', 'browser-sessions');
 if (fs.existsSync(browserSessionsDir)) {
   const sessions = fs.readdirSync(browserSessionsDir);

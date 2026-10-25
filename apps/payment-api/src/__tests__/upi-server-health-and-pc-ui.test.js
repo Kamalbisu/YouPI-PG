@@ -67,10 +67,8 @@ describe('UPI Server Health Indicator & Checkout State Invariants', () => {
   });
 
   test('Server health indicator detects offline pollers and issues warning', async () => {
-    // Ensure no android devices
     testDb.execute('DELETE FROM android_devices');
 
-    // Create session
     const createRes = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -86,7 +84,6 @@ describe('UPI Server Health Indicator & Checkout State Invariants', () => {
     assert.equal(stateRes.status, 200);
     assert.ok(stateRes.body.upiServerIndicator);
     
-    // Check fields
     const indicator = stateRes.body.upiServerIndicator;
     assert.ok(indicator.status);
     assert.ok(indicator.label);
@@ -98,7 +95,6 @@ describe('UPI Server Health Indicator & Checkout State Invariants', () => {
   });
 
   test('Server health switches to WORKING when both Gmail OAuth and active SMS device are connected', async () => {
-    // 1. Configure Gmail credentials on merchant
     const merchant = testDb.queryOne(`SELECT branding FROM merchants WHERE id = '00000000-0000-0000-0000-000000000001'`);
     const branding = JSON.parse(merchant?.branding || '{}');
     branding.gmailConfig = {
@@ -108,13 +104,11 @@ describe('UPI Server Health Indicator & Checkout State Invariants', () => {
     };
     testDb.execute(`UPDATE merchants SET branding = ? WHERE id = '00000000-0000-0000-0000-000000000001'`, [JSON.stringify(branding)]);
 
-    // 2. Enroll and set recent heartbeat on an Android device
     testDb.execute(`
       INSERT INTO android_devices (id, merchant_id, device_name, device_model, signing_key_hash, is_active, last_heartbeat_at, created_at)
       VALUES ('dev-test-1', '00000000-0000-0000-0000-000000000001', 'Samsung Galaxy S22', 'SM-S901B', 'hash123', 1, datetime('now'), datetime('now'))
     `);
 
-    // 3. Mock active Gmail observer server
     let mockGmailServer = null;
     const testGmailPort = 6189;
     process.env.GMAIL_OBSERVER_PORT = String(testGmailPort);
@@ -148,14 +142,12 @@ describe('UPI Server Health Indicator & Checkout State Invariants', () => {
   });
 
   test('Dev settings: False narrative switch enables 10-minute override and forces WORKING status', async () => {
-    // Ensure no android devices or active gmail observers (so live status would be ISSUES)
     testDb.execute('DELETE FROM android_devices');
     const merchant = testDb.queryOne(`SELECT branding FROM merchants WHERE id = '00000000-0000-0000-0000-000000000001'`);
     const branding = JSON.parse(merchant?.branding || '{}');
     delete branding.gmailConfig;
     testDb.execute(`UPDATE merchants SET branding = ? WHERE id = '00000000-0000-0000-0000-000000000001'`, [JSON.stringify(branding)]);
 
-    // 1. Enable false narrative via admin dev API
     const enableRes = await request('/api/v1/admin/dev/false-narrative', {
       method: 'POST',
       body: { enabled: true }
@@ -165,7 +157,6 @@ describe('UPI Server Health Indicator & Checkout State Invariants', () => {
     assert.ok(enableRes.body.falseNarrativeUntil > Date.now());
     assert.ok(enableRes.body.remainingSeconds > 590 && enableRes.body.remainingSeconds <= 600);
 
-    // 2. Query server health - must report WORKING and no downtime warning
     const healthRes = await request('/api/v1/checkout/server-health');
     assert.equal(healthRes.status, 200);
     assert.equal(healthRes.body.status, 'WORKING');
@@ -177,19 +168,16 @@ describe('UPI Server Health Indicator & Checkout State Invariants', () => {
   });
 
   test('Dev settings: False narrative automatically expires after 10 minutes and reverts to live status', async () => {
-    // Set falseNarrativeUntil in the past (simulating 10 minutes elapsed)
     const merchant = testDb.queryOne(`SELECT branding FROM merchants WHERE id = '00000000-0000-0000-0000-000000000001'`);
     const branding = JSON.parse(merchant?.branding || '{}');
-    branding.falseNarrativeUntil = Date.now() - 5000; // Expired 5 seconds ago
+    branding.falseNarrativeUntil = Date.now() - 5000;
     testDb.execute(`UPDATE merchants SET branding = ? WHERE id = '00000000-0000-0000-0000-000000000001'`, [JSON.stringify(branding)]);
 
-    // Query admin status - must report disabled
     const adminRes = await request('/api/v1/admin/dev/false-narrative');
     assert.equal(adminRes.status, 200);
     assert.equal(adminRes.body.enabled, false);
     assert.equal(adminRes.body.remainingSeconds, 0);
 
-    // Query server health - must automatically revert to live observer status (ISSUES)
     const healthRes = await request('/api/v1/checkout/server-health');
     assert.equal(healthRes.status, 200);
     assert.equal(healthRes.body.status, 'ISSUES');
@@ -199,13 +187,11 @@ describe('UPI Server Health Indicator & Checkout State Invariants', () => {
   });
 
   test('Dev settings: Disabling false narrative explicitly immediately reverts to live status', async () => {
-    // 1. Enable
     await request('/api/v1/admin/dev/false-narrative', {
       method: 'POST',
       body: { enabled: true }
     });
 
-    // 2. Disable
     const disableRes = await request('/api/v1/admin/dev/false-narrative', {
       method: 'POST',
       body: { enabled: false }
@@ -214,7 +200,6 @@ describe('UPI Server Health Indicator & Checkout State Invariants', () => {
     assert.equal(disableRes.body.enabled, false);
     assert.equal(disableRes.body.falseNarrativeUntil, null);
 
-    // 3. Health check reverts to live status
     const healthRes = await request('/api/v1/checkout/server-health');
     assert.equal(healthRes.status, 200);
     assert.equal(healthRes.body.status, 'ISSUES');

@@ -1,15 +1,6 @@
 import { PaymentStatus, ObservationAttributionStatus, TicketStatus, SenderType, isTerminalStatus } from '@youpi/common';
 
 export class AttributionEngine {
-  /**
-   * @param {{
-   *   sessionRepo: import('@youpi/db').PaymentSessionRepository,
-   *   obsRepo: import('@youpi/db').ObservationRepository,
-   *   ticketRepo?: import('@youpi/db').SupportTicketRepository,
-   *   auditRepo?: import('@youpi/db').AuditLogRepository,
-   *   eventEmitter?: { emit: (event: string, payload: any) => void }
-   * }} options
-   */
   constructor(options) {
     this.sessionRepo = options.sessionRepo;
     this.obsRepo = options.obsRepo;
@@ -26,7 +17,6 @@ export class AttributionEngine {
       : (process.env.PAYMENT_GRACE_PERIOD_MS !== undefined
         ? Number(process.env.PAYMENT_GRACE_PERIOD_MS)
         : (isTestExecution ? 0 : 5000));
-    /** @type {Map<string, NodeJS.Timeout>} */
     this.pendingGraceTimers = new Map();
   }
 
@@ -37,26 +27,9 @@ export class AttributionEngine {
     this.pendingGraceTimers.clear();
   }
 
-  /**
-   * Processes a normalized canonical observation through the attribution pipeline.
-   * @param {ReturnType<typeof import('./normalizer.js').ObservationNormalizer.normalize>} normalizedObs
-   * @returns {{
-   *   attributed: boolean,
-   *   duplicate: boolean,
-   *   lateMatch: boolean,
-   *   paymentSessionId?: string,
-   *   observationId: string,
-   *   outcomeStatus: string,
-   *   verificationLevel?: number,
-   *   verificationTag?: string,
-   *   verificationSources?: string[]
-   * }}
-   */
   processObservation(normalizedObs) {
-    // Tier 1: Check fingerprint for deduplication
     const existing = this.obsRepo.findByFingerprint(normalizedObs.fingerprintHash);
     if (existing) {
-      // If observation came from the SAME source, drop as redundant duplicate
       if (existing.source === normalizedObs.source) {
         if (this.auditRepo) {
           this.auditRepo.log({
@@ -77,8 +50,6 @@ export class AttributionEngine {
         };
       }
 
-      // If observation came from a NEW, DIFFERENT channel and payment was already attributed:
-      // Upgrade verification tier to Level 2 (Dual Verification)!
       if (existing.attributedPaymentId) {
         const targetSession = this.sessionRepo.findById(existing.attributedPaymentId);
         if (targetSession && isTerminalStatus(targetSession.status) && targetSession.status !== PaymentStatus.SUCCESS) {
@@ -129,7 +100,6 @@ export class AttributionEngine {
           };
         }
 
-        // Cancel pending 5-second grace timer if any
         const pendingTimer = this.pendingGraceTimers.get(existing.attributedPaymentId);
         if (pendingTimer) {
           clearTimeout(pendingTimer);
@@ -217,10 +187,8 @@ export class AttributionEngine {
       }
     }
 
-    // Persist new observation as UNATTRIBUTED first
     const savedObs = this.obsRepo.create(normalizedObs);
 
-    // Tier 2: Check currently active session on receiving account
     let currentSession = null;
     if (normalizedObs.rawPayload?.targetSessionId) {
       currentSession = this.sessionRepo.findById(normalizedObs.rawPayload.targetSessionId);
@@ -240,9 +208,6 @@ export class AttributionEngine {
       }
     }
     if (!currentSession) {
-      // Fallback: match the amount, but only inside the receiving account the observer
-      // reported. Matching "any ACTIVE session on the gateway with this amount" could settle a
-      // different merchant's live payment (cross-merchant hijack), so it is intentionally gone.
       const scopedRow = this.sessionRepo.db.queryOne(`
         SELECT * FROM payment_sessions
         WHERE receiving_account_id = ?
@@ -257,13 +222,10 @@ export class AttributionEngine {
     }
 
     if (currentSession) {
-      // Invariant Check 1: Must be in ACTIVE or PROCESSING status
       const isEligibleStatus = [PaymentStatus.ACTIVE, PaymentStatus.PROCESSING].includes(currentSession.status);
 
-      // Invariant Check 2: Exact Amount Match (in integer paise)
       const isAmountMatch = currentSession.amountPaise === normalizedObs.amountPaise;
 
-      // Invariant Check 3: Temporal Window (with 5-minute clock skew tolerance, strictly preventing hijacking of prior expired sessions)
       let isPriorExpiredSession = false;
       if (currentSession.slotAcquiredAt && normalizedObs.observedAt < currentSession.slotAcquiredAt) {
         const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
@@ -280,7 +242,6 @@ export class AttributionEngine {
 
       const isTimeValid = !isPriorExpiredSession && (normalizedObs.observedAt >= slotStart);
 
-      // Invariant Check 0a: Transaction Reference Already Used Check
       let isUtrAlreadyUsed = false;
       const trimmedUtr = normalizedObs.bankReferenceNumber ? String(normalizedObs.bankReferenceNumber).trim() : '';
       if (trimmedUtr.length > 0) {
@@ -313,7 +274,6 @@ export class AttributionEngine {
         }
       }
 
-      // Invariant Check 0b: Check if SMS is from personal numeric phone number (10-15 digits E.164, no letters)
       let isPersonalSms = false;
       const senderStr = (normalizedObs.rawPayload?.sender || normalizedObs.rawPayload?.from || '').toString().trim();
       if ((normalizedObs.source === 'SMS' || normalizedObs.source === 'ANDROID_OBSERVER') && senderStr) {
@@ -346,13 +306,11 @@ export class AttributionEngine {
       if (isEligibleStatus && isAmountMatch && isTimeValid) {
         const wasActive = currentSession.status === PaymentStatus.ACTIVE;
 
-        // Check if there is already an active grace period awaiting second source for this session
         const pendingGrace = this.pendingGraceTimers.get(currentSession.id);
         if (pendingGrace) {
           clearTimeout(pendingGrace);
           this.pendingGraceTimers.delete(currentSession.id);
 
-          // Second source confirmed within 5-second grace window -> LEVEL 2 DUAL VERIFICATION!
           let verifyResult;
           try {
             verifyResult = this.sessionRepo.recordVerificationSource(
@@ -362,7 +320,6 @@ export class AttributionEngine {
               { finalizeSuccess: true }
             );
 
-            // Check if primary observation already holds the attributed bank_reference_number
             const primaryObs = currentSession.attributedObservationId
               ? this.obsRepo.findById(currentSession.attributedObservationId)
               : null;
@@ -376,7 +333,6 @@ export class AttributionEngine {
             if (!sameUtrAsPrimary) {
               this.obsRepo.markAttributed(savedObs.id, currentSession.id);
             } else {
-              // Secondary dual-verification observation corroborates existing attributed UTR
               this.obsRepo.db.execute(`
                 UPDATE payment_observations
                 SET attribution_status = ?
@@ -447,8 +403,6 @@ export class AttributionEngine {
           };
         }
 
-        // FIRST SOURCE CONFIRMATION:
-        // Record Level 1 verification source without immediate finalization (start 5-second grace window)
         let verifyResult;
         try {
           verifyResult = this.sessionRepo.recordVerificationSource(
@@ -515,7 +469,6 @@ export class AttributionEngine {
           sources: verifyResult.sources
         });
 
-        // If grace period is 0 (e.g. in instant tests), finalize immediately
         if (this.gracePeriodMs <= 0) {
           const finalResult = this.sessionRepo.recordVerificationSource(
             currentSession.id,
@@ -548,7 +501,6 @@ export class AttributionEngine {
           };
         }
 
-        // Start 5-second grace window awaiting second poller
         const targetSessionId = currentSession.id;
         const targetObsId = savedObs.id;
         const targetSource = normalizedObs.source;
@@ -558,7 +510,6 @@ export class AttributionEngine {
 
         const graceTimer = setTimeout(() => {
           this.pendingGraceTimers.delete(targetSessionId);
-          // Check if session became terminal during the grace window
           const latestSession = this.sessionRepo.findById(targetSessionId);
           if (!latestSession || (isTerminalStatus(latestSession.status) && latestSession.status !== PaymentStatus.SUCCESS)) {
             const sessionStatus = latestSession ? latestSession.status : 'EXPIRED';
@@ -605,7 +556,6 @@ export class AttributionEngine {
             return;
           }
 
-          // 5 seconds elapsed without second source: finalize as Level 1
           const finalResult = this.sessionRepo.recordVerificationSource(
             targetSessionId,
             targetSource,
@@ -659,8 +609,6 @@ export class AttributionEngine {
       }
     }
 
-    // Check if observation confirms a recently successful session on this receiving account (within 60s)
-    // Upgrades verification level (e.g. from Level 1 -> Level 2 -> Level 3)
     const sixtySecsAgo = new Date(Date.now() - 60000).toISOString();
     const recentSuccessSession = this.sessionRepo.db.queryOne(`
       SELECT * FROM payment_sessions
@@ -670,12 +618,10 @@ export class AttributionEngine {
     `, [normalizedObs.receivingAccountId, Number(normalizedObs.amountPaise), sixtySecsAgo]);
 
     if (recentSuccessSession) {
-      // Check if this session's attributed observation had a UTR
       const existingObs = recentSuccessSession.attributed_observation_id
         ? this.obsRepo.findById(recentSuccessSession.attributed_observation_id)
         : null;
 
-      // If both have UTRs and they do NOT match, this is NOT the same transaction!
       const isUtrConflict = normalizedObs.bankReferenceNumber &&
         existingObs?.bankReferenceNumber &&
         normalizedObs.bankReferenceNumber !== existingObs.bankReferenceNumber;
@@ -728,7 +674,6 @@ export class AttributionEngine {
         ? new Date(new Date(recentSuccessSession.completed_at).getTime() + 30000)
         : new Date();
 
-      // Temporal check: observation must have been observed during this session's window
       if (!isUtrConflict && normalizedObs.observedAt >= sessionSlotStart && normalizedObs.observedAt <= sessionCompleted) {
         const verifyResult = this.sessionRepo.recordVerificationSource(
           recentSuccessSession.id,
@@ -778,8 +723,6 @@ export class AttributionEngine {
       }
     }
 
-    // Tier 3: Late Observation Handling
-    // Check if observation matches a recently expired or failed session on this receiving account (< 30 mins)
     const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
     const recentExpired = this.sessionRepo.findRecentlyExpiredOrFailed(
       normalizedObs.receivingAccountId,
@@ -789,7 +732,6 @@ export class AttributionEngine {
     const lateMatchedSession = recentExpired.find(s => s.amountPaise === normalizedObs.amountPaise);
 
     if (lateMatchedSession) {
-      // Mark observation as LATE_UNMATCHED
       this.obsRepo.markLateUnmatched(savedObs.id);
 
       if (this.auditRepo) {
@@ -808,7 +750,6 @@ export class AttributionEngine {
         });
       }
 
-      // Automatically create a high-priority reconciliation support ticket if customer exists
       if (this.ticketRepo && lateMatchedSession.customerId) {
         this.ticketRepo.createTicket({
           merchantId: lateMatchedSession.merchantId,
@@ -824,7 +765,6 @@ export class AttributionEngine {
         });
       }
 
-      // Emit LATE_DETECTED event
       this.eventEmitter.emit('PAYMENT.LATE_DETECTED', {
         paymentId: lateMatchedSession.id,
         orderId: lateMatchedSession.orderId,
@@ -843,7 +783,6 @@ export class AttributionEngine {
       };
     }
 
-    // Unattributed observation
     return {
       attributed: false,
       duplicate: false,

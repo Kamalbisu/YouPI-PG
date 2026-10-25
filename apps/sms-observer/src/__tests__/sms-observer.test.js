@@ -98,7 +98,6 @@ describe('Google Messages / SMS Payment Observer Integration Tests', () => {
     });
 
     test('End-to-End: processing bank SMS confirms active payment session in Payment API', async () => {
-      // 1. Create a payment in Payment API for ₹499
       const session = apiInstance.app.context.sessionRepo.create({
         merchantId: '00000000-0000-0000-0000-000000000001',
         receivingAccountId: '00000000-0000-0000-0000-000000000002',
@@ -109,7 +108,6 @@ describe('Google Messages / SMS Payment Observer Integration Tests', () => {
       apiInstance.app.context.queueEngine.enqueueOrActivate(session.id, '00000000-0000-0000-0000-000000000002');
       apiInstance.app.context.timingEngine.handlePaymentDone(session.id);
 
-      // 2. Process incoming SMS alert via SMS Observer
       const result = await smsInstance.service.processSms({
         text: 'A/C 1234 credited with Rs. 499.00 on 08-Sep-2026. Ref: UTR-SMS-499 from payer@upi',
         sender: 'VM-ICICIB'
@@ -121,7 +119,6 @@ describe('Google Messages / SMS Payment Observer Integration Tests', () => {
       assert.equal(result.attribution.paymentSessionId, session.id);
       assert.equal(result.attribution.outcomeStatus, PaymentStatus.SUCCESS);
 
-      // 3. Verify session in DB updated to SUCCESS
       const updated = apiInstance.app.context.sessionRepo.findById(session.id);
       assert.equal(updated.status, PaymentStatus.SUCCESS);
     });

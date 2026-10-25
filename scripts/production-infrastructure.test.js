@@ -13,9 +13,6 @@ import {
 import { Database, runMigrations, MerchantRepository, DeviceRepository } from '@youpi/db';
 
 describe('YOUPI PG V2 — Production Infrastructure Finalization (Part L Acceptance Tests)', () => {
-  // ============================================================
-  // GROUP 1: CLOUDFLARE TUNNEL CONFIGURATION (Acceptance 1 - 12)
-  // ============================================================
   describe('Group 1: Cloudflare Tunnel Configuration & Route Derivation', () => {
     test('1, 2, 3: Generates deterministic hostnames for domain and prefix', () => {
       const routes = deriveCloudflareRoutes({ domain: 'example.com', prefix: 'pay' });
@@ -102,9 +99,6 @@ describe('YOUPI PG V2 — Production Infrastructure Finalization (Part L Accepta
     });
   });
 
-  // ============================================================
-  // GROUP 2: PRODUCTION MODE AUTHORITATIVENESS (Acceptance 13 - 17)
-  // ============================================================
   describe('Group 2: Production Mode Authoritativeness & Error Handling', () => {
     test('13, 14: resolveRuntimeUrls throws error in production if domain is missing; does not fall back to localhost', () => {
       assert.throws(
@@ -123,7 +117,6 @@ describe('YOUPI PG V2 — Production Infrastructure Finalization (Part L Accepta
       const merchantRepo = new MerchantRepository(db);
       const merchantId = '00000000-0000-0000-0000-000000000001';
 
-      // Save production branding
       merchantRepo.update(merchantId, {
         branding: {
           envMode: 'production',
@@ -133,13 +126,11 @@ describe('YOUPI PG V2 — Production Infrastructure Finalization (Part L Accepta
         }
       });
 
-      // Reload from DB
       const loaded = merchantRepo.findById(merchantId);
       assert.equal(loaded.branding.envMode, 'production');
       assert.equal(loaded.branding.cloudflareDomain, 'production-brand.com');
       assert.equal(loaded.branding.deploymentPrefix, 'pay');
 
-      // Verify that resolveRuntimeUrls preserves production configuration
       const urls = resolveRuntimeUrls({
         envMode: loaded.branding.envMode,
         domain: loaded.branding.cloudflareDomain,
@@ -154,16 +145,12 @@ describe('YOUPI PG V2 — Production Infrastructure Finalization (Part L Accepta
       const devUrls = resolveRuntimeUrls({ envMode: 'localhost' });
       assert.equal(devUrls.apiUrl, 'http://localhost:6100');
 
-      // Explicit production mode with domain does NOT produce localhost
       const prodUrls = resolveRuntimeUrls({ envMode: 'production', domain: 'live.com', prefix: 'pay' });
       assert.ok(!prodUrls.apiUrl.includes('localhost'));
       assert.ok(!prodUrls.checkoutUrl.includes('localhost'));
     });
   });
 
-  // ============================================================
-  // GROUP 3: SMS PAIRING QR CODE & APK (Acceptance 18 - 28)
-  // ============================================================
   describe('Group 3: SMS Pairing QR Payload & Automatic Configuration', () => {
     test('18, 19, 22: QR contains structured pairing payload with version, token, and session ID', () => {
       const payload = createPairingPayload({
@@ -212,7 +199,6 @@ describe('YOUPI PG V2 — Production Infrastructure Finalization (Part L Accepta
     });
 
     test('23, 24, 25: Validates payload and rejects expired or malformed payloads', () => {
-      // Valid payload
       const validPayload = createPairingPayload({
         serverUrl: 'https://pay-api.example.com',
         sessionId: 'sess_valid',
@@ -222,7 +208,6 @@ describe('YOUPI PG V2 — Production Infrastructure Finalization (Part L Accepta
       const checkValid = validatePairingPayload(validPayload);
       assert.equal(checkValid.valid, true);
 
-      // Expired payload
       const expiredPayload = {
         ...validPayload,
         expiresAt: Date.now() - 5000
@@ -231,13 +216,11 @@ describe('YOUPI PG V2 — Production Infrastructure Finalization (Part L Accepta
       assert.equal(checkExpired.valid, false);
       assert.equal(checkExpired.error, 'PAIRING QR EXPIRED');
 
-      // Invalid version
       const badVersion = { ...validPayload, version: 'v999' };
       const checkBadVersion = validatePairingPayload(badVersion);
       assert.equal(checkBadVersion.valid, false);
       assert.equal(checkBadVersion.error, 'INVALID YOUPI PAIRING QR VERSION');
 
-      // Malformed URL
       const badUrl = { ...validPayload, serverUrl: 'not_a_valid_url' };
       const checkBadUrl = validatePairingPayload(badUrl);
       assert.equal(checkBadUrl.valid, false);
@@ -245,9 +228,6 @@ describe('YOUPI PG V2 — Production Infrastructure Finalization (Part L Accepta
     });
   });
 
-  // ============================================================
-  // GROUP 4: SMS OBSERVER TRANSPORT-ONLY CONTRACT (Acceptance 29 - 33)
-  // ============================================================
   describe('Group 4: SMS Observer Transport-Only & Server Pipeline Authority', () => {
     test('29, 30, 31: Observer forwards non-bank SMS; server does not reject with 400', async () => {
       const db = new Database({ inMemory: true });
@@ -262,17 +242,14 @@ describe('YOUPI PG V2 — Production Infrastructure Finalization (Part L Accepta
         status: 'ACTIVE'
       });
 
-      // Verify that device is registered
       const device = deviceRepo.findById(deviceId);
       assert.ok(device);
       assert.equal(device.status, 'ACTIVE');
 
-      // Non-bank message body
       const rawBody = 'Hey mom, I will be home by 7 PM. Love you!';
       const sender = '+919876543210';
       const receivedAt = new Date().toISOString();
 
-      // In Part D, raw message is preserved with sender and receivedAt
       assert.equal(typeof rawBody, 'string');
       assert.equal(typeof sender, 'string');
       assert.ok(receivedAt);
@@ -280,9 +257,6 @@ describe('YOUPI PG V2 — Production Infrastructure Finalization (Part L Accepta
     });
   });
 
-  // ============================================================
-  // GROUP 5: GMAIL OAUTH & RAW OBSERVATION FORWARDING (Acceptance 34 - 44)
-  // ============================================================
   describe('Group 5: Gmail OAuth & Direct API Observation', () => {
     test('35: Production Gmail redirect URI derived as pay-gmail.example.com/oauth/callback', () => {
       const prodUrls = resolveRuntimeUrls({ envMode: 'production', domain: 'example.com', prefix: 'pay' });
@@ -315,7 +289,6 @@ describe('YOUPI PG V2 — Production Infrastructure Finalization (Part L Accepta
         }
       });
 
-      // Reload
       const reloaded = merchantRepo.findById(merchantId);
       const gmailConfig = reloaded.branding?.gmailConfig || {};
       assert.equal(gmailConfig.refreshToken, testRefreshToken);
@@ -332,7 +305,6 @@ describe('YOUPI PG V2 — Production Infrastructure Finalization (Part L Accepta
         date: new Date().toISOString()
       };
 
-      // Raw observation payload structure
       const payload = {
         messageId: email.id,
         subject: email.subject,
@@ -350,9 +322,6 @@ describe('YOUPI PG V2 — Production Infrastructure Finalization (Part L Accepta
     });
   });
 
-  // ============================================================
-  // GROUP 6: STARTUP PROFILE & CHROME OBSERVER SUPPRESSION (Acceptance 45 - 49)
-  // ============================================================
   describe('Group 6: Production Startup Profile & Legacy Isolation', () => {
     test('45, 46, 47: Browser automator does not auto-launch Chrome when ENABLE_LEGACY_CHROME_OBSERVERS is not set', async () => {
       delete process.env.ENABLE_LEGACY_CHROME_OBSERVERS;
@@ -362,7 +331,6 @@ describe('YOUPI PG V2 — Production Infrastructure Finalization (Part L Accepta
       const gmailBot = new GmailBrowserAutomator({ gmailPoller: {} });
       const smsBot = new GoogleMessagesAutomator({ smsService: {} });
 
-      // Launch window should decline without throwing crash
       const gResult = gmailBot.launchLoginWindow();
       const sResult = smsBot.launchPairingWindow();
 

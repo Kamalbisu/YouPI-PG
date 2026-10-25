@@ -2,9 +2,6 @@ import crypto from 'node:crypto';
 import { ObservationAttributionStatus } from '@youpi/common';
 
 export class ObservationRepository {
-  /**
-   * @param {import('../database.js').Database} db
-   */
   constructor(db) {
     this.db = db;
   }

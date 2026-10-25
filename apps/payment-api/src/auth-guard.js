@@ -1,10 +1,8 @@
 import { getAdminToken, getObserverToken, safeEqual, hasBearer } from '@youpi/common';
 import { HttpServer } from './server.js';
 
-/** Admin-prefixed routes that are intentionally public (static APK download for pairing). */
 const PUBLIC_ADMIN_PATHS = new Set(['/api/v1/admin/sms-gateway/download-apk']);
 
-/** Admin-prefixed routes the local observer processes call with the observer token. */
 const OBSERVER_ADMIN_PATHS = new Set(['/api/v1/admin/gmail/credentials']);
 
 function bearerToken(req) {
@@ -17,10 +15,6 @@ function isDevTool(pathname) {
   return pathname.startsWith('/api/v1/admin/dev/') || /^\/api\/v1\/checkout\/[^/]+\/simulate-observation$/.test(pathname);
 }
 
-/**
- * Decides which credential a request needs.
- * @returns {null | 'admin' | 'observer'} null = public, 'observer' = admin OR observer token
- */
 function requiredLevel(method, pathname) {
   if (pathname.startsWith('/api/v1/admin/')) {
     if (PUBLIC_ADMIN_PATHS.has(pathname)) return null;
@@ -28,19 +22,13 @@ function requiredLevel(method, pathname) {
     return 'admin';
   }
   if (method === 'POST' && pathname === '/api/v1/pollers/events') return 'observer';
-  // Injects a synthetic bank message into the real verification pipeline.
   if (method === 'POST' && /^\/api\/v1\/checkout\/[^/]+\/simulate-observation$/.test(pathname)) return 'admin';
   return null;
 }
 
-/**
- * Guard for HttpServer.use(). Admin credential = ADMIN_API_TOKEN (or data/.secrets/admin_api_token).
- * Observer credential = OBSERVER_API_TOKEN (or data/.secrets/observer_api_token); admin token also satisfies it.
- */
 export function authGuard(req, res, pathname, url) {
   const method = req.method.toUpperCase();
 
-  // Developer simulators push synthetic bank messages into the real pipeline and can settle live sessions.
   if (method !== 'GET' && isDevTool(pathname) && (process.env.NODE_ENV === 'production' || process.env.YOUPI_MODE === 'production') && process.env.YOUPI_ALLOW_DEV_TOOLS !== 'true') {
     HttpServer.json(res, 403, { error: 'Developer tools are disabled in production.', code: 'DEV_TOOLS_DISABLED' });
     return true;
@@ -49,10 +37,6 @@ export function authGuard(req, res, pathname, url) {
   const level = requiredLevel(method, pathname);
   if (!level) return false;
 
-  // The token is only ever accepted from the Authorization header. Accepting it from a
-  // query parameter put an admin credential into access logs, browser history and Referer
-  // headers; the admin dashboard now opens its streams with fetch() so the credential
-  // travels in the header only.
   const presented = bearerToken(req);
 
   const ok = presented && (
@@ -65,27 +49,16 @@ export function authGuard(req, res, pathname, url) {
   return true;
 }
 
-/** True only when the request carries the admin token (observer token is not enough). */
 export function isAdminRequest(req) {
   const presented = bearerToken(req);
   return Boolean(presented) && safeEqual(presented, getAdminToken());
 }
 
-/** True only when the request carries the observer token and is not the admin token. */
 export function isObserverRequest(req) {
   const presented = bearerToken(req);
   return Boolean(presented) && safeEqual(presented, getObserverToken()) && !safeEqual(presented, getAdminToken());
 }
 
-/**
- * True when the caller may read the merchant-private fields of a payment session.
- *
- * Requires proof of ownership: either the gateway's own admin/observer credential, or the
- * owning merchant's webhook secret presented via `X-Merchant-Key` (which every merchant
- * integration already holds). Without it, only the public view is returned, so a leaked or
- * guessed payment id cannot be used to read internal status, verification internals,
- * merchant metadata or the return URL.
- */
 export function isPaymentOwner(req, session, ctx) {
   if (isAdminRequest(req)) return true;
   if (hasBearer(req, getObserverToken())) return true;

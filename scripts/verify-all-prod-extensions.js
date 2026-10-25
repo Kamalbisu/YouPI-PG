@@ -17,12 +17,10 @@ async function verifyProductionExtensions() {
   console.log(`🔍 VERIFYING PRODUCTION EXTENSIONS (${dbPath})`);
   console.log('============================================================');
 
-  // 1. Check 30 Providers Registry
   const providers = getUpiProviders();
   assert.equal(providers.length, 30, 'Must have exactly 30 registered UPI providers');
   console.log(`[✓] 30 UPI Providers verified in Production`);
 
-  // Verify PhonePe intent format
   const phonepe = findUpiProviderById('phonepe');
   assert.ok(phonepe);
   assert.equal(phonepe.packageName, 'com.phonepe.app');
@@ -41,10 +39,8 @@ async function verifyProductionExtensions() {
   assert.ok(testIntent.includes('package=com.phonepe.app'));
   assert.ok(testIntent.endsWith('#Intent;scheme=upi;package=com.phonepe.app;end'));
 
-  // 2. Check Production Database
   const prodDb = new Database({ dbPath });
 
-  // Apply migration column if not yet present
   try { prodDb.exec('ALTER TABLE payment_receiving_accounts ADD COLUMN is_merchant_enabled INTEGER NOT NULL DEFAULT 1;'); } catch {}
   try { prodDb.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_single_active_vpa_per_merchant ON payment_receiving_accounts (merchant_id) WHERE is_active = 1;'); } catch {}
 
@@ -66,7 +62,6 @@ async function verifyProductionExtensions() {
   console.log('   Merchant-Enabled: ', activeAccount.isMerchantEnabled);
   console.log('   Is Active:        ', activeAccount.isActive);
 
-  // 3. Test Multi-VPA and Single Active Enforcement on in-memory DB
   console.log('\n[✓] Testing Atomic Single-Active VPA Enforcement on In-Memory DB...');
   const memDb = new Database({ inMemory: true });
   memDb.exec(`
@@ -89,7 +84,6 @@ async function verifyProductionExtensions() {
   const memRepo = new ReceivingAccountRepository(memDb);
   const mId = merchant.id;
 
-  // Add VPA 1 (Merchant Mode)
   const acc1 = memRepo.create({
     merchantId: mId,
     upiId: 'merchant@axl',
@@ -100,7 +94,6 @@ async function verifyProductionExtensions() {
   assert.equal(memRepo.findActiveForMerchant(mId).id, acc1.id);
   assert.equal(memRepo.findActiveForMerchant(mId).isMerchantEnabled, true);
 
-  // Add VPA 2 (Non-Merchant Mode, Active) -> acc1 must automatically deactivate!
   const acc2 = memRepo.create({
     merchantId: mId,
     upiId: 'personal@paytm',
@@ -112,7 +105,6 @@ async function verifyProductionExtensions() {
   assert.equal(memRepo.findActiveForMerchant(mId).isMerchantEnabled, false);
   assert.equal(memRepo.findById(acc1.id).isActive, false);
 
-  // Switch back to acc1
   memRepo.activateAccount(mId, acc1.id);
   assert.equal(memRepo.findActiveForMerchant(mId).id, acc1.id);
   assert.equal(memRepo.findById(acc2.id).isActive, false);

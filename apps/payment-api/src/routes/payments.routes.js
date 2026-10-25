@@ -4,22 +4,7 @@ import { isTerminalStatus, toPublicOutcome, verifyRegisteredDeviceCredentials } 
 import { isAdminRequest, isPaymentOwner } from '../auth-guard.js';
 import { createRateLimiter, envLimit, getClientIp } from '../rate-limit.js';
 
-/**
- * Registers merchant-facing payment routes.
- * @param {HttpServer} server
- * @param {{
- *   merchantRepo: import('@youpi/db').MerchantRepository,
- *   accountRepo: import('@youpi/db').ReceivingAccountRepository,
- *   sessionRepo: import('@youpi/db').PaymentSessionRepository,
- *   queueEngine: import('@youpi/core').QueueEngine,
- *   timingEngine: import('@youpi/core').TimingEngine,
- *   auditRepo: import('@youpi/db').AuditLogRepository,
- *   checkoutBaseUrl: string
- * }} ctx
- */
 export function registerPaymentRoutes(server, ctx) {
-  // Anonymous (credential-less) payment creation is open by design for the browser SDK, so it
-  // is throttled per client address. Requests carrying a merchant key or order token are not.
   const anonymousCreateMax = envLimit('YOUPI_RATE_LIMIT_ANON_PAYMENTS_PER_MIN', 60);
   const anonymousCreateLimiter = createRateLimiter({ windowMs: 60 * 1000, max: anonymousCreateMax });
 
@@ -33,12 +18,10 @@ export function registerPaymentRoutes(server, ctx) {
     return ctx.checkoutBaseUrl || 'http://localhost:7000';
   }
 
-  // POST /api/v1/payments
   server.post('/api/v1/payments', async (req, res) => {
     const body = await HttpServer.parseBody(req);
     const idempotencyKey = req.headers['idempotency-key'] || body.idempotencyKey;
 
-    // Resolve merchant (default to first/demo merchant if none passed in header)
     const merchantId = req.headers['x-merchant-id'] || body.merchantId;
     let merchant;
     if (merchantId) {
@@ -83,11 +66,6 @@ export function registerPaymentRoutes(server, ctx) {
         HttpServer.json(res, 429, { error: 'Too many payment requests. Please try again in a minute.', code: 'RATE_LIMITED' });
         return;
       }
-      // No credential was presented. The public one-script integration (the browser SDK)
-      // cannot carry a merchant secret, so this path stays open - but only for the
-      // gateway's own default merchant. Naming a different merchant requires that
-      // merchant's key (or an order token), so an anonymous caller still cannot inject
-      // sessions into another tenant's queue.
       const defaultMerchant = ctx.merchantRepo.getDefault
         ? ctx.merchantRepo.getDefault()
         : (ctx.merchantRepo.findById('00000000-0000-0000-0000-000000000001') || ctx.merchantRepo.findAll()[0]);
@@ -129,9 +107,6 @@ export function registerPaymentRoutes(server, ctx) {
       }
     }
 
-    // returnUrl is echoed back to the customer's browser as a redirect target after
-    // payment, so only absolute http(s) URLs are ever stored. This is the write-side
-    // complement to the checkout page's sanitizeRedirectUrl.
     if (body.returnUrl !== undefined && body.returnUrl !== null && body.returnUrl !== '') {
       if (typeof body.returnUrl !== 'string') {
         HttpServer.json(res, 400, { error: 'returnUrl must be a string.' });
@@ -173,7 +148,6 @@ export function registerPaymentRoutes(server, ctx) {
       }
     }
 
-    // Check idempotency & active session state
     const existing = ctx.sessionRepo.findByOrderId(merchant.id, body.orderId);
     if (existing) {
       const existingCurrency = (existing.currency || 'INR').toUpperCase();
@@ -186,7 +160,6 @@ export function registerPaymentRoutes(server, ctx) {
         return;
       }
 
-      // If SUCCESS: order is already paid, return existing completed session
       if (existing.status === PaymentStatus.SUCCESS) {
         HttpServer.json(res, 200, {
           paymentId: existing.id,
@@ -200,7 +173,6 @@ export function registerPaymentRoutes(server, ctx) {
         return;
       }
 
-      // Check if existing session is stale
       const now = Date.now();
       const isStale = (existing.status === PaymentStatus.ACTIVE && existing.expiresAt && existing.expiresAt.getTime() <= now) ||
         (existing.status === PaymentStatus.PROCESSING && existing.processingExpiresAt && existing.processingExpiresAt.getTime() <= now);
@@ -221,9 +193,7 @@ export function registerPaymentRoutes(server, ctx) {
         }
       }
 
-      // If existing is non-terminal (ACTIVE, PROCESSING, QUEUED, INITIATED):
       if ([PaymentStatus.ACTIVE, PaymentStatus.PROCESSING, PaymentStatus.QUEUED, PaymentStatus.INITIATED].includes(existing.status)) {
-        // CASE 3: Active session bound to a device + missing or different device -> DUPLICATE_SESSION_DETECTED
         if (existing.deviceId && (!deviceId || deviceId !== existing.deviceId)) {
           HttpServer.json(res, 409, {
             error: 'DUPLICATE_SESSION_DETECTED',
@@ -240,7 +210,6 @@ export function registerPaymentRoutes(server, ctx) {
           return;
         }
 
-        // CASE 2: Active session + Same device -> CONTINUE ACTIVE SESSION
         HttpServer.json(res, 200, {
           paymentId: existing.id,
           orderId: existing.orderId,
@@ -254,8 +223,6 @@ export function registerPaymentRoutes(server, ctx) {
         return;
       }
 
-      // CASE 4: Previous session is TERMINAL (FAILED, EXPIRED, CANCELLED) -> RETRY / NEW ATTEMPT!
-      // Invariant: Keep merchant's exact orderId untouched so webhooks, reconciliations, and reporting align.
       body.orderId = body.orderId.replace(/-R\d+$/, '');
     }
 
@@ -264,7 +231,6 @@ export function registerPaymentRoutes(server, ctx) {
     let receivingAccountId = null;
     let receivingAccountSnapshot = null;
     if (!isCounterPayment) {
-      // Resolve active receiving account for UPI
       const receivingAccount = ctx.accountRepo.findActiveForMerchant(merchant.id);
       if (!receivingAccount) {
         HttpServer.json(res, 500, { error: 'No active UPI receiving account configured for merchant.' });
@@ -279,7 +245,6 @@ export function registerPaymentRoutes(server, ctx) {
       };
     }
 
-    // Resolve customer if provided (optional pre-existing customer)
     let customerId = body.customerId || null;
     if (!customerId && (body.customer?.mobileNumber || body.customer?.phoneNumber || body.customer?.email) && ctx.customerRepo) {
       const ident = body.customer.email || body.customer.mobileNumber || body.customer.phoneNumber;
@@ -289,7 +254,6 @@ export function registerPaymentRoutes(server, ctx) {
       }
     }
 
-    // Server-side Ban Enforcement (Section 3)
     if (customerId && ctx.customerRepo && ctx.customerRepo.isBanned(customerId)) {
       HttpServer.json(res, 403, {
         status: 'BLOCKED',
@@ -300,7 +264,6 @@ export function registerPaymentRoutes(server, ctx) {
       return;
     }
 
-    // Check if customer already has an active payment session on another device (CASE 3)
     if (customerId && ctx.sessionRepo) {
       const activeForCust = ctx.sessionRepo.findActiveForCustomer ? ctx.sessionRepo.findActiveForCustomer(customerId) : null;
       if (activeForCust) {
@@ -322,11 +285,6 @@ export function registerPaymentRoutes(server, ctx) {
       }
     }
 
-    // Invariant: Do NOT start payment session timer until customer is authenticated/logged in!
-    // Customer sign in or sign up in the checkout portal is mandatory before slot activation or timer start.
-    // Digital UPI payments MUST ALWAYS start in status INITIATED without acquiring a concurrency slot or timer.
-    // Only physical counter payments (CASH_COUNTER, CARD_COUNTER) start as ACTIVE (they do not use UPI slots).
-    // The only exception for UPI auto-activation is explicit developer test suite flag: body.autoActivate === true.
     const shouldActivateNow = isCounterPayment || isExplicitTestAutoActivate;
     const initialStatus = isCounterPayment ? PaymentStatus.ACTIVE : PaymentStatus.INITIATED;
 
@@ -339,7 +297,6 @@ export function registerPaymentRoutes(server, ctx) {
       try { ctx.deviceRepo.associateCustomer(deviceId, customerId); } catch {}
     }
 
-    // Create session in DB
     const session = ctx.sessionRepo.create({
       merchantId: merchant.id,
       customerId,
@@ -355,12 +312,10 @@ export function registerPaymentRoutes(server, ctx) {
       metadata: sessionMetadata
     });
 
-    // Enqueue or Activate slot via QueueEngine ONLY when counter payment or explicitly requested by automated test runner
     let queueResult = { status: initialStatus, queuePosition: 0, expiresAt: null };
     if (!isCounterPayment && receivingAccountId && shouldActivateNow) {
       queueResult = ctx.queueEngine.enqueueOrActivate(session.id, receivingAccountId);
 
-      // If activated immediately, start Timer 1 (5 minutes)
       if (queueResult.expiresAt) {
         ctx.timingEngine.startActiveTimer(session.id, queueResult.expiresAt);
       }
@@ -384,7 +339,6 @@ export function registerPaymentRoutes(server, ctx) {
     });
   });
 
-  // GET /api/v1/payments/:id
   server.get('/api/v1/payments/:id', async (req, res, params) => {
     const session = ctx.sessionRepo.findById(params.id);
     if (!session) {
@@ -396,8 +350,6 @@ export function registerPaymentRoutes(server, ctx) {
       ? toPublicOutcome(session.status)
       : session.status;
 
-    // Fields any payment-id holder may read. Everything else is merchant-private: the raw
-    // state machine status, verification internals, merchant metadata and the return URL.
     const publicView = {
       paymentId: session.id,
       orderId: session.orderId,
@@ -425,7 +377,6 @@ export function registerPaymentRoutes(server, ctx) {
     });
   });
 
-  // GET /api/v1/payments/:id/cod (Developer COD Info Endpoint)
   server.get('/api/v1/payments/:id/cod', async (req, res, params) => {
     const session = ctx.sessionRepo.findById(params.id);
     if (!session) {
@@ -433,8 +384,6 @@ export function registerPaymentRoutes(server, ctx) {
       return;
     }
 
-    // Order ids are merchant-chosen and often sequential, so the delivery contact and metadata
-    // are only for the owning merchant (or the gateway); anyone else gets the order status.
     const owner = isPaymentOwner(req, session, ctx);
     let customer = null;
     if (owner && session.customerId && ctx.customerRepo) {
@@ -466,7 +415,6 @@ export function registerPaymentRoutes(server, ctx) {
     });
   });
 
-  // GET /api/v1/orders/:orderId/cod (Developer COD Info by Merchant Order ID)
   server.get('/api/v1/orders/:orderId/cod', async (req, res, params) => {
     const merchantId = req.headers['x-merchant-id'] || req.query.merchantId;
     let merchant;
@@ -487,8 +435,6 @@ export function registerPaymentRoutes(server, ctx) {
       return;
     }
 
-    // Order ids are merchant-chosen and often sequential, so the delivery contact and metadata
-    // are only for the owning merchant (or the gateway); anyone else gets the order status.
     const owner = isPaymentOwner(req, session, ctx);
     let customer = null;
     if (owner && session.customerId && ctx.customerRepo) {

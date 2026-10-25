@@ -34,7 +34,6 @@ async function runFullRegression() {
   const merchant = prodDb.queryOne('SELECT * FROM merchants');
   assert.ok(merchant, 'Production merchant must exist');
 
-  // Verify preserved production account
   const originalAccount = accountRepo.findActiveForMerchant(merchant.id);
   assert.ok(originalAccount);
   assert.ok(originalAccount.upiId);
@@ -45,7 +44,6 @@ async function runFullRegression() {
   let testPayment2 = null;
 
   try {
-    // --- 1. MULTIPLE VPA & ONLY ONE ACTIVE ENFORCEMENT ---
     console.log('\n[1] Testing Multiple VPA & Single Active Backend Enforcement...');
     testVpaB = accountRepo.create({
       merchantId: merchant.id,
@@ -59,25 +57,21 @@ async function runFullRegression() {
     assert.equal(testVpaB.isMerchantEnabled, false);
     assert.equal(testVpaB.isActive, false);
 
-    // Verify original account remains active
     let currentActive = accountRepo.findActiveForMerchant(merchant.id);
     assert.equal(currentActive.id, originalAccount.id);
     assert.equal(currentActive.isActive, true);
 
-    // List all accounts
     const allAccounts = accountRepo.findByMerchantId(merchant.id);
     assert.equal(allAccounts.length, 2, 'Merchant must have 2 saved VPAs');
     console.log('  [✓] Successfully created second VPA (Non-Merchant). Multiple VPAs allowed.');
 
-    // --- 2. DYNAMIC PAYMENT SESSION CREATION & SNAPSHOT STABILITY ---
     console.log('\n[2] Testing Payment Creation & Session Stability across VPA Switches...');
 
-    // Payment 1 created while VPA A (Merchant-enabled) is active
     testPayment1 = sessionRepo.create({
       merchantId: merchant.id,
       receivingAccountId: originalAccount.id,
       orderId: 'REG-ORD-001',
-      amountPaise: 10000n, // ₹100.00
+      amountPaise: 10000n,
       method: PaymentMethod.UPI,
       status: PaymentStatus.INITIATED,
       metadata: {
@@ -92,23 +86,20 @@ async function runFullRegression() {
     assert.equal(testPayment1.receivingAccountId, originalAccount.id);
     console.log('  [✓] Payment 1 created with VPA A (9876543210@axl, Merchant-enabled)');
 
-    // Now merchant switches active VPA to VPA B (Non-Merchant)
     console.log('  [→] Activating VPA B (Non-Merchant)...');
     accountRepo.activateAccount(merchant.id, testVpaB.id);
 
-    // Verify VPA B is active and VPA A is deactivated
     const refreshedA = accountRepo.findById(originalAccount.id);
     const refreshedB = accountRepo.findById(testVpaB.id);
     assert.equal(refreshedB.isActive, true);
     assert.equal(refreshedA.isActive, false);
     console.log('  [✓] Activating VPA B automatically deactivated VPA A.');
 
-    // Payment 2 created while VPA B (Non-Merchant) is active
     testPayment2 = sessionRepo.create({
       merchantId: merchant.id,
       receivingAccountId: testVpaB.id,
       orderId: 'REG-ORD-002',
-      amountPaise: 25000n, // ₹250.00
+      amountPaise: 25000n,
       method: PaymentMethod.UPI,
       status: PaymentStatus.INITIATED,
       metadata: {
@@ -123,7 +114,6 @@ async function runFullRegression() {
     assert.equal(testPayment2.receivingAccountId, testVpaB.id);
     console.log('  [✓] Payment 2 created with VPA B (test.personal@okhdfcbank, Non-Merchant)');
 
-    // VERIFY SESSION 1 RETAINS VPA A (HISTORICAL IMMUTABILITY)
     const session1Reloaded = sessionRepo.findById(testPayment1.id);
     assert.equal(session1Reloaded.receivingAccountId, originalAccount.id);
     const accountForSession1 = accountRepo.findById(session1Reloaded.receivingAccountId);
@@ -131,12 +121,10 @@ async function runFullRegression() {
     assert.equal(accountForSession1.isMerchantEnabled, true);
     console.log('  [✓] Session 1 immutability verified: still bound to VPA A even after VPA B was activated');
 
-    // --- 3. DYNAMIC INTENT & DEEP LINK PARAMETERS ---
     console.log('\n[3] Testing Dynamic UPI URIs & Android Intents...');
     const providers = getUpiProviders();
     assert.equal(providers.length, 30);
 
-    // Merchant Mode: App Button Android Intent
     const gpay = findUpiProviderById('google-pay');
     const intentP1 = buildUpiIntentUri({
       payeeVpa: accountForSession1.upiId,
@@ -152,7 +140,6 @@ async function runFullRegression() {
     );
     console.log('  [✓] Payment 1 Intent URI:', intentP1);
 
-    // Merchant Mode: Show More Apps Deep Link
     const deepLinkP1 = buildUpiUri({
       payeeVpa: accountForSession1.upiId,
       payeeName: accountForSession1.payeeName,
@@ -163,7 +150,6 @@ async function runFullRegression() {
     assert.equal(deepLinkP1, 'upi://pay?pa=9876543210%40axl&pn=Demo Store+Merchant&am=100.00&tn=REG-ORD-001');
     console.log('  [✓] Payment 1 Show More Apps Deep Link:', deepLinkP1);
 
-    // Non-Merchant Mode: QR Code generation
     const qrUriP2 = buildUpiUri({
       payeeVpa: testVpaB.upiId,
       payeeName: testVpaB.payeeName,
@@ -176,7 +162,6 @@ async function runFullRegression() {
     assert.ok(svgP2.includes('<svg') && svgP2.includes('</svg>'));
     console.log('  [✓] Payment 2 Non-Merchant QR SVG successfully generated (length: ' + svgP2.length + ' bytes)');
 
-    // Filename Sanitizer Test
     function buildFilename(vpa, amount, date) {
       const pad = n => n.toString().padStart(2, '0');
       const dStr = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
@@ -191,7 +176,6 @@ async function runFullRegression() {
     assert.ok(filename.endsWith('.png'));
     console.log('  [✓] Dynamic QR Download Filename Sanitizer Verified:', filename);
 
-    // --- 4. ATTRIBUTION & OBSERVATION COMPATIBILITY ---
     console.log('\n[4] Testing Observation Ingestion & Attribution Compatibility...');
     sessionRepo.acquireSlotAtomic(testPayment1.id, originalAccount.id);
 
@@ -212,7 +196,6 @@ async function runFullRegression() {
     console.log('  [✓] Attribution Engine attributed payment successfully with active receiving account');
 
   } finally {
-    // --- TEARDOWN TEST DATA & RESTORE PRISTINE PRODUCTION STATE ---
     console.log('\n[→] Cleaning up test records and restoring pristine production merchant state...');
     if (testPayment1) {
       prodDb.execute('DELETE FROM payment_observations WHERE attributed_payment_id = ?', [testPayment1.id]);
@@ -225,7 +208,6 @@ async function runFullRegression() {
       prodDb.execute('DELETE FROM payment_receiving_accounts WHERE id = ?', [testVpaB.id]);
     }
 
-    // Re-activate original VPA
     accountRepo.activateAccount(merchant.id, originalAccount.id);
     prodDb.execute('UPDATE payment_receiving_accounts SET is_slot_busy = 0, current_active_session_id = NULL');
     prodDb.execute("DELETE FROM audit_logs WHERE entity_type IN ('PAYMENT_SESSION', 'PAYMENT_OBSERVATION')");

@@ -55,7 +55,6 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         apiClient = new ApiClient(this);
 
-        // Build premium, responsive modern UI programmatically
         ScrollView scrollView = new ScrollView(this);
         scrollView.setFillViewport(true);
         scrollView.setBackgroundColor(Color.parseColor("#090d16"));
@@ -64,7 +63,6 @@ public class MainActivity extends Activity {
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(40, 48, 40, 48);
 
-        // Header Title
         TextView tvTitle = new TextView(this);
         tvTitle.setText("YOUPI SMS Gateway");
         tvTitle.setTextColor(Color.WHITE);
@@ -79,7 +77,6 @@ public class MainActivity extends Activity {
         tvSubtitle.setPadding(0, 4, 0, 32);
         root.addView(tvSubtitle);
 
-        // Status Card
         LinearLayout cardStatus = createCard();
         tvStatusBadge = new TextView(this);
         tvStatusBadge.setText("STATUS: CHECKING...");
@@ -95,7 +92,6 @@ public class MainActivity extends Activity {
         cardStatus.addView(tvDeviceDetails);
         root.addView(cardStatus);
 
-        // Required Permissions Card (Battery Optimisation, Background, Notifications, SMS)
         LinearLayout cardPerms = createCard();
         TextView tvPermTitle = new TextView(this);
         tvPermTitle.setText("System Permissions Checklist");
@@ -143,7 +139,6 @@ public class MainActivity extends Activity {
 
         root.addView(cardPerms);
 
-        // Pairing Form Card
         LinearLayout cardPairing = createCard();
         TextView tvPairTitle = new TextView(this);
         tvPairTitle.setText("Pair SMS Gateway");
@@ -159,7 +154,6 @@ public class MainActivity extends Activity {
         tvPairDesc.setPadding(0, 4, 0, 16);
         cardPairing.addView(tvPairDesc);
 
-        // Primary: SCAN PAIRING QR
         btnScanQr = createPrimaryButton("📷 SCAN PAIRING QR");
         btnScanQr.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -169,7 +163,6 @@ public class MainActivity extends Activity {
         });
         cardPairing.addView(btnScanQr);
 
-        // Optional / Manual fallback controls
         TextView lblManual = createLabel("Manual Pairing Credentials (Optional):");
         lblManual.setPadding(0, 16, 0, 4);
         cardPairing.addView(lblManual);
@@ -205,7 +198,6 @@ public class MainActivity extends Activity {
 
         root.addView(cardPairing);
 
-        // Test SMS Trigger Button
         Button btnTestSms = createAccentButton("Dispatch Test Bank Credit SMS");
         btnTestSms.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -218,10 +210,8 @@ public class MainActivity extends Activity {
         scrollView.addView(root);
         setContentView(scrollView);
 
-        // Start Foreground Service daemon
         ForegroundService.start(this);
 
-        // Check & prompt permissions on launch
         checkAndPromptRuntimePermissions();
     }
 
@@ -249,7 +239,6 @@ public class MainActivity extends Activity {
             btnUnpairDevice.setVisibility(View.GONE);
         }
 
-        // Battery optimization status
         boolean batteryExempt = isBatteryOptimizationExempt();
         if (batteryExempt) {
             tvBatteryStatus.setText("🔋 Battery Optimization: EXEMPTED (Always Run in Background Active)");
@@ -261,7 +250,6 @@ public class MainActivity extends Activity {
             btnBatteryOpt.setVisibility(View.VISIBLE);
         }
 
-        // Notification permission status
         boolean hasNotif = true;
         if (Build.VERSION.SDK_INT >= 33) {
             hasNotif = checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED;
@@ -274,7 +262,6 @@ public class MainActivity extends Activity {
             tvNotificationStatus.setTextColor(Color.parseColor("#ef4444"));
         }
 
-        // SMS permission status
         boolean hasSms = checkSelfPermission(Manifest.permission.RECEIVE_SMS) == PackageManager.PERMISSION_GRANTED &&
                          checkSelfPermission(Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED;
         if (hasSms) {
@@ -340,7 +327,6 @@ public class MainActivity extends Activity {
         if (!perms.isEmpty()) {
             requestPermissions(perms.toArray(new String[0]), REQ_PERMISSIONS);
         } else {
-            // Check battery optimization exemption
             if (!isBatteryOptimizationExempt()) {
                 requestBatteryOptimizationExemption();
             }
@@ -504,7 +490,6 @@ public class MainActivity extends Activity {
         }).start();
     }
 
-    // UI Helper factories
     private LinearLayout createCard() {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);

@@ -52,7 +52,6 @@ describe('Android Payment Observer Integration Tests', () => {
   });
 
   test('rejects observation with expired/drifted timestamp (Replay Protection)', async () => {
-    // Timestamp 2 minutes in the past (> 60s drift)
     const oldTimestamp = Date.now() - 120000;
     const res = await driver.submitObservation({
       amount: '200.00',
@@ -64,7 +63,6 @@ describe('Android Payment Observer Integration Tests', () => {
   });
 
   test('submits valid HMAC-signed observation and confirms payment in Payment API', async () => {
-    // 1. Create and activate a payment session for ₹350
     const session = apiInstance.app.context.sessionRepo.create({
       merchantId: '00000000-0000-0000-0000-000000000001',
       receivingAccountId: '00000000-0000-0000-0000-000000000002',
@@ -75,7 +73,6 @@ describe('Android Payment Observer Integration Tests', () => {
     apiInstance.app.context.queueEngine.enqueueOrActivate(session.id, '00000000-0000-0000-0000-000000000002');
     apiInstance.app.context.timingEngine.handlePaymentDone(session.id);
 
-    // 2. Android observer submits observation for ₹350
     const res = await driver.submitObservation({
       amount: '350.00',
       receivingAccountId: '00000000-0000-0000-0000-000000000002',
@@ -90,7 +87,6 @@ describe('Android Payment Observer Integration Tests', () => {
     assert.equal(res.body.attribution.paymentSessionId, session.id);
     assert.equal(res.body.attribution.outcomeStatus, PaymentStatus.SUCCESS);
 
-    // 3. Verify session in DB updated to SUCCESS
     const updated = apiInstance.app.context.sessionRepo.findById(session.id);
     assert.equal(updated.status, PaymentStatus.SUCCESS);
   });

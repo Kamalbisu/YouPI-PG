@@ -11,7 +11,6 @@ import { renderTemplate as renderStoreTemplate } from '../../../coin-wallet-stor
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Payloads that must never escape their interpolation context.
 const HOSTILE_VALUES = [
   '<script>alert(1)</script>',
   '"><img src=x onerror=alert(1)>',
@@ -27,13 +26,8 @@ const HOSTILE_VALUES = [
   '$& $` $\' $$'
 ];
 
-// The subset that can break out of its context at all. A payload with no
-// markup-significant character (e.g. `javascript:alert(1)`) is inert as text,
-// so it is expected to survive verbatim.
 const BREAKOUT_VALUES = HOSTILE_VALUES.filter(v => /[<>"'\\]/.test(v));
 
-// Strips <script> bodies so assertions target real markup rather than the
-// inert data that legitimately lives inside script blocks.
 function markupOnly(html) {
   return html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '<script></script>');
 }
@@ -119,7 +113,6 @@ describe('Checkout Portal XSS / Redirect Hardening', () => {
 
   describe('renderTemplate replacement patterns', () => {
     test('inserts $& literally instead of expanding it as a replacement pattern', () => {
-      // Escaped, but crucially not expanded: `$&` would have re-inserted "{{X}}".
       const out = renderTemplate('<p>{{X}}</p>', { X: '$& $` $\' $$' });
       assert.equal(out, '<p>$&amp; $` $&#39; $$</p>');
       assert.equal(out.includes('{{X}}'), false);
@@ -141,7 +134,6 @@ describe('Checkout Portal XSS / Redirect Hardening', () => {
       const res = await get(`/checkout/${hostile}`);
 
       assert.equal(res.status, 200);
-      // The quote can never close the literal, so the injected code is not code.
       assert.equal(res.text.includes('";alert(1);//"'), false);
       assert.ok(res.text.includes('const PAYMENT_ID = "'));
     });
@@ -174,22 +166,17 @@ describe('Checkout Portal XSS / Redirect Hardening', () => {
           branding: { appName: payload, sidebarNotice: payload, counterInstructions: payload }
         });
 
-        // The raw payload must not survive anywhere in real markup: escaping
-        // turns every <, >, " and ' into an entity.
         assert.equal(markupOnly(html).includes(payload), false, `payload leaked: ${payload}`);
       }
     });
 
     test('neutralises hostile amounts embedded inside script string literals', () => {
-      // Only tag-forming payloads are checked verbatim here: a quote-only value
-      // is escaped to \', which still contains the original quote characters.
       const tagForming = BREAKOUT_VALUES.filter(v => /[<>]/.test(v));
 
       for (const payload of tagForming) {
         const html = server.renderHtml('pay_1', { orderId: 'ORDER-1', amount: payload });
 
         assert.equal(html.includes('</script><script>'), false, `payload leaked: ${payload}`);
-        // escapeJsString rewrites < and >, so no raw tag can appear anywhere.
         assert.equal(html.includes(payload), false, `payload leaked verbatim: ${payload}`);
       }
     });
@@ -200,7 +187,6 @@ describe('Checkout Portal XSS / Redirect Hardening', () => {
         orderId: '$& $` $\' $$'
       });
 
-      // $& would otherwise expand to the matched placeholder token itself.
       assert.equal(html.includes('$&'), true);
       assert.equal(html.includes('{{ORDER_ID}}'), false);
       assert.equal(html.includes('{{MERCHANT_NAME}}'), false);
@@ -241,8 +227,6 @@ describe('Checkout Portal XSS / Redirect Hardening', () => {
     test('no postMessage is broadcast to a wildcard origin', () => {
       assert.equal(/postMessage\([^)]*['"]\*['"]\)/.test(view), false);
       assert.ok(view.includes('function postToMerchant(message)'));
-      // Payment data must never be broadcast: when the merchant origin cannot be
-      // resolved the message is dropped instead of posted to '*'.
       assert.ok(view.includes('if (!target) return;'));
       assert.ok(view.includes('window.parent.postMessage(message, target);'));
     });
@@ -303,7 +287,6 @@ describe('Checkout Portal XSS / Redirect Hardening', () => {
     });
 
     test('store renderTemplate inserts replacement patterns literally', () => {
-      // Escaped, but `$&` must not be expanded back into the placeholder token.
       const out = renderStoreTemplate('<p>{{X}}</p>', { X: '$& $` $\' $$' });
       assert.equal(out, '<p>$&amp; $` $&#39; $$</p>');
       assert.equal(out.includes('{{X}}'), false);
@@ -316,7 +299,6 @@ describe('Checkout Portal XSS / Redirect Hardening', () => {
       'utf8'
     );
 
-    // Evaluate the real helper implementations lifted out of admin.html.
     const helpers = new Function(`
       ${view.match(/function escapeHtml\(str\) \{[\s\S]*?\n    \}/)[0]}
       ${view.match(/function escapeHtmlValue\(str\) \{[\s\S]*?\n    \}/)[0]}
@@ -327,8 +309,6 @@ describe('Checkout Portal XSS / Redirect Hardening', () => {
 
     test('jsArg produces a single JS string literal for a quote-breakout payload', () => {
       const attr = helpers.jsArg('x"); alert(1); //');
-      // Browser decodes entities before running the handler, so decode and check
-      // that what lands in JS is exactly one string literal.
       const decoded = attr
         .replace(/&lt;/g, '<')
         .replace(/&gt;/g, '>')
@@ -350,13 +330,10 @@ describe('Checkout Portal XSS / Redirect Hardening', () => {
     });
 
     test('jsArg leaves an ordinary value readable', () => {
-      // Entities are decoded by the HTML parser before the handler runs, so this
-      // reaches JS as exactly the string literal "pay_abc123".
       assert.equal(helpers.jsArg('pay_abc123'), '&quot;pay_abc123&quot;');
     });
 
     test('the previously unescaped sinks are all escaped', () => {
-      // Both escapeHtml and escapeHtmlValue escape for HTML text content; either is acceptable.
       const has = (a, b) => view.includes(a) || (b !== undefined && view.includes(b));
       assert.ok(has('Order #${escapeHtml(q.orderId)}', 'Order #${escapeHtmlValue(q.orderId)}'));
       assert.ok(has('<td>${escapeHtml(p.method)}</td>', '<td>${escapeHtmlValue(p.method)}</td>'));
@@ -371,9 +348,6 @@ describe('Checkout Portal XSS / Redirect Hardening', () => {
       const handlers = view.match(/onclick="[^"]*\$\{[^"]*"/g) || [];
       assert.ok(handlers.length > 0, 'expected to find inline handlers to check');
       for (const handler of handlers) {
-        // jsArg builds a single string literal that survives HTML entity decoding.
-        // escapeHtml inside a handler argument is NOT safe: the browser decodes
-        // entities before the handler runs, so a quote still breaks out.
         assert.ok(
           /\$\{jsArg\(/.test(handler),
           `handler argument is not built with jsArg: ${handler}`

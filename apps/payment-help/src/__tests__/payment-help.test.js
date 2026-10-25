@@ -71,7 +71,6 @@ describe('Customer Payment Help Portal Integration Tests', () => {
       assert.equal(res.status, 200);
       assert.ok(res.headers['content-type'].includes('text/html'));
       assert.ok(res.text.includes('Feature not available'));
-      // Verify old customer help portal elements are completely absent
       assert.equal(res.text.includes('Live Support'), false);
       assert.equal(res.text.includes('Claim Deducted Payment'), false);
       assert.equal(res.text.includes('Customer Sign In'), false);

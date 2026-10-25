@@ -1,6 +1,3 @@
-/**
- * Internal high-resolution payment session lifecycle states.
- */
 export enum PaymentStatus {
   INITIATED = 'INITIATED',
   QUEUED = 'QUEUED',
@@ -12,9 +9,6 @@ export enum PaymentStatus {
   CANCELLED = 'CANCELLED'
 }
 
-/**
- * Public-facing payment outcomes consumed by external merchants.
- */
 export enum PublicPaymentOutcome {
   SUCCESS = 'SUCCESS',
   FAILED = 'FAILED',
@@ -22,9 +16,6 @@ export enum PublicPaymentOutcome {
   CANCELLED = 'CANCELLED'
 }
 
-/**
- * Supported payment modalities.
- */
 export enum PaymentMethod {
   UPI = 'UPI',
   COD = 'COD',
@@ -32,18 +23,11 @@ export enum PaymentMethod {
   CARD_COUNTER = 'CARD_COUNTER'
 }
 
-/**
- * Merchant gateway selling modes.
- */
 export enum SellingMode {
   ONLINE = 'ONLINE',
   OFFLINE = 'OFFLINE'
 }
 
-/**
- * Observation channel sources feeding the payment detection engine (2-Layer: SMS + Gmail).
- * Android observer layer is completely removed.
- */
 export enum ObserverSource {
   GMAIL = 'GMAIL',
   GOOGLE_MESSAGES = 'GOOGLE_MESSAGES',
@@ -52,9 +36,6 @@ export enum ObserverSource {
   MANUAL_COUNTER = 'MANUAL_COUNTER'
 }
 
-/**
- * Attribution status for raw observations.
- */
 export enum ObservationAttributionStatus {
   UNATTRIBUTED = 'UNATTRIBUTED',
   ATTRIBUTED = 'ATTRIBUTED',
@@ -62,9 +43,6 @@ export enum ObservationAttributionStatus {
   DUPLICATE_IGNORED = 'DUPLICATE_IGNORED'
 }
 
-/**
- * Support ticket lifecycle states.
- */
 export enum TicketStatus {
   OPEN = 'OPEN',
   IN_PROGRESS = 'IN_PROGRESS',
@@ -72,17 +50,11 @@ export enum TicketStatus {
   CLOSED = 'CLOSED'
 }
 
-/**
- * Live chat message sender identity type.
- */
 export enum SenderType {
   CUSTOMER = 'CUSTOMER',
   ADMIN = 'ADMIN'
 }
 
-/**
- * Audit log actor classifications.
- */
 export enum AuditActorType {
   SYSTEM = 'SYSTEM',
   CUSTOMER = 'CUSTOMER',
