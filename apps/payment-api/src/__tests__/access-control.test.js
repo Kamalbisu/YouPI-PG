@@ -142,4 +142,16 @@ describe('access control hardening', () => {
     assert.equal(late.status, 200);
     assert.equal(late.body.status, 'EXPIRED');
   });
+
+  test('M10: developer tools are blocked when YOUPI_MODE=production even if NODE_ENV is not', async () => {
+    const prevMode = process.env.YOUPI_MODE;
+    process.env.YOUPI_MODE = 'production';
+    try {
+      const res = await call('/api/v1/admin/dev/anything', { method: 'POST', headers: admin, body: {} });
+      assert.equal(res.status, 403);
+      assert.equal(res.body.code, 'DEV_TOOLS_DISABLED');
+    } finally {
+      process.env.YOUPI_MODE = prevMode;
+    }
+  });
 });
