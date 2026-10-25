@@ -197,8 +197,12 @@ export class CustomerRepository {
     if (!normalized) return null;
     const now = new Date().toISOString();
     this.db.execute(
-      'UPDATE customers SET otp_code = ?, otp_expires_at = ?, otp_attempts = 0, updated_at = ? WHERE mobile_number = ?',
-      [encryptAtRest(otpCode), expiresAt, now, normalized]
+      // Keep the guess count while the previous code is still live: resending must not refill
+      // the attempt budget, otherwise an attacker gets a fresh set of guesses per resend.
+      `UPDATE customers SET otp_code = ?, otp_expires_at = ?,
+         otp_attempts = CASE WHEN otp_code IS NOT NULL AND otp_expires_at IS NOT NULL AND otp_expires_at > ? THEN otp_attempts ELSE 0 END,
+         updated_at = ? WHERE mobile_number = ?`,
+      [encryptAtRest(otpCode), expiresAt, now, now, normalized]
     );
     return this.findByMobile(normalized);
   }

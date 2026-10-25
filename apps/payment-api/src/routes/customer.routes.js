@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { HttpServer } from '../server.js';
+import { createRateLimiter, envLimit, getClientIp } from '../rate-limit.js';
 import { normalizeEmail, normalizeMobile, isValidEmail, isValidMobile, isValidPassword, safeEqual } from '@youpi/common';
 
 /** Wrong guesses tolerated per issued OTP challenge. */
@@ -59,20 +60,32 @@ export function registerCustomerRoutes(server, ctx) {
   // Throttles OTP dispatch per mobile number so the WhatsApp channel cannot be flooded/cost-abused.
   const otpRequestLog = new Map();
 
-  // Throttles check-user inquiries to prevent bulk mobile number scanning / user enumeration.
-  const checkUserRateMap = new Map();
-  const checkUserRateCleaner = setInterval(() => {
-    const now = Date.now();
-    for (const [ip, timestamps] of checkUserRateMap) {
-      const active = Array.isArray(timestamps) ? timestamps.filter(t => now - t < 60000) : [];
-      if (active.length === 0) {
-        checkUserRateMap.delete(ip);
-      } else {
-        checkUserRateMap.set(ip, active);
-      }
+  // Bounded limiters (the key tables are capped, see rate-limit.js). All of them key on the
+  // client address from getClientIp, which honours CF-Connecting-IP only when
+  // YOUPI_TRUST_PROXY_HEADERS=true.
+  // check-user: prevents bulk mobile number scanning / user enumeration.
+  const checkUserMax = envLimit('YOUPI_RATE_LIMIT_CHECK_USER_PER_MIN', 60);
+  const checkUserLimiter = createRateLimiter({ windowMs: 60 * 1000, max: checkUserMax });
+  // send-otp: caps WhatsApp OTP dispatch per number and per client address per hour.
+  const otpPerMobileMax = envLimit('YOUPI_RATE_LIMIT_OTP_PER_MOBILE_PER_HOUR', 5);
+  const otpPerMobileLimiter = createRateLimiter({ windowMs: 60 * 60 * 1000, max: otpPerMobileMax });
+  const otpPerIpMax = envLimit('YOUPI_RATE_LIMIT_OTP_PER_IP_PER_HOUR', 30);
+  const otpPerIpLimiter = createRateLimiter({ windowMs: 60 * 60 * 1000, max: otpPerIpMax });
+  // verify-otp / login / register: slow down guessing and mass account creation.
+  const authAttemptMax = envLimit('YOUPI_RATE_LIMIT_AUTH_PER_IP_PER_15MIN', 30);
+  const authAttemptLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: authAttemptMax });
+  // login failures per account identifier (lockout with the window as the backoff).
+  const loginFailureMax = envLimit('YOUPI_RATE_LIMIT_LOGIN_FAILURES_PER_15MIN', 10);
+  const loginFailureLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: loginFailureMax });
+
+  function tooManyAuthAttempts(req, res) {
+    if (authAttemptMax > 0 && !authAttemptLimiter.allow(getClientIp(req))) {
+      res.setHeader('Retry-After', '900');
+      HttpServer.json(res, 429, { error: 'Too many attempts. Please try again later.', code: 'RATE_LIMITED' });
+      return true;
     }
-  }, 60000);
-  if (checkUserRateCleaner.unref) checkUserRateCleaner.unref();
+    return false;
+  }
 
   /**
    * Resolves the configured cooldown between consecutive OTP dispatches.
@@ -143,19 +156,11 @@ export function registerCustomerRoutes(server, ctx) {
       return;
     }
 
-    const ip = req.socket?.remoteAddress || '127.0.0.1';
-    const now = Date.now();
-    if (checkUserRateMap.size > 10000) {
-      checkUserRateMap.clear();
-    }
-    const timestamps = checkUserRateMap.get(ip) || [];
-    const recent = timestamps.filter(t => now - t < 60000);
-    if (recent.length >= 60) {
+    if (checkUserMax > 0 && !checkUserLimiter.allow(getClientIp(req))) {
+      res.setHeader('Retry-After', '60');
       HttpServer.json(res, 429, { error: 'Too many requests. Please try again in a minute.' });
       return;
     }
-    recent.push(now);
-    checkUserRateMap.set(ip, recent);
 
     const existingUser = ctx.customerRepo.findByMobile(cleanMobile);
 
@@ -201,6 +206,14 @@ export function registerCustomerRoutes(server, ctx) {
       return;
     }
 
+    // Hourly caps per number and per client address, on top of the resend cooldown.
+    if ((otpPerMobileMax > 0 && !otpPerMobileLimiter.allow(cleanMobile)) ||
+        (otpPerIpMax > 0 && !otpPerIpLimiter.allow(getClientIp(req)))) {
+      res.setHeader('Retry-After', '3600');
+      HttpServer.json(res, 429, { error: 'Too many verification codes requested. Please try again later.', code: 'RATE_LIMITED' });
+      return;
+    }
+
     // If new user signing up, validate name and email
     if (!existingUser && isNewUser) {
       if (!name) {
@@ -226,10 +239,13 @@ export function registerCustomerRoutes(server, ctx) {
     if (existingUser) {
       ctx.customerRepo.setOtp(cleanMobile, otpCode, expiresAt);
     } else {
+      // A resend must not hand out a fresh guess budget while the previous code is still live.
+      const previous = pendingOtpChallenges.get(cleanMobile);
+      const previousLive = previous && new Date(previous.expiresAt) > new Date();
       pendingOtpChallenges.set(cleanMobile, {
         otpCode,
         expiresAt,
-        attempts: 0,
+        attempts: previousLive ? (previous.attempts || 0) : 0,
         name: name || `Customer ${cleanMobile.slice(-4)}`,
         email: email || `${cleanMobile}@customer.youpi.local`
       });
@@ -270,6 +286,7 @@ export function registerCustomerRoutes(server, ctx) {
     const rawMobile = body.mobileNumber || body.phoneNumber || body.mobile || body.phone;
     const otp = String(body.otp || body.code || '').trim();
 
+    if (tooManyAuthAttempts(req, res)) return;
     if (!rawMobile || !otp) {
       HttpServer.json(res, 400, { error: 'Mobile number and 6-digit OTP code are required.' });
       return;
@@ -345,7 +362,7 @@ export function registerCustomerRoutes(server, ctx) {
     }
 
     // Issue server-authoritative session
-    const ipAddress = req.socket?.remoteAddress || null;
+    const ipAddress = getClientIp(req) || null;
     const userAgent = req.headers['user-agent'] || null;
     const session = ctx.customerSessionRepo.create({
       customerId: customer.id,
@@ -386,6 +403,7 @@ export function registerCustomerRoutes(server, ctx) {
   // POST /api/v1/customer/register (Gateway-owned Sign Up)
   // Input: exactly name, email, mobileNumber, password
   server.post('/api/v1/customer/register', async (req, res) => {
+    if (tooManyAuthAttempts(req, res)) return;
     const body = await HttpServer.parseBody(req);
     const { name, email, mobileNumber, password } = body;
 
@@ -443,7 +461,7 @@ export function registerCustomerRoutes(server, ctx) {
     }
 
     // Create authenticated server-authoritative session
-    const ipAddress = req.socket?.remoteAddress || null;
+    const ipAddress = getClientIp(req) || null;
     const userAgent = req.headers['user-agent'] || null;
     const session = ctx.customerSessionRepo.create({
       customerId: customer.id,
@@ -488,13 +506,24 @@ export function registerCustomerRoutes(server, ctx) {
     const identifier = (body.identifier || body.email || body.mobileNumber || body.phoneNumber || '').trim();
     const password = body.password;
 
+    if (tooManyAuthAttempts(req, res)) return;
     if (!identifier || !password) {
       HttpServer.json(res, 400, { error: 'Email/mobile number and password are required.' });
       return;
     }
 
+    // Per-account lockout: repeated failures lock the identifier for the rest of the window,
+    // whichever address the guesses come from.
+    const lockKey = identifier.toLowerCase();
+    if (loginFailureMax > 0 && loginFailureLimiter.isLimited(lockKey)) {
+      res.setHeader('Retry-After', '900');
+      HttpServer.json(res, 429, { error: 'Too many failed sign-in attempts. Please try again later.', code: 'RATE_LIMITED' });
+      return;
+    }
+
     const verified = ctx.customerRepo.verifyCredentials(identifier, password);
     if (!verified) {
+      if (loginFailureMax > 0) loginFailureLimiter.allow(lockKey);
       HttpServer.json(res, 401, { error: 'Invalid credentials. Please check your email/mobile and password.' });
       return;
     }
@@ -509,8 +538,10 @@ export function registerCustomerRoutes(server, ctx) {
       return;
     }
 
+    loginFailureLimiter.clear(lockKey);
+
     // Create session
-    const ipAddress = req.socket?.remoteAddress || null;
+    const ipAddress = getClientIp(req) || null;
     const userAgent = req.headers['user-agent'] || null;
     const session = ctx.customerSessionRepo.create({
       customerId: verified.id,

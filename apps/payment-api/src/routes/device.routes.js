@@ -6,6 +6,7 @@ import {
   createDeviceChallenge,
   consumeDeviceChallenge
 } from '@youpi/core';
+import { createRateLimiter, envLimit, getClientIp } from '../rate-limit.js';
 
 /**
  * Resolves a verified customer ID strictly from a valid customer session token.
@@ -35,8 +36,22 @@ function resolveAuthenticatedCustomerId(req, body, ctx) {
  * }} ctx
  */
 export function registerDeviceRoutes(server, ctx) {
+  // Registration and challenge issuing are open to anonymous browsers and write state
+  // (device rows, in-memory challenges), so they are throttled per client address.
+  const deviceRateMax = envLimit('YOUPI_RATE_LIMIT_DEVICE_PER_MIN', 60);
+  const deviceRateLimiter = createRateLimiter({ windowMs: 60 * 1000, max: deviceRateMax });
+  function deviceRateLimited(req, res) {
+    if (deviceRateMax > 0 && !deviceRateLimiter.allow(getClientIp(req))) {
+      res.setHeader('Retry-After', '60');
+      HttpServer.json(res, 429, { error: 'Too many device requests. Please try again in a minute.', code: 'RATE_LIMITED' });
+      return true;
+    }
+    return false;
+  }
+
   // 0. POST /api/v1/devices/challenge
   server.post('/api/v1/devices/challenge', async (req, res) => {
+    if (deviceRateLimited(req, res)) return;
     const body = await HttpServer.parseBody(req).catch(() => ({}));
     const { publicKey, deviceId } = body;
 
@@ -64,6 +79,7 @@ export function registerDeviceRoutes(server, ctx) {
 
   // 1. POST /api/v1/devices/register
   server.post('/api/v1/devices/register', async (req, res) => {
+    if (deviceRateLimited(req, res)) return;
     const body = await HttpServer.parseBody(req).catch(() => ({}));
     const { publicKey, signals, challenge, signature, payload } = body;
 
