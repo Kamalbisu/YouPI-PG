@@ -234,13 +234,11 @@ This section is a practical project warning, not a certification, compliance che
 ##  Quickstart in 60 Seconds
  
 ### Prerequisites
-- **Node.js `>= 22.13.0` LTS** (Recommended: Node 24 LTS, `node -v`) for native `node:sqlite` (`DatabaseSync`) engine.
-  `node:sqlite` was added in Node 22.5.0 but only unflagged in **22.13.0**, so 22.5.0–22.12.x cannot run this project without `--experimental-sqlite`.
+- **Node.js `>= 24.0.0`** (matches `engines` in `package.json`; `node -v`) for native `node:sqlite` (`DatabaseSync`) engine.
 - Standard Linux, macOS, or Windows host
 - *External database services (PostgreSQL/Redis) are completely optional!*
 
-> **Note:** Containerisation is not included in this repository yet — there is no `Dockerfile` or
-> `docker-compose.yml`. Run the services on a native Node.js host as described below.
+> **Note:** A `Dockerfile` and `docker-compose.yml` are included (see `docs/DEPLOYMENT.md`). The steps below run the services on a native Node.js host.
 
 ### Native Host Quickstart
 
@@ -256,7 +254,7 @@ npm install
 ```bash
 cp .env.example .env
 ```
-*(The default `.env` is pre-configured for localhost out of the box).*
+*(The template leaves all secrets unset: random per-install secrets are generated into `data/.secrets/` on first start. Never commit `.env`, and do not paste example secrets from documentation into production.)*
 
 ### 3. Start the Services
 On first launch, YOUPI PG automatically provisions `data/youpi_pg.sqlite`, creates the directory if missing, and executes idempotent migrations and baseline seeds. No manual database setup is required:
@@ -274,20 +272,20 @@ The services can then be accessed at the following local addresses:
 -  **Customer Checkout Portal:** [`http://localhost:7000`](http://localhost:7000)
 
 ### 4. Run the Full Regression Test Suite
-Verify all **31 test suites** across packages, apps, and chaos harnesses:
+Verify all **39 test suites** across packages, apps, and chaos harnesses:
 ```bash
 npm test
 ```
 ```text
 ============================================================
  YOUPI PG V2 — FULL REGRESSION TEST RUNNER
-Running 31 curated test suites...
+Running 39 curated test suites...
 ============================================================
-[1/31] Testing packages/common/src/__tests__/common.test.js...  PASS (0.22s)
+[1/39] Testing packages/common/src/__tests__/common.test.js...  PASS (0.22s)
 ...
-[31/31] Testing scripts/production-infrastructure.test.js...  PASS (0.17s)
+[39/39] Testing scripts/production-infrastructure.test.js...  PASS (0.17s)
 ============================================================
- ALL 31 TEST SUITES PASSED CLEANLY (Total: 17.68s)
+ ALL 39 TEST SUITES PASSED CLEANLY (Total: 17.68s)
 ============================================================
 ```
 

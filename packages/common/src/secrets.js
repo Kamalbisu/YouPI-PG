@@ -9,6 +9,25 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SECRETS_DIR = path.resolve(__dirname, '../../../data/.secrets');
 
 const cache = new Map();
+const warnedPlaceholders = new Set();
+
+/** Template/example values that shipped in .env.example or docs and are therefore publicly known. */
+const KNOWN_PLACEHOLDER_SECRETS = new Set([
+  'android_pairing_enrollment_secret_key_32_chars',
+  'super_secret_jwt_key_change_in_production_min_32_chars',
+  'merchant_webhook_secret_for_wallet_store'
+]);
+
+/**
+ * True when a configured secret is an obvious template value (REPLACE_WITH_..., change_me,
+ * a value from .env.example) rather than something an operator generated.
+ */
+export function isPlaceholderSecret(value) {
+  const v = String(value || '').trim().toLowerCase();
+  if (!v) return false;
+  if (KNOWN_PLACEHOLDER_SECRETS.has(v)) return true;
+  return /^(replace[_-]?with|changeme|change[_-]me|your[_-]|<.*>$)/.test(v);
+}
 
 /**
  * Resolves a service secret: explicit env var first, else a random value
@@ -18,7 +37,16 @@ const cache = new Map();
  * @returns {string}
  */
 export function resolveSecret(name, envVar) {
-  const fromEnv = envVar ? (process.env[envVar] || '').trim() : '';
+  let fromEnv = envVar ? (process.env[envVar] || '').trim() : '';
+  if (fromEnv && isPlaceholderSecret(fromEnv)) {
+    // A copied template value is public knowledge, so it must never act as a secret. Fall
+    // through to the generated per-install secret instead of trusting it.
+    if (!warnedPlaceholders.has(envVar)) {
+      warnedPlaceholders.add(envVar);
+      console.warn(`[secrets] ${envVar} is set to a placeholder/default value and was ignored; using a generated secret instead. Set a real random value to silence this warning.`);
+    }
+    fromEnv = '';
+  }
   if (fromEnv) return fromEnv;
   if (cache.has(name)) return cache.get(name);
 
@@ -198,7 +226,14 @@ export const LEGACY_DEFAULT_WEBHOOK_SECRET = 'merchant_webhook_secret_for_wallet
  * Master key for encrypting data at rest (merchant webhook secrets, OTPs).
  * Generated once and persisted alongside the other local secrets.
  */
-export const getEncryptionMasterKey = () => resolveSecret('encryption_master_key', 'ENCRYPTION_MASTER_KEY');
+export const getEncryptionMasterKey = () => {
+  const key = resolveSecret('encryption_master_key', 'ENCRYPTION_MASTER_KEY');
+  // Fail at the source with a clear message instead of a short-key crash deep inside encrypt().
+  if (!/^[0-9a-fA-F]{64}$/.test(key)) {
+    throw new Error('ENCRYPTION_MASTER_KEY must be exactly 64 hex characters (32 bytes). Generate one with: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
+  }
+  return key;
+};
 
 /** Envelope prefix marking a stored value as AES-256-GCM ciphertext. */
 const ENC_PREFIX = 'enc:v1:';

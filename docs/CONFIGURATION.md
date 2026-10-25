@@ -15,8 +15,7 @@
 | `DATABASE_URL` | `postgresql://...` | PostgreSQL connection URL |
 | `USE_SQLITE_FALLBACK` | `true` | When true, uses embedded SQLite if PostgreSQL is unreachable |
 | `SQLITE_DB_PATH` | `./data/youpi_pg.sqlite`| Path to local SQLite database file |
-| `ENCRYPTION_MASTER_KEY` | `64-hex chars` | 256-bit key for encrypting OAuth credentials and device keys |
-| `JWT_SECRET` | `32+ chars` | Secret key for customer and admin session tokens |
+| `ENCRYPTION_MASTER_KEY` | auto-generated (`64-hex chars` if set) | 256-bit key for encrypting OAuth credentials and device keys |
 | `PAYMENT_ACTIVE_WINDOW_MS` | `300000` | Duration of active payment slot (5 minutes = 300,000ms) |
 | `PAYMENT_PROCESSING_WINDOW_MS` | `30000` | Duration of verification slot (30 seconds = 30,000ms) |
 | `LATE_OBSERVATION_WINDOW_MS` | `1800000` | Safety window for matching late observations (30 minutes) |
