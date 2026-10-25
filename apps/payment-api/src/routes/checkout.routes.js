@@ -1534,6 +1534,18 @@ export function registerCheckoutRoutes(server, ctx) {
       return;
     }
 
+    // The server clock decides: a client may only report expiry, never force it early.
+    // (The server-side timer expires the session on its own when the window elapses.)
+    if (session.status === PaymentStatus.ACTIVE && session.expiresAt && session.expiresAt.getTime() > Date.now()) {
+      HttpServer.json(res, 409, {
+        error: 'Payment window has not elapsed yet.',
+        code: 'NOT_EXPIRED',
+        paymentId: session.id,
+        status: session.status
+      });
+      return;
+    }
+
     if (session.status === PaymentStatus.ACTIVE) {
       ctx.timingEngine.handleActiveTimerExpiration(session.id);
       server.broadcastSse(session.id, 'status_change', { status: PaymentStatus.EXPIRED });
@@ -1549,7 +1561,15 @@ export function registerCheckoutRoutes(server, ctx) {
   // POST /api/v1/checkout/:id/trigger-hook (Merchant Action & Telemetry Trigger)
   server.post('/api/v1/checkout/:id/trigger-hook', async (req, res, params) => {
     const body = await HttpServer.parseBody(req);
-    const { action, details } = body;
+    // The action label is written to the audit log and emitted as an event: keep it a short
+    // identifier and bound the free-form details so a caller cannot inject or bloat audit rows.
+    const action = typeof body.action === 'string' && /^[A-Za-z0-9_.:-]{1,64}$/.test(body.action) ? body.action : undefined;
+    let details = body.details;
+    if (details !== undefined && details !== null) {
+      let serialized = null;
+      try { serialized = JSON.stringify(details); } catch { /* unserializable */ }
+      details = (serialized && serialized.length <= 2048 && typeof details === 'object' && !Array.isArray(details)) ? details : { note: 'details dropped: must be an object under 2KB' };
+    }
 
     const session = ctx.sessionRepo.findById(params.id);
     if (!session) {

@@ -39,6 +39,7 @@ const testFiles = [
   'apps/payment-api/src/__tests__/gateway-hardening-invariants.test.js',
   'apps/payment-api/src/__tests__/observer-poller.test.js',
   'apps/payment-api/src/__tests__/rate-limiting.test.js',
+  'apps/payment-api/src/__tests__/access-control.test.js',
   'scripts/chaos-concurrency.test.js',
   'scripts/production-infrastructure.test.js'
 ];

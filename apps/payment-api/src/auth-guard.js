@@ -71,6 +71,12 @@ export function isAdminRequest(req) {
   return Boolean(presented) && safeEqual(presented, getAdminToken());
 }
 
+/** True only when the request carries the observer token and is not the admin token. */
+export function isObserverRequest(req) {
+  const presented = bearerToken(req);
+  return Boolean(presented) && safeEqual(presented, getObserverToken()) && !safeEqual(presented, getAdminToken());
+}
+
 /**
  * True when the caller may read the merchant-private fields of a payment session.
  *

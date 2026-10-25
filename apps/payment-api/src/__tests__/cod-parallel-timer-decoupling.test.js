@@ -181,6 +181,7 @@ describe('COD Parallel Timer & UPI Queue Decoupling Suite', () => {
     assert.equal(switchRes.body.timeRemainingSeconds, 300);
 
     // Fast-forward / trigger expiration
+    testDb.execute(`UPDATE payment_sessions SET expires_at = ? WHERE id = ? AND expires_at IS NOT NULL`, [new Date(Date.now() - 1000).toISOString(), codSessionId]);
     const expireRes = await request(`/api/v1/checkout/${codSessionId}/expire`, {
       method: 'POST'
     });

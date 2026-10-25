@@ -169,7 +169,6 @@ export function registerCustomerRoutes(server, ctx) {
       exists: Boolean(existingUser),
       mobileNumber: cleanMobile,
       customer: existingUser ? {
-        id: existingUser.id,
         name: existingUser.name,
         email: maskEmail(existingUser.email),
         mobileNumber: cleanMobile
