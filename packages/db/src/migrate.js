@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import crypto from 'node:crypto';
 import { getCoinStoreWebhookSecret, LEGACY_DEFAULT_WEBHOOK_SECRET } from '@youpi/common';
 import { getDatabase } from './database.js';
 import { MerchantRepository } from './repositories/merchant.repository.js';
@@ -186,21 +185,6 @@ export function runMigrations(targetDb) {
     db,
     defaultMerchant
   };
-}
-
-/**
- * Completely wipes all customer identity records and active sessions,
- * reinitializing the customer identity store to a pristine state.
- * @param {import('./database.js').Database} [targetDb]
- */
-export function reinitializeCustomerIdentity(targetDb) {
-  const db = targetDb || getDatabase();
-  try { db.exec("PRAGMA foreign_keys = OFF;"); } catch {}
-  try { db.exec("UPDATE payment_sessions SET customer_id = NULL WHERE customer_id IS NOT NULL;"); } catch {}
-  try { db.exec("DELETE FROM customer_sessions;"); } catch {}
-  try { db.exec("DELETE FROM customers;"); } catch {}
-  try { db.exec("PRAGMA foreign_keys = ON;"); } catch {}
-  return { success: true, message: 'All old customer identity records wiped and reinitialized.' };
 }
 
 // Auto-run if executed directly as script

@@ -2,10 +2,7 @@ import crypto from 'node:crypto';
 import {
   ObserverSource,
   PaymentStatus,
-  calculateObservationFingerprint,
-  toPaise,
-  normalizeEmail,
-  normalizeMobile
+  calculateObservationFingerprint
 } from '@youpi/common';
 import { extractIntelligentAmount } from './bank-sms-parser.js';
 import { ObservationNormalizer } from './normalizer.js';

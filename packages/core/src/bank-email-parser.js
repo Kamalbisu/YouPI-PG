@@ -1,4 +1,3 @@
-import { toPaise } from '@youpi/common';
 import { extractIntelligentAmount } from './bank-sms-parser.js';
 
 export { extractIntelligentAmount };

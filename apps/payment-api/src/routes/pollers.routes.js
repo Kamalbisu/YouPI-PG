@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { HttpServer } from '../server.js';
-import { ObservationNormalizer, BankSmsParser, BankEmailParser, generateQrSvg } from '@youpi/core';
+import { BankSmsParser, generateQrSvg } from '@youpi/core';
 import { toRupeesString, toPaise, verifyHmac, resolveRuntimeUrls, resolveSecret, safeEqual, hasBearer, getObserverToken, isAllowedNotificationPackage, encryptAtRest, decryptAtRest } from '@youpi/common';
 import { isAdminRequest } from '../auth-guard.js';
 
