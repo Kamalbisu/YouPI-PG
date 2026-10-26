@@ -1,19 +1,21 @@
+# dependencies
+node_modules/
+# next
+.next/
+out/
+next-env.d.ts
+# generated
+src/generated/
+*.tsbuildinfo
+# env files (never commit secrets)
 .env
 .env.*
 !.env.example
-
-node_modules/
-/YouPI-PG-main/data/
-
-data/*.db
-data/*.db-*
-**/*.db
-**/*.db-*
-
-data/.secrets/
-**/data/.secrets/
-data/test_whatsapp_session.json
-**/data/test_whatsapp_session.json
-
-*.apk
-*.tsbuildinfo
+# local data
+.local/
+uploads/
+coverage/
+*.log
+.DS_Store
+.vercel
+tsconfig.tsbuildinfo

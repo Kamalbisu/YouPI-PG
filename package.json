@@ -1,37 +1,65 @@
 {
   "name": "youpi-pg",
   "version": "1.0.0",
-  "type": "module",
-  "description": "Self-Hosted White-Label UPI Payment Gateway with Payment Observation Engine",
   "private": true,
-  "workspaces": [
-    "packages/*",
-    "apps/*"
-  ],
+  "description": "YouPI PG - multi-tenant business management and QR payments platform",
+  "engines": {
+    "node": ">=20.9"
+  },
   "scripts": {
-    "build": "tsc -b",
-    "clean": "node scripts/clean.js",
-    "db:setup": "node migrate.js",
-    "sync:package": "node scripts/sync-package.cjs",
-    "start": "node scripts/start.js",
-    "start:prod": "node scripts/start.js",
-    "start:prod:api": "node apps/payment-api/src/index.js",
-    "dev": "node scripts/dev.js",
-    "test": "node scripts/test-all.js",
-    "test:all": "node scripts/test-all.js",
-    "test:acceptance": "node --test scripts/production-infrastructure.test.js",
-    "build:android:apk": "node scripts/build-android-apk.js",
-    "sync:android-allowlist": "node scripts/sync-android-allowlist.js",
-    "typecheck": "tsc -b --noEmit",
-    "migrate": "node migrate.js"
+    "dev": "next dev",
+    "build": "prisma generate && next build",
+    "start": "next start",
+    "postinstall": "prisma generate",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:seed": "tsx scripts/seed.ts",
+    "admin:create": "tsx scripts/create-admin.ts",
+    "db:local": "tsx scripts/dev-db.ts",
+    "db:studio": "prisma studio",
+    "openapi:check": "tsx scripts/check-openapi.ts"
+  },
+  "dependencies": {
+    "@prisma/adapter-pg": "^7.10.1",
+    "@prisma/client": "^7.10.1",
+    "argon2": "^0.45.1",
+    "clsx": "^2.1.1",
+    "dotenv": "^18.0.9",
+    "lucide-react": "^1.61.0",
+    "next": "^16.4.3",
+    "nodemailer": "^10.2.1",
+    "otpauth": "^9.5.2",
+    "pdfkit": "^0.20.2",
+    "pg": "^8.23.1",
+    "qrcode": "^1.5.4",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "recharts": "^3.10.1",
+    "tailwind-merge": "^3.7.0",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@types/node": "^24.0.0",
-    "typescript": "^7.0.2"
-  },
-  "engines": {
-    "node": ">=24.0.0"
-  },
-  "author": "Antigravity Systems",
-  "license": "Commercial"
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/node": "^22.20.5",
+    "@types/nodemailer": "^8.0.2",
+    "@types/pdfkit": "^0.17.7",
+    "@types/pg": "^8.23.1",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "embedded-postgres": "^18.4.0-beta.17",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^16.4.3",
+    "postcss": "^8.5.31",
+    "prisma": "^7.10.1",
+    "tailwindcss": "^4.3.3",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.5"
+  }
 }
