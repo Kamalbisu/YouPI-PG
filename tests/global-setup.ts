@@ -12,7 +12,7 @@ let dir: string | null = null;
  * and points DATABASE_URL at it. Set TEST_DATABASE_URL to use an existing (empty, disposable) database instead.
  */
 export default async function setup() {
-  process.env.NODE_ENV = "test";
+  (process.env as Record<string, string>).NODE_ENV = "test";
   process.env.APP_URL = "http://localhost:3000";
   process.env.APP_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
   process.env.APP_SECRET = "test-secret-test-secret-test-secret";
