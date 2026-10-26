@@ -1,5 +1,5 @@
-// YouPI PG - PostgreSQL schema.
-// All money is stored as integer minor units (paise). Never use floats for money.
+// YouPI PG - PostgreSQL schema (admin panel + user panel).
+// Money (optional QR amounts) is stored as integer paise. Never use floats for money.
 
 generator client {
   provider = "prisma-client"
@@ -10,196 +10,68 @@ datasource db {
   provider = "postgresql"
 }
 
-// ───────────────────────── enums ─────────────────────────
-
 enum UserRole {
-  SUPER_ADMIN
-  CLIENT
+  ADMIN
+  USER
 }
 
 enum UserStatus {
-  INVITED // account created, password not set yet
   ACTIVE
-  INACTIVE
-  SUSPENDED
+  DISABLED
 }
 
-enum ClientStatus {
-  ACTIVE
-  INACTIVE
-  SUSPENDED
-}
-
-enum BusinessStatus {
-  PENDING_APPROVAL
-  ACTIVE
-  SUSPENDED
-  REJECTED
-  INACTIVE
-}
-
-enum MembershipRole {
-  OWNER
-  MANAGER
-}
-
-enum ProductKind {
-  PRODUCT
-  SERVICE
-}
-
-enum DiscountType {
-  NONE
-  PERCENT
-  FIXED
-}
-
-enum OfferType {
-  PERCENT
-  FIXED
-}
-
-enum QrType {
-  BUSINESS
-  PRODUCT
-  ORDER
-  DYNAMIC_PAYMENT
-}
-
-enum QrStatus {
-  ACTIVE
-  REVOKED
-}
-
-enum OrderStatus {
-  PENDING_PAYMENT
-  PAID
-  CANCELLED
-  EXPIRED
-  PARTIALLY_REFUNDED
-  REFUNDED
-}
-
-enum PaymentProvider {
-  RAZORPAY
-  CASHFREE
-  DEV_SIMULATOR
-}
-
-enum ProviderMode {
-  TEST
-  LIVE
-}
-
-enum PaymentAttemptStatus {
-  CREATED
-  PENDING
-  AUTHORIZED
-  SUCCEEDED
-  FAILED
-  CANCELLED
+enum OtpPurpose {
+  LOGIN // sign in, or create the account when the number is new
+  SIGNUP // username + password signup waiting for mobile verification
 }
 
 enum TransactionStatus {
-  SUCCEEDED
-  PARTIALLY_REFUNDED
-  REFUNDED
-}
-
-enum VerificationSource {
-  WEBHOOK
-  API_FETCH
-  CHECKOUT_SIGNATURE
-}
-
-enum RefundStatus {
   PENDING
-  PROCESSED
-  FAILED
+  CONFIRMED
+  REJECTED
 }
-
-enum WebhookStatus {
-  RECEIVED
-  PROCESSED
-  IGNORED
-  FAILED
-}
-
-enum NotificationChannel {
-  EMAIL
-  IN_APP
-}
-
-enum NotificationStatus {
-  QUEUED
-  SENT
-  FAILED
-  SKIPPED
-}
-
-enum TokenPurpose {
-  PASSWORD_RESET
-  INVITE
-}
-
-enum TicketStatus {
-  OPEN
-  IN_PROGRESS
-  RESOLVED
-  CLOSED
-}
-
-enum TicketPriority {
-  LOW
-  NORMAL
-  HIGH
-}
-
-// ───────────────────────── identity ─────────────────────────
 
 model User {
-  id                String     @id @default(cuid())
-  email             String     @unique // stored lowercase
-  name              String
-  phone             String?
-  passwordHash      String?
-  role              UserRole
-  status            UserStatus @default(INVITED)
-  clientId          String?
-  totpSecretEnc     String? // AES-256-GCM encrypted base32 secret
-  totpEnabled       Boolean    @default(false)
-  failedLoginCount  Int        @default(0)
-  lockedUntil       DateTime?
-  lastLoginAt       DateTime?
-  passwordChangedAt DateTime?
-  createdAt         DateTime   @default(now())
-  updatedAt         DateTime   @updatedAt
+  id               String     @id @default(cuid())
+  role             UserRole   @default(USER)
+  name             String
+  username         String     @unique // lower case, 3-30 chars [a-z0-9_]
+  email            String?    @unique // admins only
+  mobile           String?    @unique // E.164, e.g. +919876543210 (users only)
+  passwordHash     String? // null for accounts created by OTP login until a password is set
+  status           UserStatus @default(ACTIVE)
+  mobileVerifiedAt DateTime?
+  lastLoginAt      DateTime?
+  failedLoginCount Int        @default(0)
+  lockedUntil      DateTime?
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
 
-  client        Client?              @relation(fields: [clientId], references: [id], onDelete: Restrict)
-  sessions      Session[]
-  tokens        AuthToken[]
-  memberships   BusinessMembership[]
-  loginEvents   LoginEvent[]
-  notifications Notification[]
-  tickets       SupportTicket[]      @relation("TicketCreator")
-  ticketMessages TicketMessage[]
+  sessions          Session[]
+  assignments       QrAssignment[]
+  transactions      Transaction[]      @relation("TransactionOwner")
+  reviewed          Transaction[]      @relation("TransactionReviewer")
+  notificationsIn   Notification[]     @relation("NotificationRecipient")
+  notificationsSent Notification[]     @relation("NotificationSender")
+  notificationReads NotificationRead[]
+  qrsCreated        Qr[]
 
-  @@index([clientId])
-  @@index([role, status])
+  @@index([role, createdAt])
+  @@index([status])
   @@map("users")
 }
 
 model Session {
-  id         String   @id @default(cuid())
-  userId     String
-  tokenHash  String   @unique // sha256 of the opaque cookie value
-  createdAt  DateTime @default(now())
-  lastSeenAt DateTime @default(now())
-  expiresAt  DateTime // idle expiry (sliding)
+  id                String    @id @default(cuid())
+  userId            String
+  tokenHash         String    @unique // sha256 of the opaque cookie value
+  createdAt         DateTime  @default(now())
+  lastSeenAt        DateTime  @default(now())
+  expiresAt         DateTime // idle expiry (sliding)
   absoluteExpiresAt DateTime
-  ip         String?
-  userAgent  String?
-  revokedAt  DateTime?
+  ip                String?
+  userAgent         String?
+  revokedAt         DateTime?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -208,38 +80,22 @@ model Session {
   @@map("sessions")
 }
 
-model AuthToken {
-  id        String       @id @default(cuid())
-  userId    String
-  purpose   TokenPurpose
-  tokenHash String       @unique
-  expiresAt DateTime
-  usedAt    DateTime?
-  createdAt DateTime     @default(now())
+/// One-time SMS codes. Only a salted hash of the code is stored.
+model OtpCode {
+  id         String     @id @default(cuid())
+  phone      String // E.164
+  purpose    OtpPurpose
+  codeHash   String
+  payload    Json? // SIGNUP: { name, username, passwordHash }
+  attempts   Int        @default(0)
+  expiresAt  DateTime
+  consumedAt DateTime?
+  ip         String?
+  createdAt  DateTime   @default(now())
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId, purpose])
-  @@map("auth_tokens")
-}
-
-model LoginEvent {
-  id        String   @id @default(cuid())
-  userId    String?
-  email     String
-  success   Boolean
-  reason    String?
-  ip        String?
-  userAgent String?
-  portal    String? // admin | client
-  createdAt DateTime @default(now())
-
-  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
-
-  @@index([userId, createdAt])
-  @@index([email, createdAt])
-  @@index([ip, createdAt])
-  @@map("login_events")
+  @@index([phone, createdAt])
+  @@index([expiresAt])
+  @@map("otp_codes")
 }
 
 model RateLimitBucket {
@@ -252,163 +108,23 @@ model RateLimitBucket {
   @@map("rate_limit_buckets")
 }
 
-// ───────────────────────── tenants ─────────────────────────
-
-model Client {
-  id          String       @id @default(cuid())
-  clientCode  String       @unique // e.g. CL-4F7K2Q9D
-  name        String // company / account name
-  contactName String
-  email       String
-  phone       String?
-  address     String?
-  status      ClientStatus @default(ACTIVE)
-  // Super-admin granted capabilities, see src/lib/permissions.ts
-  permissions String[]
-  maxBusinesses Int        @default(1)
-  notes       String?
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
-
-  users      User[]
-  businesses Business[]
-  tickets    SupportTicket[]
-
-  @@index([status])
-  @@map("clients")
-}
-
-model Business {
-  id            String         @id @default(cuid())
-  businessCode  String         @unique // e.g. BZ-7H2M9XQK
-  clientId      String
-  name          String
-  category      String
-  description   String?
-  addressLine   String?
-  city          String?
-  state         String?
-  pincode       String?
-  contactPhone  String?
-  contactEmail  String?
-  ownerName     String?
-  ownerPhone    String?
-  logoFileId    String?
-  status        BusinessStatus @default(PENDING_APPROVAL)
-  statusReason  String?
-  // operating status shown to customers
-  acceptingOrders Boolean     @default(true)
-  hoursText       String?
-  // pricing config
-  currency        String      @default("INR")
-  pricesIncludeTax Boolean    @default(false)
-  defaultTaxBps   Int         @default(0) // basis points, 1800 = 18%
-  allowCustomAmount Boolean   @default(false)
-  // static UPI (not verifiable by the platform) - admin controlled
-  staticUpiVpa    String?
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
-
-  client      Client               @relation(fields: [clientId], references: [id], onDelete: Restrict)
-  logo        FileAsset?           @relation("BusinessLogo", fields: [logoFileId], references: [id], onDelete: SetNull)
-  memberships BusinessMembership[]
-  categories  ProductCategory[]
-  products    Product[]
-  offers      Offer[]
-  qrCodes     QrCode[]
-  orders      Order[]
-  customers   Customer[]
-  paymentConfigs PaymentProviderConfig[]
-  tickets     SupportTicket[]
-
-  @@index([clientId, status])
-  @@index([status])
-  @@map("businesses")
-}
-
-model BusinessMembership {
-  id         String         @id @default(cuid())
-  userId     String
-  businessId String
-  role       MembershipRole @default(OWNER)
-  createdAt  DateTime       @default(now())
-
-  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, businessId])
-  @@index([businessId])
-  @@map("business_memberships")
-}
-
-// ───────────────────────── catalogue ─────────────────────────
-
-model ProductCategory {
+model AuditLog {
   id         String   @id @default(cuid())
-  businessId String
-  name       String
-  sortOrder  Int      @default(0)
+  actorId    String?
+  actorName  String? // username of the actor
+  actorRole  String?
+  action     String
+  entityType String?
+  entityId   String?
+  metadata   Json?
+  ip         String?
+  userAgent  String?
   createdAt  DateTime @default(now())
 
-  business Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  products Product[]
-
-  @@unique([businessId, name])
-  @@map("product_categories")
-}
-
-model Product {
-  id             String       @id @default(cuid())
-  businessId     String
-  categoryId     String?
-  name           String
-  description    String?
-  kind           ProductKind  @default(PRODUCT)
-  sku            String?
-  priceMinor     Int
-  taxBps         Int? // overrides business default when set
-  discountType   DiscountType @default(NONE)
-  discountValue  Int          @default(0) // basis points for PERCENT, minor units for FIXED
-  imageFileId    String?
-  isAvailable    Boolean      @default(true)
-  trackInventory Boolean      @default(false)
-  stockQty       Int          @default(0)
-  archivedAt     DateTime?
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
-
-  business   Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  category   ProductCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
-  image      FileAsset?       @relation("ProductImage", fields: [imageFileId], references: [id], onDelete: SetNull)
-  orderItems OrderItem[]
-  qrCodes    QrCode[]
-
-  @@index([businessId, archivedAt])
-  @@map("products")
-}
-
-model Offer {
-  id              String    @id @default(cuid())
-  businessId      String
-  title           String
-  description     String?
-  code            String // coupon code, stored uppercase
-  type            OfferType
-  value           Int // basis points for PERCENT, minor units for FIXED
-  minOrderMinor   Int       @default(0)
-  maxDiscountMinor Int?
-  validFrom       DateTime?
-  validTo         DateTime?
-  usageLimit      Int?
-  usedCount       Int       @default(0)
-  isActive        Boolean   @default(true)
-  createdAt       DateTime  @default(now())
-
-  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  orders   Order[]
-
-  @@unique([businessId, code])
-  @@map("offers")
+  @@index([createdAt])
+  @@index([entityType, entityId])
+  @@index([actorId, createdAt])
+  @@map("audit_logs")
 }
 
 model FileAsset {
@@ -420,364 +136,93 @@ model FileAsset {
   createdById String?
   createdAt   DateTime @default(now())
 
-  businessLogos Business[] @relation("BusinessLogo")
-  productImages Product[]  @relation("ProductImage")
+  qrs Qr[]
 
   @@map("file_assets")
 }
 
-// ───────────────────────── QR codes ─────────────────────────
+model Qr {
+  id          String   @id @default(cuid())
+  label       String
+  amountPaise Int? // optional fixed amount
+  active      Boolean  @default(true)
+  forAll      Boolean  @default(false) // shown to every user
+  imageId     String
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-model QrCode {
-  id                String   @id @default(cuid())
-  token             String   @unique // unguessable public reference, no secrets
-  type              QrType
-  label             String
-  businessId        String
-  productId         String?
-  orderId           String?  @unique
-  fixedAmountMinor  Int? // set for DYNAMIC_PAYMENT / fixed-price flows
-  allowCustomAmount Boolean  @default(false)
-  minAmountMinor    Int?
-  maxAmountMinor    Int?
-  status            QrStatus @default(ACTIVE)
-  expiresAt         DateTime?
-  revokedAt         DateTime?
-  revokedReason     String?
-  replacedById      String?
-  scanCount         Int      @default(0)
-  lastScannedAt     DateTime?
-  createdById       String?
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  image        FileAsset      @relation(fields: [imageId], references: [id])
+  createdBy    User?          @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  assignments  QrAssignment[]
+  transactions Transaction[]
 
-  business Business  @relation(fields: [businessId], references: [id], onDelete: Restrict)
-  product  Product?  @relation(fields: [productId], references: [id], onDelete: SetNull)
-  order    Order?    @relation("QrOrder", fields: [orderId], references: [id], onDelete: SetNull)
-  orders   Order[]   @relation("OrderViaQr")
-  scans    QrScan[]
-
-  @@index([businessId, status])
-  @@map("qr_codes")
+  @@index([active, forAll])
+  @@index([createdAt])
+  @@map("qrs")
 }
 
-model QrScan {
+model QrAssignment {
   id        String   @id @default(cuid())
-  qrCodeId  String
-  scannedAt DateTime @default(now())
-  ipHash    String? // salted hash, no raw IP stored
-  userAgentClass String? // mobile | desktop | other
+  qrId      String
+  userId    String
+  createdAt DateTime @default(now())
 
-  qrCode QrCode @relation(fields: [qrCodeId], references: [id], onDelete: Cascade)
+  qr   Qr   @relation(fields: [qrId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@index([qrCodeId, scannedAt])
-  @@map("qr_scans")
+  @@unique([qrId, userId])
+  @@index([userId])
+  @@map("qr_assignments")
 }
 
-// ───────────────────────── orders & payments ─────────────────────────
+model Transaction {
+  id           String            @id @default(cuid())
+  userId       String
+  qrId         String
+  txnId        String            @unique // normalized (upper case) UTR / reference number
+  status       TransactionStatus @default(PENDING)
+  rejectReason String?
+  reviewedById String?
+  reviewedAt   DateTime?
+  createdAt    DateTime          @default(now())
 
-model Customer {
-  id         String   @id @default(cuid())
-  businessId String
-  name       String?
-  phone      String?
-  email      String?
-  createdAt  DateTime @default(now())
+  user     User  @relation("TransactionOwner", fields: [userId], references: [id], onDelete: Cascade)
+  qr       Qr    @relation(fields: [qrId], references: [id], onDelete: Restrict)
+  reviewer User? @relation("TransactionReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
 
-  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  orders   Order[]
-
-  @@unique([businessId, phone])
-  @@map("customers")
-}
-
-model Order {
-  id             String      @id @default(cuid())
-  orderCode      String      @unique // human reference, e.g. ORD-20261026-K7M2QX
-  publicId       String      @unique // unguessable bearer id for customer pages
-  businessId     String
-  qrCodeId       String?
-  customerId     String?
-  offerId        String?
-  couponCode     String?
-  status         OrderStatus @default(PENDING_PAYMENT)
-  customerName   String?
-  customerPhone  String?
-  customerEmail  String?
-  note           String?
-  currency       String      @default("INR")
-  subtotalMinor  Int
-  discountMinor  Int         @default(0)
-  taxMinor       Int         @default(0)
-  totalMinor     Int
-  idempotencyKey String?
-  expiresAt      DateTime
-  paidAt         DateTime?
-  createdAt      DateTime    @default(now())
-  updatedAt      DateTime    @updatedAt
-
-  business     Business     @relation(fields: [businessId], references: [id], onDelete: Restrict)
-  qrCode       QrCode?      @relation("OrderViaQr", fields: [qrCodeId], references: [id], onDelete: SetNull)
-  boundQr      QrCode?      @relation("QrOrder")
-  customer     Customer?    @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  offer        Offer?       @relation(fields: [offerId], references: [id], onDelete: SetNull)
-  items        OrderItem[]
-  attempts     PaymentAttempt[]
-  transactions PaymentTransaction[]
-  refunds      Refund[]
-
-  @@unique([businessId, idempotencyKey])
-  @@index([businessId, createdAt])
-  @@index([status, expiresAt])
-  @@map("orders")
-}
-
-model OrderItem {
-  id             String  @id @default(cuid())
-  orderId        String
-  productId      String?
-  name           String // snapshot
-  unitPriceMinor Int
-  quantity       Int
-  discountMinor  Int     @default(0)
-  taxBps         Int     @default(0)
-  taxMinor       Int     @default(0)
-  lineTotalMinor Int
-
-  order   Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  product Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
-
-  @@index([orderId])
-  @@index([productId])
-  @@map("order_items")
-}
-
-model PaymentProviderConfig {
-  id             String          @id @default(cuid())
-  businessId     String
-  provider       PaymentProvider
-  mode           ProviderMode    @default(TEST)
-  isActive       Boolean         @default(false)
-  // credentials are encrypted (AES-256-GCM) and never returned to the browser
-  keyId          String? // public key id (shown masked)
-  secretEnc      String?
-  webhookSecretEnc String?
-  merchantLabel  String?
-  methods        String[] // enabled customer methods: upi_gpay, upi_phonepe, upi_paytm, upi_other, checkout
-  lastVerifiedAt DateTime?
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
-
-  business Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  attempts PaymentAttempt[]
-
-  @@unique([businessId, provider])
-  @@map("payment_provider_configs")
-}
-
-model PaymentAttempt {
-  id                String               @id @default(cuid())
-  orderId           String
-  configId          String?
-  provider          PaymentProvider
-  method            String? // upi_gpay | upi_phonepe | upi_paytm | upi_other | checkout | ...
-  status            PaymentAttemptStatus @default(CREATED)
-  amountMinor       Int
-  currency          String               @default("INR")
-  idempotencyKey    String               @unique
-  providerOrderId   String? // razorpay order id / cashfree order id
-  providerPaymentId String? // provider payment id once known
-  providerSessionId String? // cashfree payment_session_id (not secret, but short-lived)
-  failureReason     String?
-  expiresAt         DateTime
-  createdAt         DateTime             @default(now())
-  updatedAt         DateTime             @updatedAt
-
-  order        Order                @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  config       PaymentProviderConfig? @relation(fields: [configId], references: [id], onDelete: SetNull)
-  history      PaymentStatusHistory[]
-  transaction  PaymentTransaction?
-
-  @@unique([provider, providerOrderId])
-  @@index([orderId, status])
   @@index([status, createdAt])
-  @@map("payment_attempts")
+  @@index([userId, createdAt])
+  @@index([qrId])
+  @@map("transactions")
 }
-
-model PaymentStatusHistory {
-  id         String   @id @default(cuid())
-  attemptId  String
-  fromStatus String?
-  toStatus   String
-  source     String // WEBHOOK | API_FETCH | CHECKOUT_SIGNATURE | SYSTEM | USER_CANCEL
-  note       String?
-  createdAt  DateTime @default(now())
-
-  attempt PaymentAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
-
-  @@index([attemptId, createdAt])
-  @@map("payment_status_history")
-}
-
-// A transaction exists only after the backend has verified a successful payment.
-model PaymentTransaction {
-  id                 String             @id @default(cuid())
-  txnRef             String             @unique // e.g. TXN-20261026-9KQ2M7
-  orderId            String
-  attemptId          String             @unique
-  provider           PaymentProvider
-  providerPaymentId  String
-  method             String?
-  status             TransactionStatus  @default(SUCCEEDED)
-  amountMinor        Int
-  refundedMinor      Int                @default(0)
-  feeMinor           Int? // provider fee if reported
-  feeTaxMinor        Int?
-  currency           String             @default("INR")
-  isDuplicate        Boolean            @default(false) // order was already paid; needs refund
-  verificationSource VerificationSource
-  verifiedAt         DateTime           @default(now())
-  createdAt          DateTime           @default(now())
-  updatedAt          DateTime           @updatedAt
-
-  order   Order          @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  attempt PaymentAttempt @relation(fields: [attemptId], references: [id], onDelete: Restrict)
-  refunds Refund[]
-
-  @@unique([provider, providerPaymentId])
-  @@index([orderId])
-  @@index([verifiedAt])
-  @@map("payment_transactions")
-}
-
-model Refund {
-  id               String       @id @default(cuid())
-  refundRef        String       @unique
-  transactionId    String
-  orderId          String
-  amountMinor      Int
-  reason           String?
-  status           RefundStatus @default(PENDING)
-  providerRefundId String?
-  idempotencyKey   String       @unique
-  failureReason    String?
-  requestedById    String?
-  processedAt      DateTime?
-  createdAt        DateTime     @default(now())
-  updatedAt        DateTime     @updatedAt
-
-  transaction PaymentTransaction @relation(fields: [transactionId], references: [id], onDelete: Restrict)
-  order       Order              @relation(fields: [orderId], references: [id], onDelete: Restrict)
-
-  @@unique([transactionId, providerRefundId])
-  @@index([orderId])
-  @@map("refunds")
-}
-
-model WebhookEvent {
-  id          String        @id @default(cuid())
-  provider    PaymentProvider
-  eventId     String // provider event id, or a deterministic digest of the body
-  eventType   String
-  configRef   String? // config id the webhook was addressed to, or "platform"
-  signatureValid Boolean
-  status      WebhookStatus @default(RECEIVED)
-  error       String?
-  payload     Json
-  receivedAt  DateTime      @default(now())
-  processedAt DateTime?
-
-  @@unique([provider, eventId])
-  @@index([receivedAt])
-  @@map("webhook_events")
-}
-
-// ───────────────────────── operations ─────────────────────────
 
 model Notification {
-  id        String              @id @default(cuid())
-  userId    String?
-  channel   NotificationChannel
-  type      String
-  toAddress String?
-  subject   String
-  body      String
-  link      String?
-  status    NotificationStatus  @default(QUEUED)
-  error     String?
-  readAt    DateTime?
-  createdAt DateTime            @default(now())
-  sentAt    DateTime?
+  id          String   @id @default(cuid())
+  title       String
+  body        String
+  userId      String? // null = sent to all users
+  createdById String?
+  createdAt   DateTime @default(now())
 
-  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  user      User?              @relation("NotificationRecipient", fields: [userId], references: [id], onDelete: Cascade)
+  createdBy User?              @relation("NotificationSender", fields: [createdById], references: [id], onDelete: SetNull)
+  reads     NotificationRead[]
 
   @@index([userId, createdAt])
-  @@index([status])
+  @@index([createdAt])
   @@map("notifications")
 }
 
-model AuditLog {
-  id         String   @id @default(cuid())
-  actorId    String?
-  actorEmail String?
-  actorRole  String?
-  action     String
-  entityType String?
-  entityId   String?
-  clientId   String? // tenant the action concerned, if any
-  metadata   Json?
-  ip         String?
-  userAgent  String?
-  createdAt  DateTime @default(now())
+model NotificationRead {
+  notificationId String
+  userId         String
+  readAt         DateTime @default(now())
 
-  @@index([createdAt])
-  @@index([clientId, createdAt])
-  @@index([entityType, entityId])
-  @@index([actorId, createdAt])
-  @@map("audit_logs")
-}
+  notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-model SupportTicket {
-  id          String         @id @default(cuid())
-  ticketCode  String         @unique
-  clientId    String
-  businessId  String?
-  createdById String
-  subject     String
-  status      TicketStatus   @default(OPEN)
-  priority    TicketPriority @default(NORMAL)
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
-
-  client   Client          @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  business Business?       @relation(fields: [businessId], references: [id], onDelete: SetNull)
-  creator  User            @relation("TicketCreator", fields: [createdById], references: [id], onDelete: Restrict)
-  messages TicketMessage[]
-
-  @@index([clientId, status])
-  @@index([status, updatedAt])
-  @@map("support_tickets")
-}
-
-model TicketMessage {
-  id        String   @id @default(cuid())
-  ticketId  String
-  authorId  String
-  body      String
-  createdAt DateTime @default(now())
-
-  ticket SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
-  author User          @relation(fields: [authorId], references: [id], onDelete: Restrict)
-
-  @@index([ticketId, createdAt])
-  @@map("ticket_messages")
-}
-
-model PlatformSetting {
-  key         String   @id
-  value       Json
-  updatedById String?
-  updatedAt   DateTime @updatedAt
-
-  @@map("platform_settings")
+  @@id([notificationId, userId])
+  @@index([userId])
+  @@map("notification_reads")
 }

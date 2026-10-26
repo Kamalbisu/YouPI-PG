@@ -14,19 +14,29 @@ export interface RouteOpts {
 
 type Handler<P> = (req: NextRequest, ctx: Ctx, params: P) => Promise<Response | unknown>;
 
-function sameOrigin(req: NextRequest): boolean {
+/**
+ * CSRF defence for state-changing requests.
+ * - If the browser sent an Origin header, it must be our own: its host has to match the
+ *   request Host, x-forwarded-host or the APP_URL host. A matching Origin is accepted even
+ *   when Sec-Fetch-Site says "same-site" (e.g. localhost vs [::1] during development).
+ * - Without Origin, only requests the browser itself marks as same-origin / none are accepted
+ *   (scripts must send an Origin header matching the app).
+ * - Any other Origin (a different host) is rejected, as is Sec-Fetch-Site: cross-site.
+ */
+export function sameOrigin(req: NextRequest): boolean {
   const origin = req.headers.get("origin");
   const fetchSite = req.headers.get("sec-fetch-site");
-  if (fetchSite && fetchSite !== "same-origin" && fetchSite !== "none") return false;
-  if (!origin) return fetchSite === "same-origin" || fetchSite === "none"; // non-browser clients without cookies are fine; browsers send Origin on POST
+  if (fetchSite === "cross-site") return false;
+  if (!origin) return fetchSite === "same-origin" || fetchSite === "none";
+  let originHost: string;
   try {
-    const o = new URL(origin);
-    const host = req.headers.get("x-forwarded-host") ?? req.headers.get("host");
-    const app = new URL(env().APP_URL);
-    return o.host === host || o.host === app.host;
+    originHost = new URL(origin).host.toLowerCase();
   } catch {
     return false;
   }
+  // A misconfigured environment must surface as a configuration error, not as "cross-site".
+  const hosts = [req.headers.get("x-forwarded-host"), req.headers.get("host"), new URL(env().APP_URL).host];
+  return hosts.some((h) => !!h && h.toLowerCase() === originHost);
 }
 
 export function errorResponse(e: unknown): NextResponse {

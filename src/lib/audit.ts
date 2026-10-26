@@ -19,10 +19,9 @@ function redact(v: unknown, depth = 0): unknown {
 }
 
 export interface AuditInput {
-  action: string; // e.g. "client.create"
+  action: string; // e.g. "qr.create"
   entityType?: string;
   entityId?: string;
-  clientId?: string | null;
   metadata?: Record<string, unknown>;
 }
 
@@ -31,12 +30,11 @@ export async function audit(ctx: Ctx, input: AuditInput, tx: DbLike = db) {
   await tx.auditLog.create({
     data: {
       actorId: ctx.actor?.userId ?? null,
-      actorEmail: ctx.actor?.email ?? null,
+      actorName: ctx.actor?.username ?? null,
       actorRole: ctx.actor?.role ?? (ctx.actor ? null : "SYSTEM"),
       action: input.action,
       entityType: input.entityType,
       entityId: input.entityId,
-      clientId: input.clientId ?? ctx.actor?.clientId ?? null,
       metadata: input.metadata ? (redact(input.metadata) as object) : undefined,
       ip: ctx.ip,
       userAgent: ctx.userAgent?.slice(0, 300) ?? null,

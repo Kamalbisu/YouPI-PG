@@ -2,26 +2,21 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState, type ReactNode } from "react";
-import {
-  BarChart3, Boxes, Building2, CreditCard, FileText, LayoutDashboard, LifeBuoy, LogOut, Menu, QrCode, Receipt,
-  Settings, ShieldCheck, ShoppingBag, Store, UserCircle, Users, Wallet, X, type LucideIcon,
-} from "lucide-react";
+import { Bell, LayoutDashboard, LogOut, Menu, QrCode, Receipt, Users, X, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ThemeToggle } from "./theme-toggle";
 import { api } from "@/components/shared/use-api";
 
 const ICONS: Record<string, LucideIcon> = {
-  dashboard: LayoutDashboard, clients: Users, businesses: Building2, products: Boxes, qr: QrCode, transactions: Receipt,
-  payments: CreditCard, reports: BarChart3, audit: ShieldCheck, support: LifeBuoy, settings: Settings, orders: ShoppingBag,
-  profile: UserCircle, store: Store, wallet: Wallet, file: FileText,
+  dashboard: LayoutDashboard, users: Users, qr: QrCode, transactions: Receipt, notifications: Bell,
 };
 
-export interface NavItem { href: string; label: string; icon: keyof typeof ICONS | string; exact?: boolean }
+export interface NavItem { href: string; label: string; icon: keyof typeof ICONS | string; exact?: boolean; count?: number }
 
 export function AppShell({
   nav, brand, user, portal, children, badge,
 }: {
-  nav: NavItem[]; brand: string; user: { name: string; email: string }; portal: "admin" | "client"; children: ReactNode; badge?: string;
+  nav: NavItem[]; brand: string; user: { name: string; username: string }; portal: "admin" | "user"; children: ReactNode; badge?: string;
 }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -30,7 +25,7 @@ export function AppShell({
 
   const logout = async () => {
     setOut(true);
-    try { await api("/api/auth/logout", { method: "POST" }); } finally { router.push(`/${portal}/login`); router.refresh(); }
+    try { await api("/api/auth/logout", { method: "POST" }); } finally { router.push(portal === "admin" ? "/admin/login" : "/login"); router.refresh(); }
   };
 
   const sidebar = (
@@ -58,7 +53,8 @@ export function AppShell({
                 )}
               >
                 <Icon className="size-[18px]" />
-                {n.label}
+                <span className="flex-1">{n.label}</span>
+                {!!n.count && <span className="rounded-full bg-brand-600 px-1.5 py-0.5 text-[11px] leading-none font-semibold text-white">{n.count > 99 ? "99+" : n.count}</span>}
               </Link>
             </li>
           );
@@ -86,7 +82,7 @@ export function AppShell({
             <ThemeToggle />
             <div className="hidden text-right leading-tight sm:block">
               <p className="text-sm font-medium">{user.name}</p>
-              <p className="text-xs text-ink-muted">{user.email}</p>
+              <p className="text-xs text-ink-muted">@{user.username}</p>
             </div>
             <button onClick={logout} disabled={out} className="inline-flex h-9 items-center gap-2 rounded-lg border border-line px-3 text-sm font-medium hover:bg-surface-muted disabled:opacity-50">
               <LogOut className="size-4" />
