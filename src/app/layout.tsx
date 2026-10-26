@@ -5,7 +5,7 @@ import { themeInitScript } from "@/components/layout/theme-toggle";
 
 export const metadata: Metadata = {
   title: { default: "YouPI PG", template: "%s | YouPI PG" },
-  description: "Multi-tenant business management and QR payments platform",
+  description: "Pay with a QR code and get your payment confirmed",
 };
 export const viewport: Viewport = { width: "device-width", initialScale: 1 };
 

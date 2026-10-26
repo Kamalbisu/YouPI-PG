@@ -9,9 +9,9 @@ export default function Home() {
         <div className="flex size-12 items-center justify-center rounded-xl bg-brand-600 text-xl font-bold text-white">Y</div>
         <h1 className="text-3xl font-semibold">YouPI PG</h1>
       </div>
-      <p className="max-w-md text-ink-muted">QR payments and business management for paying guests, shops and services.</p>
+      <p className="max-w-md text-ink-muted">Pay with your QR code, send the transaction ID, and see when it is confirmed.</p>
       <div className="flex flex-wrap justify-center gap-3">
-        <Link href="/client/login" className="rounded-lg bg-brand-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-brand-700">Business sign in</Link>
+        <Link href="/login" className="rounded-lg bg-brand-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-brand-700">Sign in or sign up</Link>
         <Link href="/admin/login" className="rounded-lg border border-line px-5 py-2.5 text-sm font-medium hover:bg-surface-muted">Admin sign in</Link>
       </div>
     </main>
