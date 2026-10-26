@@ -6,14 +6,14 @@ import type { Actor, Ctx } from "./types";
 export async function requireAdminPage(): Promise<{ ctx: Ctx; actor: Actor }> {
   const ctx = await getCtx();
   if (!ctx.actor) redirect("/admin/login");
-  if (ctx.actor.role !== "SUPER_ADMIN") redirect("/admin/login?error=forbidden");
+  if (ctx.actor.role !== "ADMIN") redirect("/admin/login?error=forbidden");
   return { ctx, actor: ctx.actor };
 }
 
-/** For server components / layouts of /client pages. */
-export async function requireClientPage(): Promise<{ ctx: Ctx; actor: Actor & { clientId: string } }> {
+/** For server components / layouts of the user dashboard. */
+export async function requireUserPage(): Promise<{ ctx: Ctx; actor: Actor }> {
   const ctx = await getCtx();
-  if (!ctx.actor) redirect("/client/login");
-  if (ctx.actor.role !== "CLIENT" || !ctx.actor.clientId) redirect("/client/login?error=forbidden");
-  return { ctx, actor: ctx.actor as Actor & { clientId: string } };
+  if (!ctx.actor) redirect("/login");
+  if (ctx.actor.role !== "USER") redirect("/login?error=forbidden");
+  return { ctx, actor: ctx.actor };
 }

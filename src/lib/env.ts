@@ -8,34 +8,25 @@ const schema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
   APP_URL: z.string().url().default("http://localhost:3000"),
-  /** 32 random bytes, base64. Encrypts provider credentials and 2FA secrets. */
-  APP_ENCRYPTION_KEY: z.string().min(1).optional(),
-  /** Random string used as a pepper when hashing IP addresses for QR scan stats. */
+  /** Random string (16+ chars) used as a pepper when hashing one-time codes. */
   APP_SECRET: z.string().min(16).optional(),
   TRUST_PROXY: z.enum(["true", "false"]).optional(),
 
-  SMTP_HOST: z.string().optional(),
-  SMTP_PORT: z.coerce.number().int().optional(),
-  SMTP_USER: z.string().optional(),
-  SMTP_PASSWORD: z.string().optional(),
-  SMTP_SECURE: z.enum(["true", "false"]).optional(),
-  MAIL_FROM: z.string().default("YouPI PG <no-reply@localhost>"),
+  /** Brevo (transactional SMS). Optional in development, required in production. */
+  BREVO_API_KEY: z.string().optional(),
+  /** Sender name: up to 11 letters/digits, or a 12-15 digit number. Must be approved in Brevo. */
+  BREVO_SMS_SENDER: z.string().optional(),
+  /** Country code added to 10-digit numbers. */
+  DEFAULT_COUNTRY_CODE: z
+    .string()
+    .regex(/^\+[1-9][0-9]{0,3}$/, "Use a value like +91")
+    .default("+91"),
 
-  // Platform-level default provider accounts (optional; per-business configs override)
-  RAZORPAY_KEY_ID: z.string().optional(),
-  RAZORPAY_KEY_SECRET: z.string().optional(),
-  RAZORPAY_WEBHOOK_SECRET: z.string().optional(),
-  CASHFREE_APP_ID: z.string().optional(),
-  CASHFREE_SECRET_KEY: z.string().optional(),
-  CASHFREE_ENV: z.enum(["sandbox", "production"]).optional(),
-
-  /** Local development simulator. Refused when NODE_ENV=production. */
-  PAYMENT_SIMULATOR_ENABLED: z.enum(["true", "false"]).optional(),
-
-  // Seed / bootstrap
+  // Admin bootstrap (npm run admin:create)
   SEED_ADMIN_EMAIL: z.string().email().optional(),
   SEED_ADMIN_PASSWORD: z.string().optional(),
   SEED_ADMIN_NAME: z.string().optional(),
+  SEED_ADMIN_USERNAME: z.string().optional(),
 });
 
 export type Env = z.infer<typeof schema>;
@@ -49,12 +40,12 @@ export function env(): Env {
     const msg = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
     throw new Error(`Invalid environment configuration: ${msg}`);
   }
-  cached = parsed.data;
-  if (cached.NODE_ENV === "production") {
-    if (cached.PAYMENT_SIMULATOR_ENABLED === "true") {
-      throw new Error("PAYMENT_SIMULATOR_ENABLED must not be true in production");
-    }
+  const e = parsed.data;
+  if (e.NODE_ENV === "production") {
+    const missing = (["BREVO_API_KEY", "BREVO_SMS_SENDER", "APP_SECRET"] as const).filter((k) => !e[k]);
+    if (missing.length) throw new Error(`Missing required environment variables in production: ${missing.join(", ")}`);
   }
+  cached = e;
   return cached;
 }
 
@@ -64,8 +55,3 @@ export function resetEnvCache() {
 }
 
 export const isProd = () => process.env.NODE_ENV === "production";
-
-export function simulatorEnabled(): boolean {
-  const e = env();
-  return e.NODE_ENV !== "production" && e.PAYMENT_SIMULATOR_ENABLED === "true";
-}

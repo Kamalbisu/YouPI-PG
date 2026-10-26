@@ -49,13 +49,12 @@ export async function actorFromToken(token: string | undefined | null): Promise<
   if (!token) return null;
   const s = await db.session.findUnique({
     where: { tokenHash: sha256Hex(token) },
-    include: { user: { include: { client: true } } },
+    include: { user: { select: { id: true, role: true, name: true, username: true, status: true } } },
   });
   const now = new Date();
   if (!s || s.revokedAt || s.expiresAt < now || s.absoluteExpiresAt < now) return null;
   const u = s.user;
   if (u.status !== "ACTIVE") return null;
-  if (u.role === "CLIENT" && (!u.client || u.client.status !== "ACTIVE")) return null;
 
   if (now.getTime() - s.lastSeenAt.getTime() > TOUCH_EVERY_MS) {
     await db.session.update({
@@ -63,28 +62,7 @@ export async function actorFromToken(token: string | undefined | null): Promise<
       data: { lastSeenAt: now, expiresAt: new Date(Math.min(now.getTime() + IDLE_MS, s.absoluteExpiresAt.getTime())) },
     });
   }
-
-  let businessIds: string[] = [];
-  let isOwner = false;
-  if (u.role === "CLIENT") {
-    const m = await db.businessMembership.findMany({
-      where: { userId: u.id, business: { clientId: u.clientId! } },
-      select: { businessId: true, role: true },
-    });
-    businessIds = m.map((x) => x.businessId);
-    isOwner = m.some((x) => x.role === "OWNER");
-  }
-  return {
-    userId: u.id,
-    email: u.email,
-    name: u.name,
-    role: u.role,
-    clientId: u.clientId,
-    permissions: u.role === "SUPER_ADMIN" ? ["*"] : (u.client?.permissions ?? []),
-    isOwner: u.role === "SUPER_ADMIN" ? true : isOwner,
-    businessIds,
-    sessionId: s.id,
-  };
+  return { userId: u.id, role: u.role, name: u.name, username: u.username, sessionId: s.id };
 }
 
 export async function revokeSession(sessionId: string) {

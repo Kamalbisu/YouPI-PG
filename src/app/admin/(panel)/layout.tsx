@@ -5,22 +5,16 @@ export const dynamic = "force-dynamic";
 
 const NAV: NavItem[] = [
   { href: "/admin", label: "Dashboard", icon: "dashboard", exact: true },
-  { href: "/admin/clients", label: "Clients", icon: "clients" },
-  { href: "/admin/businesses", label: "Businesses", icon: "businesses" },
-  { href: "/admin/products", label: "Products", icon: "products" },
-  { href: "/admin/qr", label: "QR Management", icon: "qr" },
+  { href: "/admin/users", label: "Users", icon: "users" },
   { href: "/admin/transactions", label: "Transactions", icon: "transactions" },
-  { href: "/admin/payments", label: "Payment Configuration", icon: "payments" },
-  { href: "/admin/reports", label: "Reports", icon: "reports" },
-  { href: "/admin/audit-logs", label: "Audit Logs", icon: "audit" },
-  { href: "/admin/support", label: "Support", icon: "support" },
-  { href: "/admin/settings", label: "Settings", icon: "settings" },
+  { href: "/admin/qr", label: "QR codes", icon: "qr" },
+  { href: "/admin/notifications", label: "Notifications", icon: "notifications" },
 ];
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   const { actor } = await requireAdminPage();
   return (
-    <AppShell portal="admin" brand="YouPI PG" badge="Super Admin" nav={NAV} user={{ name: actor.name, email: actor.email }}>
+    <AppShell portal="admin" brand="YouPI PG" badge="Admin" nav={NAV} user={{ name: actor.name, username: actor.username }}>
       {children}
     </AppShell>
   );
