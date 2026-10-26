@@ -5,6 +5,7 @@ import { Card, CardBody, CardHeader, DataTable, EmptyState, PageHeader, StatusBa
 import { UserStatusButton } from "@/components/admin/user-status-button";
 import { NotifyForm } from "@/components/admin/notify-form";
 import { requireAdminPage } from "@/server/auth/page-guards";
+import { recentPaymentsForUserAdmin } from "@/server/services/payments";
 import { getUserDetail } from "@/server/services/users";
 import { formatRupees } from "@/lib/money";
 
@@ -14,7 +15,7 @@ const dt = (d: Date | null) => (d ? d.toLocaleString("en-IN", { dateStyle: "medi
 export default async function UserDetail({ params }: { params: Promise<{ id: string }> }) {
   const { ctx } = await requireAdminPage();
   const { id } = await params;
-  const u = await getUserDetail(ctx, id);
+  const [u, payments] = await Promise.all([getUserDetail(ctx, id), recentPaymentsForUserAdmin(ctx, id)]);
   const rows: [string, React.ReactNode][] = [
     ["Name", u.name], ["Username", `@${u.username}`], ["Mobile", u.mobile ?? "-"],
     ["Status", <StatusBadge key="s" status={u.status} />], ["Signed up", dt(u.createdAt)], ["Last login", dt(u.lastLoginAt)],
@@ -59,6 +60,21 @@ export default async function UserDetail({ params }: { params: Promise<{ id: str
             { key: "why", header: "Reason", cell: (t) => t.rejectReason ?? "-" },
             { key: "when", header: "Submitted", cell: (t) => dt(t.createdAt) },
             { key: "by", header: "Reviewed by", cell: (t) => (t.reviewer ? `${t.reviewer.name}, ${dt(t.reviewedAt)}` : "-") },
+          ]}
+        />
+      </Card>
+      <Card className="mt-6 overflow-hidden">
+        <CardHeader title="Online payments" description="Latest 10" />
+        <DataTable
+          rows={payments}
+          rowKey={(x) => x.id}
+          empty={{ title: "No online payments yet" }}
+          columns={[
+            { key: "txn", header: "Reference", cell: (x) => <Link href={`/admin/payments/${x.id}`} className="font-mono hover:underline">{x.txnId}</Link> },
+            { key: "for", header: "For", cell: (x) => x.purpose },
+            { key: "amt", header: "Amount", align: "right", cell: (x) => formatRupees(x.amountPaise) },
+            { key: "st", header: "Status", cell: (x) => <StatusBadge status={x.status} /> },
+            { key: "when", header: "Started", cell: (x) => dt(x.createdAt) },
           ]}
         />
       </Card>

@@ -23,6 +23,12 @@ export async function makeAdmin(email = "admin@example.com") {
   });
 }
 
+export async function makeAuditor(email = "auditor@example.com") {
+  return db.user.create({
+    data: { email, name: "Auditor", username: "auditor", role: "AUDITOR", status: "ACTIVE", passwordHash: await hashPassword(PASSWORD) },
+  });
+}
+
 let n = 0;
 export async function makeUser(username = `user${++n}`, mobile?: string) {
   return db.user.create({
@@ -39,7 +45,7 @@ export async function makeUser(username = `user${++n}`, mobile?: string) {
 }
 
 /** A signed-in context (as built by route()) for a user row. */
-export async function ctxFor(user: { id: string; role: "ADMIN" | "USER"; name: string; username: string }, ip = "203.0.113.9"): Promise<Ctx> {
+export async function ctxFor(user: { id: string; role: "ADMIN" | "USER" | "AUDITOR"; name: string; username: string }, ip = "203.0.113.9"): Promise<Ctx> {
   const { session } = await createSession(user.id, { ip, userAgent: "vitest" });
   return { actor: { userId: user.id, role: user.role, name: user.name, username: user.username, sessionId: session.id }, ip, userAgent: "vitest" };
 }

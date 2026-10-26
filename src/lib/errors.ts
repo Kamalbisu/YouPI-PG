@@ -9,6 +9,7 @@ export type ErrorCode =
   | "ACCOUNT_LOCKED"
   | "ACCOUNT_DISABLED"
   | "SMS_UNAVAILABLE"
+  | "GATEWAY_UNAVAILABLE"
   | "INTERNAL";
 
 const STATUS: Record<ErrorCode, number> = {
@@ -22,6 +23,7 @@ const STATUS: Record<ErrorCode, number> = {
   ACCOUNT_LOCKED: 423,
   ACCOUNT_DISABLED: 403,
   SMS_UNAVAILABLE: 503,
+  GATEWAY_UNAVAILABLE: 502,
   INTERNAL: 500,
 };
 

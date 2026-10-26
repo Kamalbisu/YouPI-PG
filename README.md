@@ -1,10 +1,14 @@
 # YouPI PG
 
-A small web app with two separate panels.
+A small web app with three separate panels: client, admin and Admin 2 (a read-only auditor).
 
 **User panel** - people sign up, log in, see the payment QR codes the admin gave them, pay, and enter the transaction ID (UTR / reference number). Each submission shows Pending, Confirmed or Rejected (with the reason). Admin messages show up on the dashboard with an unread badge.
 
 **Admin panel** - the admin uploads QR images, assigns them to users (or to everyone), checks the submitted transaction IDs and confirms or rejects them, manages users, and sends notifications.
+
+**Online payments** - clients can also pay by card / UPI / net banking through Easebuzz hosted checkout. Payments are verified server-side, admins can refund and reconcile, and everything is written to a trace.
+
+**Admin 2 panel** - a read-only auditor who can follow every payment activity between admin and client: searchable, filterable timelines, CSV export. It can not change anything.
 
 Built with Next.js 16, React 19, Prisma 7 + PostgreSQL, Tailwind 4 and zod. SMS goes through Brevo.
 
@@ -27,6 +31,7 @@ npm run db:local
 # Terminal 2
 npm run db:deploy
 $env:SEED_ADMIN_EMAIL="admin@example.com"; $env:SEED_ADMIN_PASSWORD="Choose-A-Strong-Pass-1"; npm run admin:create
+$env:SEED_AUDITOR_EMAIL="auditor@example.com"; $env:SEED_AUDITOR_PASSWORD="Choose-A-Strong-Pass-2"; npm run auditor:create
 npm run dev
 ```
 
@@ -45,6 +50,7 @@ npm run db:local
 # Terminal 2
 npm run db:deploy
 SEED_ADMIN_EMAIL=admin@example.com SEED_ADMIN_PASSWORD='Choose-A-Strong-Pass-1' npm run admin:create
+SEED_AUDITOR_EMAIL=auditor@example.com SEED_AUDITOR_PASSWORD='Choose-A-Strong-Pass-2' npm run auditor:create
 npm run dev
 ```
 
@@ -71,8 +77,14 @@ State-changing requests (login, sign up, submit, confirm, ...) are checked to co
 | `/admin/qr` | admin | Upload, edit, replace image, deactivate or delete, assign to users |
 | `/admin/transactions` | admin | Filter by status or user, search by transaction ID, confirm or reject |
 | `/admin/notifications` | admin | Send to one user or all users, see what was sent |
+| `/dashboard/payments` | users | Pay online, payment history, receipt / status page, refunds on a payment |
+| `/admin/payments` | admin | All online payments with filters and search; detail with refund and reconcile actions |
+| `/admin/gateway` | admin | Gateway settings check (which values are set; never shows secrets) |
+| `/admin/auditors` | admin | Create and disable Admin 2 accounts |
+| `/auditor/login` | Admin 2 | Auditor sign in |
+| `/auditor` | Admin 2 | Activity trace with filters, search, pagination and CSV export; payment and user timelines |
 
-The user and admin sides use separate logins. A user session is refused by every admin API and an admin session is refused by every user API.
+The three sides use separate logins. A user session is refused by every admin API, an admin session is refused by every user API, and the Admin 2 (auditor) session can only call read-only (GET) endpoints under `/api/auditor`.
 
 ## How it works
 
@@ -82,6 +94,33 @@ The user and admin sides use separate logins. A user session is refused by every
 - **QR codes**: PNG, JPEG or WebP up to 2 MB. The file type is checked from the file contents, not the name. Images are stored in the database and served only to users who are allowed to see that QR.
 - **Transaction IDs**: 8 to 30 letters and digits, stored in capitals. Every ID can be used once across the whole system. Submissions are rate limited. An admin decision (confirm or reject) is final and is written to the audit log.
 - **Deleting a QR** that already has submissions only deactivates it, so history is kept.
+
+## Online payments (Easebuzz)
+
+1. Get **test** credentials (key and salt) from the Easebuzz test dashboard and put them in `.env`: `EASEBUZZ_KEY`, `EASEBUZZ_SALT`, `EASEBUZZ_ENV=test`. Without them "Pay online" is hidden / refused and the rest of the app works as before. Use `EASEBUZZ_ENV=prod` only with live credentials.
+2. In the Easebuzz dashboard set the **payment callback (success and failure) URL** to `<APP_URL>/api/payments/callback`. It must be reachable from the internet, so for local testing use a tunnel and set `APP_URL` to that address.
+3. For refund status updates set the **refund webhook URL** to `<APP_URL>/api/payments/refund-webhook?token=<EASEBUZZ_WEBHOOK_TOKEN>` (or send the token in an `x-webhook-token` header). Set `EASEBUZZ_WEBHOOK_TOKEN` to a long random value.
+4. Open `/admin/gateway` to check which values are set.
+
+How it works:
+
+- The client enters an amount and is sent to Easebuzz hosted checkout. The txnid is random and server-made; the amount is stored in paise.
+- The callback is public but trusted only after the response hash is verified and the paid amount matches the stored amount. It is idempotent: repeated callbacks do not change a finished payment. A GET to the callback never changes anything.
+- **Reconcile** (admin, per payment or for all pending ones) asks Easebuzz for the real status of payments that never got a callback.
+- **Refunds** (admin only, on paid payments, full or partial, never above the amount left). The refund row is written to the database first, then the gateway is called. If the gateway outcome is unknown the row stays queued and still counts against the limit; **retry** reuses the same refund id so it can not double-refund.
+- Only a sanitised copy of the gateway response is stored on the payment (card numbers, hashes, keys are blanked). Secrets are never logged.
+- The old QR + transaction ID flow still works unchanged.
+
+Not verified against the live service: see the pull request. In particular the refund-webhook hash formula is assumed; set `EASEBUZZ_WEBHOOK_HASH=off` to rely on the token alone if Easebuzz signs it differently.
+
+## Admin 2 (auditor)
+
+Admin 2 is a read-only role that traces payment activity between admin and client.
+
+- Create an account with the command line (`SEED_AUDITOR_EMAIL=... SEED_AUDITOR_PASSWORD=... npm run auditor:create`) or as admin under `/admin/auditors`.
+- Sign in at `/auditor/login`. The auditor can filter and search the trace (by user, payment, action, date), open a payment or user timeline, and export CSV. All write endpoints answer 403 to an auditor.
+- Every important action (payment created / paid / failed, refund requested / completed, reconcile, manual transaction confirmed / rejected, QR assigned, notification sent, auditor created, ...) is written to an **append-only** `ActivityEvent` table. Database triggers reject UPDATE and DELETE on it. TRUNCATE is deliberately not blocked (the tests need it) - restrict that permission on the production database user.
+- Secrets, OTPs, tokens and card data are blanked before an event is stored.
 
 ## Environment variables
 
@@ -97,6 +136,11 @@ Set these in `.env` (copy from `.env.example`).
 | `BREVO_SMS_SENDER` | production | Sender name (up to 11 letters/digits) approved in Brevo |
 | `DEFAULT_COUNTRY_CODE` | no | Added to 10-digit numbers. Default `+91` |
 | `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD`, `SEED_ADMIN_NAME`, `SEED_ADMIN_USERNAME` | for `admin:create` | Details of the first admin |
+| `SEED_AUDITOR_EMAIL`, `SEED_AUDITOR_PASSWORD`, `SEED_AUDITOR_NAME`, `SEED_AUDITOR_USERNAME` | for `auditor:create` | Details of an Admin 2 account |
+| `EASEBUZZ_KEY`, `EASEBUZZ_SALT` | for online payments | Easebuzz merchant key and salt (keep secret) |
+| `EASEBUZZ_ENV` | no | `test` (default) or `prod` |
+| `EASEBUZZ_WEBHOOK_TOKEN` | for refund webhook | Shared token the webhook must present |
+| `EASEBUZZ_WEBHOOK_HASH` | no | `refund` (default, assumed formula) or `off` |
 
 ### SMS and OTP codes in development
 
@@ -120,8 +164,13 @@ Notes: Brevo has to approve or register the sender name for your account. SMS to
 | `npm run db:local` | Local Postgres on port 5433, data kept in `.local/` |
 | `npm run db:deploy` | Apply database migrations |
 | `npm run admin:create` | Create (or update) the admin account |
+| `npm run auditor:create` | Create (or update) an Admin 2 (auditor) account |
 | `npm test` | Run the tests (they start their own throwaway database) |
 | `npm run typecheck`, `npm run lint` | Checks |
+
+## Upgrading to the payment gateway version
+
+If you already have the two-panel database, `npm run db:deploy` applies the gateway migration on top (new Payment, Refund and ActivityEvent tables, AUDITOR role). Nothing is lost.
 
 ## Upgrading from the earlier version
 
