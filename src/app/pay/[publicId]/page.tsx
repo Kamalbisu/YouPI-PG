@@ -10,15 +10,17 @@ export const dynamic = "force-dynamic";
 
 export default async function PayPage({ params }: { params: Promise<{ publicId: string }> }) {
   const { publicId } = await params;
+  let data;
   try {
-    const [order, options] = await Promise.all([getPublicOrder(publicId), getPaymentOptions(publicId)]);
-    return (
-      <main className="mx-auto flex min-h-screen w-full max-w-md flex-col gap-4 p-4 sm:py-10">
-        <PayClient order={order} options={options} />
-      </main>
-    );
+    data = await Promise.all([getPublicOrder(publicId), getPaymentOptions(publicId)]);
   } catch (e) {
     if (e instanceof AppError && e.code === "NOT_FOUND") notFound();
     throw e;
   }
+  const [order, options] = data;
+  return (
+    <main className="mx-auto flex min-h-screen w-full max-w-md flex-col gap-4 p-4 sm:py-10">
+      <PayClient order={order} options={options} />
+    </main>
+  );
 }

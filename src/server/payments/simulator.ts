@@ -41,7 +41,7 @@ export const simulator: PaymentProvider = {
     return false; // The simulator has no browser-return signature; results arrive as signed events.
   },
 
-  verifyWebhookSignature(rawBody, headers, _secret) {
+  verifyWebhookSignature(rawBody, headers) {
     if (!simulatorEnabled()) return false;
     const sig = header(headers, SIMULATOR_SIGNATURE_HEADER);
     if (!sig) return false;

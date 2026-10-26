@@ -4,6 +4,8 @@ import { Moon, Sun } from "lucide-react";
 
 export function ThemeToggle() {
   const [dark, setDark] = useState(false);
+  // Read the theme applied by themeInitScript after mount (it is unknown during SSR).
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => setDark(document.documentElement.classList.contains("dark")), []);
   return (
     <button

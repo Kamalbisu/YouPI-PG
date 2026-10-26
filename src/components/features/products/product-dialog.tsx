@@ -92,6 +92,7 @@ export function ProductDialog({ portal, open, onClose, businesses, product }: {
   const [form, setForm] = useState<FormState>(() => initial(product, businesses));
   // Reset whenever the dialog is opened for a (different) product.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (open) setForm(initial(product, businesses));
   }, [open, product, businesses]);
   if (!open) return <Dialog open={false} onClose={onClose} title="Product">{null}</Dialog>;

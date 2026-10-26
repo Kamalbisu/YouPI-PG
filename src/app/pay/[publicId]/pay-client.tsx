@@ -81,6 +81,8 @@ export function PayClient({ order, options }: { order: PublicOrderView; options:
   useEffect(() => {
     if (!attempt || paid) return;
     const t = setInterval(() => void refresh(), 3000);
+    // refresh() only sets state after the fetch resolves, never synchronously.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void refresh();
     return () => clearInterval(t);
   }, [attempt, paid, refresh]);
@@ -336,6 +338,8 @@ function UpiPanel({ upi, attempt, total, onBack }: { upi: UpiPaymentResult; atte
           <p className="text-sm font-medium text-ink">Scan to pay {total}</p>
           <p className="text-xs text-ink-muted">Open any UPI app, tap Scan, and scan this code.</p>
         </div>
+        {/* A generated data: URL; next/image optimisation does not apply. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={upi.qrDataUrl} alt={`UPI QR code to pay ${total}`} width={240} height={240} className="mx-auto rounded-lg border border-line bg-white p-2" />
         <div className="flex items-center gap-3 text-xs text-ink-muted">
           <span className="h-px flex-1 bg-line" /> or <span className="h-px flex-1 bg-line" />

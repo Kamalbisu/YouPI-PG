@@ -41,9 +41,12 @@ function QrCreateDialog({ portal, businesses, onClose }: { portal: Portal; busin
   useEffect(() => {
     if (type !== "PRODUCT" || !businessId) return;
     let cancelled = false;
+    // Reset before loading the products for the newly chosen business.
+    /* eslint-disable react-hooks/set-state-in-effect */
     setProducts(null);
     setProductsError(false);
     setProductId("");
+    /* eslint-enable react-hooks/set-state-in-effect */
     api<{ items: ProductOption[] }>(`/api/${portal}/products?businessId=${encodeURIComponent(businessId)}&status=available&pageSize=100`)
       .then((r) => { if (!cancelled) setProducts(r.items); })
       .catch(() => { if (!cancelled) { setProducts([]); setProductsError(true); } });
