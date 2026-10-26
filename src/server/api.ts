@@ -53,6 +53,11 @@ export function route<P = Record<string, string>>(handler: Handler<P>, opts: Rou
     try {
       const mutating = !["GET", "HEAD", "OPTIONS"].includes(req.method);
       if (mutating && opts.csrf !== false && !sameOrigin(req)) {
+        if (process.env.NODE_ENV === "development") {
+          console.warn(
+            `[csrf] blocked ${req.method} ${req.nextUrl.pathname}: origin=${req.headers.get("origin")} host=${req.headers.get("host")} x-forwarded-host=${req.headers.get("x-forwarded-host")} sec-fetch-site=${req.headers.get("sec-fetch-site")} APP_URL=${env().APP_URL}`,
+          );
+        }
         throw new AppError("FORBIDDEN", "Cross-site request blocked");
       }
       const actor = opts.public ? null : await actorFromToken(req.cookies.get(cookieName())?.value);
