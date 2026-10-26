@@ -1,4 +1,5 @@
 import { z } from "zod";
+import QRCode from "qrcode";
 import { Prisma } from "@/generated/prisma/client";
 import { db, type Tx } from "@/lib/db";
 import { AppError, conflict, notFound } from "@/lib/errors";
@@ -325,4 +326,45 @@ export async function simulatorComplete(publicId: string, attemptId: string, out
   });
   const res = await ingestWebhook(ctx, { provider: "DEV_SIMULATOR", rawBody: raw, headers: { [SIMULATOR_SIGNATURE_HEADER]: signSimulatorBody(raw) } });
   return { result: res, outcome: res.outcome, status: await getPaymentStatus(d.publicId) };
+}
+
+const upiSchema = z.object({ publicId: z.string().trim().min(8).max(100), attemptId: z.string().trim().min(1).max(64) });
+
+export interface UpiPaymentResult {
+  attemptId: string;
+  /** upi:// link for the "Pay with UPI app" button (opens the app chooser on a phone). */
+  uri: string;
+  /** App specific deep links returned by the provider. */
+  appLinks: Partial<Record<"gpay" | "phonepe" | "paytm" | "bhim" | "cred", string>>;
+  /** PNG data URL of the QR for the same link, rendered on the server. */
+  qrDataUrl: string;
+  expiresAt: string;
+}
+
+/**
+ * UPI intent + QR for an open Cashfree attempt. The attempt must belong to the order, be open and not expired.
+ * This only gives the customer a way to pay; the order is marked paid solely by a verified webhook or a
+ * server-side status fetch, never because the customer returned from a UPI app.
+ */
+export async function getUpiPayment(ctx: Ctx, input: unknown): Promise<UpiPaymentResult> {
+  const d = parse(upiSchema, input);
+  await enforceRateLimit(`pay:upi:ip:${ctx.ip ?? "unknown"}`, 30, 300, "Too many requests. Please wait a moment.");
+  const order = await loadPayableOrder(d.publicId);
+  const reason = payability(order);
+  if (reason) throw conflict(reason, { reason: "ORDER_NOT_PAYABLE" });
+  const attempt = await db.paymentAttempt.findFirst({ where: { id: d.attemptId, orderId: order.id } });
+  if (!attempt) throw notFound("Payment");
+  if (!(OPEN as readonly string[]).includes(attempt.status) || attempt.expiresAt.getTime() <= Date.now()) throw conflict("This payment is no longer open", { reason: "ATTEMPT_NOT_OPEN" });
+  const provider = getProvider(attempt.provider);
+  if (!provider.createUpiIntent || !attempt.providerSessionId) throw new AppError("BAD_REQUEST", "UPI link is not available for this payment");
+  const creds = await credentialsForAttempt(attempt.provider, attempt.configId);
+  let intent;
+  try {
+    intent = await provider.createUpiIntent(creds, { sessionId: attempt.providerSessionId });
+  } catch (e) {
+    if (e instanceof AppError) throw e;
+    throw new AppError("PROVIDER_UNAVAILABLE", "The payment provider is not reachable. Please try again.");
+  }
+  const qrDataUrl = await QRCode.toDataURL(intent.uri, { errorCorrectionLevel: "M", margin: 2, width: 320 });
+  return { attemptId: attempt.id, uri: intent.uri, appLinks: intent.appLinks, qrDataUrl, expiresAt: attempt.expiresAt.toISOString() };
 }

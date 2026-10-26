@@ -11,6 +11,7 @@ import {
   type NormalizedRefund,
   type PaymentProvider,
   type ProviderCredentials,
+  type UpiIntent,
 } from "./types";
 
 const NAME = "Cashfree";
@@ -123,6 +124,31 @@ export function createCashfree(getFetch: () => FetchImpl): PaymentProvider {
       const session = str(o.payment_session_id);
       if (!id || !session) throw new AppError("PAYMENT_ERROR", "Cashfree returned an unexpected response");
       return { providerOrderId: id, sessionId: session };
+    },
+
+    /**
+     * Order Pay with UPI channel "link": returns the upi:// intent (plus app links) for the payment session.
+     * Only upi: URIs are accepted so a malformed provider answer can never put another scheme in front of the customer.
+     */
+    async createUpiIntent(creds, { sessionId }): Promise<UpiIntent> {
+      const { status, json } = await providerRequest(getFetch(), NAME, {
+        url: `${base(creds)}/orders/sessions`,
+        method: "POST",
+        headers: auth(creds),
+        body: { payment_session_id: sessionId, payment_method: { upi: { channel: "link" } } },
+      });
+      const o = asObj(json);
+      if (status < 200 || status >= 300) throw providerError(NAME, status, o.message);
+      const payload = asObj(asObj(o.data).payload);
+      const ok = (v: unknown) => (typeof v === "string" && /^[a-z][a-z0-9+.-]*:\/\//i.test(v) && v.length < 2000 ? v : undefined);
+      const uri = ok(payload.default) ?? ok(payload.web);
+      if (!uri || !uri.toLowerCase().startsWith("upi://")) throw new AppError("PAYMENT_ERROR", "Cashfree did not return a UPI payment link");
+      const appLinks: UpiIntent["appLinks"] = {};
+      for (const k of ["gpay", "phonepe", "paytm", "bhim", "cred"] as const) {
+        const v = ok(payload[k]);
+        if (v) appLinks[k] = v;
+      }
+      return { uri, appLinks };
     },
 
     // Cashfree has no browser-return signature; the result must come from a webhook or a server-side fetch.

@@ -34,6 +34,14 @@ export interface ProviderOrder {
   publicKeyId?: string;
 }
 
+/** UPI intent data for paying inside the customer's own UPI app or by scanning a QR. Never contains secrets. */
+export interface UpiIntent {
+  /** Generic upi://pay URI that any UPI app can open. Also what the QR encodes. */
+  uri: string;
+  /** App specific deep links the provider returned (gpay, phonepe, paytm, bhim, cred). */
+  appLinks: Partial<Record<"gpay" | "phonepe" | "paytm" | "bhim" | "cred", string>>;
+}
+
 export type NormalizedPaymentStatus = "SUCCEEDED" | "FAILED" | "PENDING" | "CANCELLED";
 
 export interface NormalizedPayment {
@@ -74,6 +82,11 @@ export interface WebhookVerifyOptions {
 export interface PaymentProvider {
   readonly id: ProviderId;
   createProviderOrder(creds: ProviderCredentials, input: CreateProviderOrderInput): Promise<ProviderOrder>;
+  /**
+   * Optional: server-side UPI intent for a provider order (Cashfree). Providers without it (Razorpay) pay
+   * through their hosted checkout instead. The payment is still confirmed only by webhook or status fetch.
+   */
+  createUpiIntent?(creds: ProviderCredentials, input: { sessionId: string }): Promise<UpiIntent>;
   /** Checkout-return signature (Razorpay). Providers without one return false. Constant-time. */
   verifyCheckoutSignature(creds: ProviderCredentials, input: { providerOrderId: string; providerPaymentId: string; signature: string }): boolean;
   /** Signature check only. Returns false for missing/invalid/stale. */
