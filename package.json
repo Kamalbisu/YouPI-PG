@@ -20,6 +20,7 @@
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
     "admin:create": "tsx scripts/create-admin.ts",
+    "email:test": "tsx scripts/test-email.ts",
     "auditor:create": "tsx scripts/create-auditor.ts",
     "db:local": "tsx scripts/dev-db.ts",
     "db:studio": "prisma studio"

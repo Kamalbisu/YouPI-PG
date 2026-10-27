@@ -13,9 +13,9 @@ const schema = z.object({
   TRUST_PROXY: z.enum(["true", "false"]).optional(),
 
   /** Brevo (transactional email). Optional in development, required in production. */
-  BREVO_API_KEY: z.string().optional(),
+  BREVO_API_KEY: z.string().trim().optional(),
   /** Sender address for OTP emails. Must be a verified sender (or domain) in Brevo. */
-  BREVO_SENDER_EMAIL: z.string().email().optional(),
+  BREVO_SENDER_EMAIL: z.string().trim().email().optional(),
   /** Sender display name. */
   BREVO_SENDER_NAME: z.string().min(1).default("YouPI PG"),
   /** Country code added to 10-digit numbers. */
