@@ -70,6 +70,14 @@ describe("startPayment", () => {
     expect(await db.payment.count()).toBe(0);
   });
 
+  it("takes the phone number at pay time and saves it on the account", async () => {
+    const calls = mockFetch([{ status: 1, data: "AK2" }]);
+    await db.user.update({ where: { id: userId }, data: { mobile: null } });
+    await startPayment(userCtx, { amount: "10", purpose: "School fees", mobile: "9123456780" });
+    expect(calls[0]!.body.get("phone")).toBe("9123456780");
+    expect((await db.user.findUniqueOrThrow({ where: { id: userId } })).mobile).toBe("+919123456780");
+  });
+
   it("refuses when the gateway is not configured", async () => {
     clearGateway();
     mockFetch([{}]);

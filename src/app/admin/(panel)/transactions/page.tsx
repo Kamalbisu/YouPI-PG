@@ -19,7 +19,7 @@ export default async function TransactionsPage({ searchParams }: { searchParams:
       <PageHeader title="Transactions" description={`${r.total} submission${r.total === 1 ? "" : "s"}`} />
       <TableCard>
         <FilterBar filters={[
-          { name: "q", label: "Search", type: "search", placeholder: "Transaction ID, user or mobile" },
+          { name: "q", label: "Search", type: "search", placeholder: "Transaction ID, user, email or mobile" },
           { name: "status", label: "Status", type: "select", options: [{ value: "PENDING", label: "Pending" }, { value: "CONFIRMED", label: "Confirmed" }, { value: "REJECTED", label: "Rejected" }] },
         ]} />
         <DataTable

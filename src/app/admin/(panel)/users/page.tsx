@@ -17,7 +17,7 @@ export default async function UsersPage({ searchParams }: { searchParams: SP }) 
       <PageHeader title="Users" description={`${r.total} user${r.total === 1 ? "" : "s"}`} />
       <TableCard>
         <FilterBar filters={[
-          { name: "q", label: "Search", type: "search", placeholder: "Name, username or mobile" },
+          { name: "q", label: "Search", type: "search", placeholder: "Name, username, email or mobile" },
           { name: "status", label: "Status", type: "select", options: [{ value: "ACTIVE", label: "Active" }, { value: "DISABLED", label: "Disabled" }] },
         ]} />
         <DataTable
@@ -27,6 +27,7 @@ export default async function UsersPage({ searchParams }: { searchParams: SP }) 
           columns={[
             { key: "name", header: "Name", cell: (u) => <Link href={`/admin/users/${u.id}`} className="font-medium hover:underline">{u.name}</Link> },
             { key: "username", header: "Username", cell: (u) => `@${u.username}` },
+            { key: "email", header: "Email", cell: (u) => u.email ?? "-" },
             { key: "mobile", header: "Mobile", cell: (u) => u.mobile ?? "-" },
             { key: "status", header: "Status", cell: (u) => <StatusBadge status={u.status} /> },
             { key: "txn", header: "Transactions", align: "right", cell: (u) => u._count.transactions },

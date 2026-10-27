@@ -52,6 +52,7 @@ export async function listTransactionsAdmin(ctx: Ctx, raw: unknown) {
             ...(txn ? [{ txnId: { contains: txn } }] : []),
             { user: { username: { contains: q.q.toLowerCase() } } },
             { user: { name: { contains: q.q, mode: "insensitive" as const } } },
+            { user: { email: { contains: q.q.toLowerCase() } } },
             { user: { mobile: { contains: q.q.replace(/\D/g, "") || "x" } } },
           ],
         }
@@ -64,7 +65,7 @@ export async function listTransactionsAdmin(ctx: Ctx, raw: unknown) {
       ...skipTake(q),
       select: {
         id: true, txnId: true, status: true, rejectReason: true, createdAt: true, reviewedAt: true,
-        user: { select: { id: true, name: true, username: true, mobile: true } },
+        user: { select: { id: true, name: true, username: true, email: true, mobile: true } },
         qr: { select: { id: true, label: true } },
         reviewer: { select: { name: true, username: true } },
       },

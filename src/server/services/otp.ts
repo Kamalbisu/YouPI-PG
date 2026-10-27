@@ -4,48 +4,48 @@ import { AppError } from "@/lib/errors";
 import { keyedHash, safeEqual } from "@/lib/crypto";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import type { Ctx } from "@/server/auth/types";
-import { sendSms } from "./sms";
-import { maskPhone, recordActivity } from "./activity";
+import { sendEmail } from "./mailer";
+import { maskEmail, recordActivity } from "./activity";
 
 export type OtpPurpose = "LOGIN" | "SIGNUP";
 
 export const OTP_TTL_MS = 5 * 60 * 1000;
 export const OTP_MAX_ATTEMPTS = 5;
 export const OTP_RESEND_COOLDOWN_SEC = 45;
-const PER_PHONE_PER_HOUR = 6;
+const PER_EMAIL_PER_HOUR = 6;
 const PER_IP_PER_HOUR = 20;
 
-const hashCode = (phone: string, purpose: OtpPurpose, code: string) => keyedHash(`otp:${purpose}:${phone}:${code}`);
+const hashCode = (email: string, purpose: OtpPurpose, code: string) => keyedHash(`otp:${purpose}:${email}:${code}`);
 const invalid = () => new AppError("VALIDATION", "That code is wrong or has expired. Request a new one.", { fields: { code: "Wrong or expired code" } });
 
-/** Create and SMS a fresh code. Older unused codes for the same number and purpose stop working. */
+/** Create and email a fresh code. Older unused codes for the same address and purpose stop working. */
 export async function requestOtp(
   ctx: Ctx,
-  input: { phone: string; purpose: OtpPurpose; payload?: Record<string, unknown> },
+  input: { email: string; purpose: OtpPurpose; payload?: Record<string, unknown> },
 ): Promise<{ expiresInSec: number; resendInSec: number }> {
-  const { phone, purpose } = input;
+  const { email, purpose } = input;
   const ip = ctx.ip ?? "unknown";
 
   await enforceRateLimit(`otp:ip:${ip}`, PER_IP_PER_HOUR, 3600, "Too many code requests. Please try again later.");
 
-  const last = await db.otpCode.findFirst({ where: { phone }, orderBy: { createdAt: "desc" }, select: { createdAt: true } });
+  const last = await db.otpCode.findFirst({ where: { email }, orderBy: { createdAt: "desc" }, select: { createdAt: true } });
   if (last) {
     const wait = Math.ceil((last.createdAt.getTime() + OTP_RESEND_COOLDOWN_SEC * 1000 - Date.now()) / 1000);
     if (wait > 0) {
       throw new AppError("RATE_LIMITED", `Please wait ${wait} seconds before asking for another code.`, { retryAfterSec: wait });
     }
   }
-  await enforceRateLimit(`otp:phone:${phone}`, PER_PHONE_PER_HOUR, 3600, "Too many codes sent to this number. Try again in an hour.");
+  await enforceRateLimit(`otp:email:${email}`, PER_EMAIL_PER_HOUR, 3600, "Too many codes sent to this email. Try again in an hour.");
 
   const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
   const now = new Date();
   await db.$transaction([
-    db.otpCode.updateMany({ where: { phone, purpose, consumedAt: null }, data: { consumedAt: now } }),
+    db.otpCode.updateMany({ where: { email, purpose, consumedAt: null }, data: { consumedAt: now } }),
     db.otpCode.create({
       data: {
-        phone,
+        email,
         purpose,
-        codeHash: hashCode(phone, purpose, code),
+        codeHash: hashCode(email, purpose, code),
         payload: input.payload as object | undefined,
         expiresAt: new Date(now.getTime() + OTP_TTL_MS),
         ip: ctx.ip,
@@ -54,15 +54,20 @@ export async function requestOtp(
   ]);
 
   try {
-    await sendSms(phone, `${code} is your YouPI PG verification code. It is valid for 5 minutes. Do not share it with anyone.`, {
-      devLabel: `OTP ${purpose}`,
-    });
+    await sendEmail(
+      email,
+      {
+        subject: `${code} is your YouPI PG verification code`,
+        text: `Your YouPI PG verification code is ${code}.\n\nIt is valid for 5 minutes. Do not share it with anyone. If you did not ask for this code, you can ignore this email.`,
+      },
+      { devLabel: `OTP ${purpose}` },
+    );
   } catch (e) {
     // The code was never delivered: forget it so the member can retry straight away.
-    await db.otpCode.deleteMany({ where: { phone, purpose, consumedAt: null, createdAt: { gte: now } } });
+    await db.otpCode.deleteMany({ where: { email, purpose, consumedAt: null, createdAt: { gte: now } } });
     throw e;
   }
-  await recordActivity(ctx, { type: "auth.otp.sent", actor: { type: "SYSTEM" }, metadata: { purpose, phone: maskPhone(phone) } });
+  await recordActivity(ctx, { type: "auth.otp.sent", actor: { type: "SYSTEM" }, metadata: { purpose, email: maskEmail(email) } });
   return { expiresInSec: OTP_TTL_MS / 1000, resendInSec: OTP_RESEND_COOLDOWN_SEC };
 }
 
@@ -72,17 +77,17 @@ export async function requestOtp(
  */
 export async function verifyOtp(
   ctx: Ctx,
-  input: { phone: string; purpose: OtpPurpose; code: string },
+  input: { email: string; purpose: OtpPurpose; code: string },
 ): Promise<{ payload: Record<string, unknown> | null }> {
-  const { phone, purpose, code } = input;
+  const { email, purpose, code } = input;
   await enforceRateLimit(`otpverify:ip:${ctx.ip ?? "unknown"}`, 40, 900, "Too many attempts. Please try again later.");
 
   const row = await db.otpCode.findFirst({
-    where: { phone, purpose, consumedAt: null, expiresAt: { gt: new Date() } },
+    where: { email, purpose, consumedAt: null, expiresAt: { gt: new Date() } },
     orderBy: { createdAt: "desc" },
   });
   if (!row) {
-    await recordActivity(ctx, { type: "auth.otp.failed", actor: { type: "SYSTEM" }, metadata: { purpose, phone: maskPhone(phone), reason: "no active code" } });
+    await recordActivity(ctx, { type: "auth.otp.failed", actor: { type: "SYSTEM" }, metadata: { purpose, email: maskEmail(email), reason: "no active code" } });
     throw invalid();
   }
 
@@ -92,21 +97,21 @@ export async function verifyOtp(
     data: { attempts: { increment: 1 } },
   });
   if (counted.count === 0) {
-    await recordActivity(ctx, { type: "auth.otp.failed", actor: { type: "SYSTEM" }, metadata: { purpose, phone: maskPhone(phone), reason: "too many attempts" } });
+    await recordActivity(ctx, { type: "auth.otp.failed", actor: { type: "SYSTEM" }, metadata: { purpose, email: maskEmail(email), reason: "too many attempts" } });
     throw invalid();
   }
 
-  const ok = safeEqual(row.codeHash, hashCode(phone, purpose, code));
+  const ok = safeEqual(row.codeHash, hashCode(email, purpose, code));
   if (!ok) {
     if (row.attempts + 1 >= OTP_MAX_ATTEMPTS) {
       await db.otpCode.updateMany({ where: { id: row.id }, data: { consumedAt: new Date() } });
     }
-    await recordActivity(ctx, { type: "auth.otp.failed", actor: { type: "SYSTEM" }, metadata: { purpose, phone: maskPhone(phone), reason: "wrong code" } });
+    await recordActivity(ctx, { type: "auth.otp.failed", actor: { type: "SYSTEM" }, metadata: { purpose, email: maskEmail(email), reason: "wrong code" } });
     throw invalid();
   }
   // Single use: only one caller can flip consumedAt.
   const used = await db.otpCode.updateMany({ where: { id: row.id, consumedAt: null }, data: { consumedAt: new Date() } });
   if (used.count !== 1) throw invalid();
-  await recordActivity(ctx, { type: "auth.otp.verified", actor: { type: "SYSTEM" }, metadata: { purpose, phone: maskPhone(phone) } });
+  await recordActivity(ctx, { type: "auth.otp.verified", actor: { type: "SYSTEM" }, metadata: { purpose, email: maskEmail(email) } });
   return { payload: (row.payload as Record<string, unknown> | null) ?? null };
 }
