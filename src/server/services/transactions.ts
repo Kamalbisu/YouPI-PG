@@ -8,6 +8,7 @@ import { idSchema, parse, txnIdSchema } from "@/lib/validation";
 import { requireAdmin, requireUser } from "@/server/auth/guards";
 import type { Ctx } from "@/server/auth/types";
 import { visibleToUser } from "./qr";
+import { recordActivity } from "./activity";
 
 export async function submitTransaction(ctx: Ctx, input: unknown) {
   const actor = requireUser(ctx);
@@ -23,6 +24,7 @@ export async function submitTransaction(ctx: Ctx, input: unknown) {
       select: { id: true, txnId: true, status: true, createdAt: true },
     });
     await audit(ctx, { action: "transaction.submit", entityType: "Transaction", entityId: t.id, metadata: { qrId, txnId } });
+    await recordActivity(ctx, { type: "txn.manual.submitted", targetUserId: actor.userId, transactionId: t.id, paymentRef: txnId, toStatus: "PENDING", metadata: { qrId, txnId } });
     return t;
   } catch (e) {
     if ((e as { code?: string }).code === "P2002") {
@@ -87,6 +89,15 @@ async function review(ctx: Ctx, id: string, status: "CONFIRMED" | "REJECTED", re
     entityType: "Transaction",
     entityId: id,
     metadata: { txnId: existing.txnId, userId: existing.userId, ...(reason ? { reason } : {}) },
+  });
+  await recordActivity(ctx, {
+    type: status === "CONFIRMED" ? "txn.manual.confirmed" : "txn.manual.rejected",
+    targetUserId: existing.userId,
+    transactionId: id,
+    paymentRef: existing.txnId,
+    fromStatus: "PENDING",
+    toStatus: status,
+    metadata: { txnId: existing.txnId, ...(reason ? { reason } : {}) },
   });
   return { id, status };
 }

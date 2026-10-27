@@ -5,6 +5,7 @@ import { keyedHash, safeEqual } from "@/lib/crypto";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import type { Ctx } from "@/server/auth/types";
 import { sendSms } from "./sms";
+import { maskPhone, recordActivity } from "./activity";
 
 export type OtpPurpose = "LOGIN" | "SIGNUP";
 
@@ -61,6 +62,7 @@ export async function requestOtp(
     await db.otpCode.deleteMany({ where: { phone, purpose, consumedAt: null, createdAt: { gte: now } } });
     throw e;
   }
+  await recordActivity(ctx, { type: "auth.otp.sent", actor: { type: "SYSTEM" }, metadata: { purpose, phone: maskPhone(phone) } });
   return { expiresInSec: OTP_TTL_MS / 1000, resendInSec: OTP_RESEND_COOLDOWN_SEC };
 }
 
@@ -79,24 +81,32 @@ export async function verifyOtp(
     where: { phone, purpose, consumedAt: null, expiresAt: { gt: new Date() } },
     orderBy: { createdAt: "desc" },
   });
-  if (!row) throw invalid();
+  if (!row) {
+    await recordActivity(ctx, { type: "auth.otp.failed", actor: { type: "SYSTEM" }, metadata: { purpose, phone: maskPhone(phone), reason: "no active code" } });
+    throw invalid();
+  }
 
   // Count the attempt first (atomically) so parallel guesses cannot exceed the limit.
   const counted = await db.otpCode.updateMany({
     where: { id: row.id, consumedAt: null, attempts: { lt: OTP_MAX_ATTEMPTS } },
     data: { attempts: { increment: 1 } },
   });
-  if (counted.count === 0) throw invalid();
+  if (counted.count === 0) {
+    await recordActivity(ctx, { type: "auth.otp.failed", actor: { type: "SYSTEM" }, metadata: { purpose, phone: maskPhone(phone), reason: "too many attempts" } });
+    throw invalid();
+  }
 
   const ok = safeEqual(row.codeHash, hashCode(phone, purpose, code));
   if (!ok) {
     if (row.attempts + 1 >= OTP_MAX_ATTEMPTS) {
       await db.otpCode.updateMany({ where: { id: row.id }, data: { consumedAt: new Date() } });
     }
+    await recordActivity(ctx, { type: "auth.otp.failed", actor: { type: "SYSTEM" }, metadata: { purpose, phone: maskPhone(phone), reason: "wrong code" } });
     throw invalid();
   }
   // Single use: only one caller can flip consumedAt.
   const used = await db.otpCode.updateMany({ where: { id: row.id, consumedAt: null }, data: { consumedAt: new Date() } });
   if (used.count !== 1) throw invalid();
+  await recordActivity(ctx, { type: "auth.otp.verified", actor: { type: "SYSTEM" }, metadata: { purpose, phone: maskPhone(phone) } });
   return { payload: (row.payload as Record<string, unknown> | null) ?? null };
 }

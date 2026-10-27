@@ -13,6 +13,7 @@ datasource db {
 enum UserRole {
   ADMIN
   USER
+  AUDITOR // "Admin 2": read-only trace of every payment activity
 }
 
 enum UserStatus {
@@ -55,6 +56,7 @@ model User {
   notificationsSent Notification[]     @relation("NotificationSender")
   notificationReads NotificationRead[]
   qrsCreated        Qr[]
+  payments          Payment[]          @relation("PaymentOwner")
 
   @@index([role, createdAt])
   @@index([status])
@@ -225,4 +227,111 @@ model NotificationRead {
   @@id([notificationId, userId])
   @@index([userId])
   @@map("notification_reads")
+}
+
+enum PaymentMethod {
+  EASEBUZZ // online checkout
+  QR // QR + transaction id (manual review)
+}
+
+enum PaymentStatus {
+  CREATED // row written, customer not yet sent to the gateway
+  PENDING // sent to the gateway, waiting for the result
+  SUCCEEDED
+  FAILED
+  PARTIALLY_REFUNDED
+  REFUNDED
+}
+
+enum RefundStatus {
+  QUEUED // written to our database, gateway result not known yet
+  PROCESSING // gateway accepted, money not yet returned
+  PROCESSED
+  FAILED
+}
+
+enum ActivityActorType {
+  USER
+  ADMIN
+  AUDITOR
+  SYSTEM
+  GATEWAY
+}
+
+/// Online payments through the gateway (Easebuzz). Amounts are integer paise.
+model Payment {
+  id              String        @id @default(cuid())
+  userId          String
+  txnId           String        @unique // our merchant transaction id, crypto-random
+  amountPaise     Int
+  purpose         String
+  status          PaymentStatus @default(CREATED)
+  method          PaymentMethod @default(EASEBUZZ)
+  easebuzzId      String? // gateway's id for the payment
+  gatewayMode     String? // card, upi, netbanking...
+  failureReason   String?
+  paidAmountPaise Int? // what the gateway says was paid
+  gatewayResponse Json? // last raw gateway response, secrets removed
+  paidAt          DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  user    User     @relation("PaymentOwner", fields: [userId], references: [id], onDelete: Restrict)
+  refunds Refund[]
+
+  @@index([status, createdAt])
+  @@index([userId, createdAt])
+  @@index([method, createdAt])
+  @@index([easebuzzId])
+  @@map("payments")
+}
+
+model Refund {
+  id               String       @id @default(cuid())
+  paymentId        String
+  merchantRefundId String       @unique
+  amountPaise      Int
+  reason           String?
+  status           RefundStatus @default(QUEUED)
+  gatewayRefundId  String?
+  failureReason    String?
+  requestedById    String?
+  gatewayResponse  Json?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+
+  @@index([paymentId])
+  @@index([status, createdAt])
+  @@map("refunds")
+}
+
+/// Append-only trace of everything that happens between users, admins and the gateway.
+/// A database trigger rejects UPDATE and DELETE, and no code path updates or deletes rows.
+model ActivityEvent {
+  id            String            @id @default(cuid())
+  createdAt     DateTime          @default(now())
+  type          String // e.g. "payment.callback.received"
+  actorType     ActivityActorType
+  actorId       String?
+  actorName     String?
+  targetUserId  String?
+  paymentId     String?
+  refundId      String?
+  transactionId String? // manual (QR) transaction row id
+  paymentRef    String? // payment txnId / manual txn id shown in the UI
+  fromStatus    String?
+  toStatus      String?
+  ip            String?
+  userAgent     String?
+  metadata      Json?
+
+  @@index([createdAt])
+  @@index([targetUserId, createdAt])
+  @@index([paymentId, createdAt])
+  @@index([actorId, createdAt])
+  @@index([type, createdAt])
+  @@index([paymentRef])
+  @@map("activity_events")
 }

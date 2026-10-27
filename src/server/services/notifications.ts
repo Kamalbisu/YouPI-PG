@@ -6,6 +6,7 @@ import { pageQuery, skipTake, toPage } from "@/lib/pagination";
 import { parse } from "@/lib/validation";
 import { requireAdmin } from "@/server/auth/guards";
 import type { Actor, Ctx } from "@/server/auth/types";
+import { recordActivity } from "./activity";
 
 const sendSchema = z.object({
   title: z.string().trim().min(2, "Enter a title").max(100, "Title is too long"),
@@ -27,6 +28,7 @@ export async function sendNotification(ctx: Ctx, input: unknown) {
     select: { id: true },
   });
   await audit(ctx, { action: "notification.send", entityType: "Notification", entityId: n.id, metadata: { to: toAll ? "all" : d.userId, title: d.title } });
+  await recordActivity(ctx, { type: "notification.sent", targetUserId: toAll ? null : d.userId, metadata: { notificationId: n.id, to: toAll ? "all" : d.userId, title: d.title } });
   return n;
 }
 

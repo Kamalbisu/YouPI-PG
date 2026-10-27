@@ -9,17 +9,20 @@ import { burnPasswordCheck, hashPassword, verifyPassword } from "@/server/auth/p
 import { createSession } from "@/server/auth/session";
 import type { Ctx } from "@/server/auth/types";
 import { requestOtp, verifyOtp } from "./otp";
+import { maskPhone, recordActivity } from "./activity";
 
 const MAX_FAILED = 5;
 const LOCK_MS = 15 * 60 * 1000;
 const BAD_LOGIN = "Wrong username or password";
 
+type LoginRole = "ADMIN" | "USER" | "AUDITOR";
+
 export interface LoginResult {
   token: string;
-  role: "ADMIN" | "USER";
+  role: LoginRole;
 }
 
-async function startSession(ctx: Ctx, userId: string, role: "ADMIN" | "USER", method: string): Promise<LoginResult> {
+async function startSession(ctx: Ctx, userId: string, role: LoginRole, method: string): Promise<LoginResult> {
   const { token } = await createSession(userId, { ip: ctx.ip, userAgent: ctx.userAgent });
   const u = await db.user.update({
     where: { id: userId },
@@ -27,11 +30,15 @@ async function startSession(ctx: Ctx, userId: string, role: "ADMIN" | "USER", me
     select: { name: true, username: true },
   });
   await audit({ ...ctx, actor: { userId, role, name: u.name, username: u.username, sessionId: null } }, { action: `auth.login.${role.toLowerCase()}`, entityType: "User", entityId: userId, metadata: { method } });
+  await recordActivity(
+    ctx,
+    { type: "auth.login.success", actor: { type: role, id: userId, name: u.username }, targetUserId: userId, metadata: { role, method } },
+  );
   return { token, role };
 }
 
 /** Shared password check with throttling and lockout. Only accounts of `role` can sign in here. */
-async function passwordLogin(ctx: Ctx, role: "ADMIN" | "USER", identifier: string, password: string, field: "username" | "email"): Promise<LoginResult> {
+async function passwordLogin(ctx: Ctx, role: LoginRole, identifier: string, password: string, field: "username" | "email"): Promise<LoginResult> {
   const scope = role.toLowerCase();
   await enforceRateLimit(`login:${scope}:ip:${ctx.ip ?? "unknown"}`, 20, 900, "Too many attempts. Please try again in a few minutes.");
   await enforceRateLimit(`login:${scope}:id:${identifier}`, 10, 900, "Too many attempts. Please try again in a few minutes.");
@@ -39,11 +46,20 @@ async function passwordLogin(ctx: Ctx, role: "ADMIN" | "USER", identifier: strin
   const user = await db.user.findFirst({
     where: { role, ...(field === "email" ? { OR: [{ email: identifier }, { username: identifier }] } : { username: identifier }) },
   });
+  const failedEvent = (reason: string, u?: { id: string; username: string } | null) =>
+    recordActivity(ctx, {
+      type: "auth.login.failed",
+      actor: { type: "SYSTEM" },
+      targetUserId: u?.id ?? null,
+      metadata: { role, identifier: identifier.slice(0, 60), reason },
+    });
   if (!user || !user.passwordHash) {
     await burnPasswordCheck(password);
+    await failedEvent("unknown account");
     throw new AppError("UNAUTHENTICATED", BAD_LOGIN);
   }
   if (user.lockedUntil && user.lockedUntil > new Date()) {
+    await failedEvent("account locked", user);
     throw new AppError("ACCOUNT_LOCKED", "Too many wrong attempts. Try again in 15 minutes.");
   }
   const ok = await verifyPassword(user.passwordHash, password);
@@ -53,15 +69,24 @@ async function passwordLogin(ctx: Ctx, role: "ADMIN" | "USER", identifier: strin
       where: { id: user.id },
       data: failed >= MAX_FAILED ? { failedLoginCount: 0, lockedUntil: new Date(Date.now() + LOCK_MS) } : { failedLoginCount: failed },
     });
+    await failedEvent("wrong password", user);
     throw new AppError("UNAUTHENTICATED", BAD_LOGIN);
   }
-  if (user.status !== "ACTIVE") throw new AppError("ACCOUNT_DISABLED", "This account has been disabled. Contact the administrator.");
+  if (user.status !== "ACTIVE") {
+    await failedEvent("account disabled", user);
+    throw new AppError("ACCOUNT_DISABLED", "This account has been disabled. Contact the administrator.");
+  }
   return startSession(ctx, user.id, role, "password");
 }
 
 export async function adminLogin(ctx: Ctx, input: unknown): Promise<LoginResult> {
   const { login, password } = parse(z.object({ login: loginIdSchema, password: z.string().min(1).max(200) }), input);
   return passwordLogin(ctx, "ADMIN", login, password, "email");
+}
+
+export async function auditorLogin(ctx: Ctx, input: unknown): Promise<LoginResult> {
+  const { login, password } = parse(z.object({ login: loginIdSchema, password: z.string().min(1).max(200) }), input);
+  return passwordLogin(ctx, "AUDITOR", login, password, "email");
 }
 
 export async function userLogin(ctx: Ctx, input: unknown): Promise<LoginResult> {
@@ -89,6 +114,7 @@ export async function signupStart(ctx: Ctx, input: unknown) {
   }
   const passwordHash = await hashPassword(d.password);
   const r = await requestOtp(ctx, { phone: d.mobile, purpose: "SIGNUP", payload: { name: d.name, username: d.username, passwordHash } });
+  await recordActivity(ctx, { type: "auth.signup.started", actor: { type: "USER", name: d.username }, metadata: { username: d.username, phone: maskPhone(d.mobile) } });
   return { mobile: d.mobile, ...r };
 }
 
@@ -110,6 +136,7 @@ export async function signupVerify(ctx: Ctx, input: unknown): Promise<LoginResul
     throw e;
   }
   await audit({ ...ctx, actor: null }, { action: "user.signup", entityType: "User", entityId: userId, metadata: { method: "password" } });
+  await recordActivity(ctx, { type: "auth.signup.verified", actor: { type: "USER", id: userId, name: p.username }, targetUserId: userId, metadata: { method: "password", phone: maskPhone(mobile) } });
   return startSession(ctx, userId, "USER", "signup");
 }
 
@@ -156,6 +183,7 @@ export async function otpLoginVerify(ctx: Ctx, input: unknown): Promise<LoginRes
     }
     if (!user) throw new AppError("INTERNAL", "Could not create the account. Please try again.");
     await audit({ ...ctx, actor: null }, { action: "user.signup", entityType: "User", entityId: user.id, metadata: { method: "otp" } });
+    await recordActivity(ctx, { type: "auth.signup.verified", actor: { type: "USER", id: user.id }, targetUserId: user.id, metadata: { method: "otp", phone: maskPhone(mobile) } });
   }
   if (user.role !== "USER") throw new AppError("FORBIDDEN", "This number cannot sign in here.");
   if (user.status !== "ACTIVE") throw new AppError("ACCOUNT_DISABLED", "This account has been disabled. Contact the administrator.");

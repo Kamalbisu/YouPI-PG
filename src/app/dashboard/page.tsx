@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
 import { QrCode } from "lucide-react";
 import { Card, EmptyState, PageHeader } from "@/components/ui";
+import { PayOnlineCard } from "@/components/user/pay-online-card";
 import { QrPayCard } from "@/components/user/qr-pay-card";
 import { NotificationList } from "@/components/user/notification-list";
 import { requireUserPage } from "@/server/auth/page-guards";
 import { listQrsForUser } from "@/server/services/qr";
+import { gatewayStatus } from "@/server/services/payments";
 import { listNotificationsForUser } from "@/server/services/notifications";
 
 export const metadata: Metadata = { title: "Dashboard" };
@@ -14,9 +16,10 @@ export default async function UserDashboard() {
   const [qrs, notifications] = await Promise.all([listQrsForUser(actor), listNotificationsForUser(actor)]);
   return (
     <>
-      <PageHeader title={`Hello, ${actor.name.split(" ")[0]}`} description="Pay using a QR code below, then enter the transaction ID so we can confirm it." />
+      <PageHeader title={`Hello, ${actor.name.split(" ")[0]}`} description="Pay online, or use a QR code and enter the transaction ID so we can confirm it." />
       <div className="grid gap-6 xl:grid-cols-[1fr_22rem]">
         <section aria-labelledby="qr-h" className="min-w-0 space-y-4">
+          <PayOnlineCard available={gatewayStatus().configured} />
           <h2 id="qr-h" className="sr-only">QR codes</h2>
           {qrs.length === 0 ? (
             <Card><EmptyState icon={<QrCode className="size-6" />} title="No QR code yet" description="When the admin gives you a QR code it will appear here." /></Card>

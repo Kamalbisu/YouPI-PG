@@ -7,6 +7,7 @@ import { parse } from "@/lib/validation";
 import { requireAdmin } from "@/server/auth/guards";
 import type { Actor, Ctx } from "@/server/auth/types";
 import { saveImageAsset } from "./files";
+import { recordActivity } from "./activity";
 
 const labelSchema = z.string().trim().min(2, "Enter a label (at least 2 characters)").max(80, "Label is too long");
 const boolish = (v: unknown) => v === true || v === "true" || v === "on" || v === "1";
@@ -46,6 +47,7 @@ export async function createQr(ctx: Ctx, fields: Record<string, unknown>, file: 
     select: { id: true },
   });
   await audit(ctx, { action: "qr.create", entityType: "Qr", entityId: qr.id, metadata: { label } });
+  await recordActivity(ctx, { type: "qr.created", metadata: { qrId: qr.id, label, forAll: boolish(fields.forAll) } });
   return qr;
 }
 
@@ -62,6 +64,7 @@ export async function updateQr(ctx: Ctx, id: string, fields: Record<string, unkn
   await db.qr.update({ where: { id }, data });
   if (data.imageId) await db.fileAsset.deleteMany({ where: { id: existing.imageId, qrs: { none: {} } } });
   await audit(ctx, { action: "qr.update", entityType: "Qr", entityId: id, metadata: { ...data, imageId: data.imageId ? "replaced" : undefined } });
+  await recordActivity(ctx, { type: "qr.updated", metadata: { qrId: id, ...data, imageId: data.imageId ? "replaced" : undefined } });
   return { id };
 }
 
@@ -73,11 +76,13 @@ export async function deleteQr(ctx: Ctx, id: string) {
   if (qr._count.transactions > 0) {
     await db.qr.update({ where: { id }, data: { active: false } });
     await audit(ctx, { action: "qr.deactivate", entityType: "Qr", entityId: id, metadata: { reason: "has transactions" } });
+    await recordActivity(ctx, { type: "qr.updated", metadata: { qrId: id, active: false, reason: "has transactions" } });
     return { deleted: false, deactivated: true };
   }
   await db.qr.delete({ where: { id } });
   await db.fileAsset.deleteMany({ where: { id: qr.imageId, qrs: { none: {} } } });
   await audit(ctx, { action: "qr.delete", entityType: "Qr", entityId: id });
+  await recordActivity(ctx, { type: "qr.deleted", metadata: { qrId: id } });
   return { deleted: true, deactivated: false };
 }
 
@@ -95,6 +100,7 @@ export async function assignQr(ctx: Ctx, qrId: string, input: { userId?: string;
   if (!qr) throw notFound("QR");
   await db.qrAssignment.upsert({ where: { qrId_userId: { qrId, userId: user.id } }, create: { qrId, userId: user.id }, update: {} });
   await audit(ctx, { action: "qr.assign", entityType: "Qr", entityId: qrId, metadata: { userId: user.id, username: user.username } });
+  await recordActivity(ctx, { type: "qr.assigned", targetUserId: user.id, metadata: { qrId, username: user.username } });
   return { qrId, userId: user.id };
 }
 
@@ -103,6 +109,7 @@ export async function unassignQr(ctx: Ctx, qrId: string, input: { userId?: strin
   const user = await resolveUser(input);
   await db.qrAssignment.deleteMany({ where: { qrId, userId: user.id } });
   await audit(ctx, { action: "qr.unassign", entityType: "Qr", entityId: qrId, metadata: { userId: user.id, username: user.username } });
+  await recordActivity(ctx, { type: "qr.unassigned", targetUserId: user.id, metadata: { qrId, username: user.username } });
   return { qrId, userId: user.id };
 }
 
