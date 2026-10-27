@@ -22,6 +22,7 @@ export async function listUsers(ctx: Ctx, raw: unknown) {
           OR: [
             { name: { contains: q.q, mode: "insensitive" as const } },
             { username: { contains: q.q.toLowerCase() } },
+            { email: { contains: q.q.toLowerCase() } },
             ...(digits ? [{ mobile: { contains: digits } }] : []),
           ],
         }
@@ -33,7 +34,7 @@ export async function listUsers(ctx: Ctx, raw: unknown) {
       orderBy: { createdAt: "desc" },
       ...skipTake(q),
       select: {
-        id: true, name: true, username: true, mobile: true, status: true, createdAt: true, lastLoginAt: true,
+        id: true, name: true, username: true, email: true, mobile: true, status: true, createdAt: true, lastLoginAt: true,
         _count: { select: { transactions: true, assignments: true } },
       },
     }),
@@ -47,7 +48,7 @@ export async function getUserDetail(ctx: Ctx, id: string) {
   const user = await db.user.findFirst({
     where: { id, role: "USER" },
     select: {
-      id: true, name: true, username: true, mobile: true, status: true, createdAt: true, lastLoginAt: true, mobileVerifiedAt: true,
+      id: true, name: true, username: true, email: true, mobile: true, status: true, createdAt: true, lastLoginAt: true, emailVerifiedAt: true,
       assignments: { orderBy: { createdAt: "asc" }, select: { qr: { select: { id: true, label: true, amountPaise: true, active: true } } } },
       transactions: {
         orderBy: { createdAt: "desc" },

@@ -22,8 +22,8 @@ enum UserStatus {
 }
 
 enum OtpPurpose {
-  LOGIN // sign in, or create the account when the number is new
-  SIGNUP // username + password signup waiting for mobile verification
+  LOGIN // sign in, or create the account when the email is new
+  SIGNUP // username + password signup waiting for email verification
 }
 
 enum TransactionStatus {
@@ -37,11 +37,11 @@ model User {
   role             UserRole   @default(USER)
   name             String
   username         String     @unique // lower case, 3-30 chars [a-z0-9_]
-  email            String?    @unique // admins only
-  mobile           String?    @unique // E.164, e.g. +919876543210 (users only)
+  email            String?    @unique // lower case; verified by a code for users, set directly for admins
+  mobile           String?    @unique // E.164, e.g. +919876543210 (optional, asked for when paying online)
   passwordHash     String? // null for accounts created by OTP login until a password is set
   status           UserStatus @default(ACTIVE)
-  mobileVerifiedAt DateTime?
+  emailVerifiedAt  DateTime?
   lastLoginAt      DateTime?
   failedLoginCount Int        @default(0)
   lockedUntil      DateTime?
@@ -82,10 +82,10 @@ model Session {
   @@map("sessions")
 }
 
-/// One-time SMS codes. Only a salted hash of the code is stored.
+/// One-time email codes. Only a salted hash of the code is stored.
 model OtpCode {
   id         String     @id @default(cuid())
-  phone      String // E.164
+  email      String // lower case
   purpose    OtpPurpose
   codeHash   String
   payload    Json? // SIGNUP: { name, username, passwordHash }
@@ -95,7 +95,7 @@ model OtpCode {
   ip         String?
   createdAt  DateTime   @default(now())
 
-  @@index([phone, createdAt])
+  @@index([email, createdAt])
   @@index([expiresAt])
   @@map("otp_codes")
 }

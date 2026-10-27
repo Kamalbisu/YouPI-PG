@@ -5,126 +5,125 @@ import { adminLogin, otpLoginStart, otpLoginVerify, signupStart, signupVerify, u
 import { actorFromToken } from "@/server/auth/session";
 import { PASSWORD, anonCtx, codeFrom, makeAdmin, makeUser, resetDb } from "./helpers";
 
-const sms = vi.hoisted(() => ({ sent: [] as { to: string; content: string }[] }));
-vi.mock("@/server/services/sms", () => ({
-  sendSms: async (to: string, content: string) => {
-    sms.sent.push({ to, content });
+const mail = vi.hoisted(() => ({ sent: [] as { to: string; subject: string; text: string }[] }));
+vi.mock("@/server/services/mailer", () => ({
+  sendEmail: async (to: string, m: { subject: string; text: string }) => {
+    mail.sent.push({ to, ...m });
   },
 }));
 
-const lastCode = () => codeFrom(sms.sent[sms.sent.length - 1]!.content);
-const MOBILE = "9876543210";
-const E164 = "+919876543210";
+const lastCode = () => codeFrom(mail.sent[mail.sent.length - 1]!.text);
+const EMAIL = "asha@example.com";
 
 /** Make the cooldown pass without waiting 45 seconds. */
 const skipCooldown = () => db.otpCode.updateMany({ data: { createdAt: new Date(Date.now() - 120_000) } });
 
 beforeEach(async () => {
   await resetDb();
-  sms.sent.length = 0;
+  mail.sent.length = 0;
 });
 
 describe("OTP rules", () => {
-  it("sends a 6 digit code to the normalised number", async () => {
-    await requestOtp(anonCtx(), { phone: E164, purpose: "LOGIN" });
-    expect(sms.sent).toHaveLength(1);
-    expect(sms.sent[0]!.to).toBe(E164);
+  it("emails a 6 digit code to the address", async () => {
+    await requestOtp(anonCtx(), { email: EMAIL, purpose: "LOGIN" });
+    expect(mail.sent).toHaveLength(1);
+    expect(mail.sent[0]!.to).toBe(EMAIL);
     expect(lastCode()).toMatch(/^\d{6}$/);
   });
 
   it("accepts the right code once and never again (single use)", async () => {
-    await requestOtp(anonCtx(), { phone: E164, purpose: "LOGIN" });
+    await requestOtp(anonCtx(), { email: EMAIL, purpose: "LOGIN" });
     const code = lastCode();
-    await expect(verifyOtp(anonCtx(), { phone: E164, purpose: "LOGIN", code })).resolves.toBeTruthy();
-    await expect(verifyOtp(anonCtx(), { phone: E164, purpose: "LOGIN", code })).rejects.toMatchObject({ code: "VALIDATION" });
+    await expect(verifyOtp(anonCtx(), { email: EMAIL, purpose: "LOGIN", code })).resolves.toBeTruthy();
+    await expect(verifyOtp(anonCtx(), { email: EMAIL, purpose: "LOGIN", code })).rejects.toMatchObject({ code: "VALIDATION" });
   });
 
   it("rejects a wrong code", async () => {
-    await requestOtp(anonCtx(), { phone: E164, purpose: "LOGIN" });
+    await requestOtp(anonCtx(), { email: EMAIL, purpose: "LOGIN" });
     const wrong = lastCode() === "000000" ? "111111" : "000000";
-    await expect(verifyOtp(anonCtx(), { phone: E164, purpose: "LOGIN", code: wrong })).rejects.toMatchObject({ code: "VALIDATION" });
+    await expect(verifyOtp(anonCtx(), { email: EMAIL, purpose: "LOGIN", code: wrong })).rejects.toMatchObject({ code: "VALIDATION" });
   });
 
   it("rejects an expired code", async () => {
-    await requestOtp(anonCtx(), { phone: E164, purpose: "LOGIN" });
+    await requestOtp(anonCtx(), { email: EMAIL, purpose: "LOGIN" });
     const code = lastCode();
     await db.otpCode.updateMany({ data: { expiresAt: new Date(Date.now() - 1000) } });
-    await expect(verifyOtp(anonCtx(), { phone: E164, purpose: "LOGIN", code })).rejects.toMatchObject({ code: "VALIDATION" });
+    await expect(verifyOtp(anonCtx(), { email: EMAIL, purpose: "LOGIN", code })).rejects.toMatchObject({ code: "VALIDATION" });
   });
 
   it("burns the code after too many wrong tries, even if the right one is then entered", async () => {
-    await requestOtp(anonCtx(), { phone: E164, purpose: "LOGIN" });
+    await requestOtp(anonCtx(), { email: EMAIL, purpose: "LOGIN" });
     const right = lastCode();
     const wrong = right === "000000" ? "111111" : "000000";
     for (let i = 0; i < OTP_MAX_ATTEMPTS; i++) {
-      await expect(verifyOtp(anonCtx(), { phone: E164, purpose: "LOGIN", code: wrong })).rejects.toBeTruthy();
+      await expect(verifyOtp(anonCtx(), { email: EMAIL, purpose: "LOGIN", code: wrong })).rejects.toBeTruthy();
     }
-    await expect(verifyOtp(anonCtx(), { phone: E164, purpose: "LOGIN", code: right })).rejects.toMatchObject({ code: "VALIDATION" });
+    await expect(verifyOtp(anonCtx(), { email: EMAIL, purpose: "LOGIN", code: right })).rejects.toMatchObject({ code: "VALIDATION" });
   });
 
   it("enforces the resend cooldown", async () => {
-    await requestOtp(anonCtx(), { phone: E164, purpose: "LOGIN" });
-    await expect(requestOtp(anonCtx(), { phone: E164, purpose: "LOGIN" })).rejects.toMatchObject({ code: "RATE_LIMITED" });
-    expect(sms.sent).toHaveLength(1);
+    await requestOtp(anonCtx(), { email: EMAIL, purpose: "LOGIN" });
+    await expect(requestOtp(anonCtx(), { email: EMAIL, purpose: "LOGIN" })).rejects.toMatchObject({ code: "RATE_LIMITED" });
+    expect(mail.sent).toHaveLength(1);
     await skipCooldown();
-    await requestOtp(anonCtx(), { phone: E164, purpose: "LOGIN" });
-    expect(sms.sent).toHaveLength(2);
+    await requestOtp(anonCtx(), { email: EMAIL, purpose: "LOGIN" });
+    expect(mail.sent).toHaveLength(2);
   });
 
   it("a newer code replaces the older one", async () => {
-    await requestOtp(anonCtx(), { phone: E164, purpose: "LOGIN" });
+    await requestOtp(anonCtx(), { email: EMAIL, purpose: "LOGIN" });
     const first = lastCode();
     await skipCooldown();
-    await requestOtp(anonCtx(), { phone: E164, purpose: "LOGIN" });
+    await requestOtp(anonCtx(), { email: EMAIL, purpose: "LOGIN" });
     const second = lastCode();
     if (first !== second) {
-      await expect(verifyOtp(anonCtx(), { phone: E164, purpose: "LOGIN", code: first })).rejects.toBeTruthy();
+      await expect(verifyOtp(anonCtx(), { email: EMAIL, purpose: "LOGIN", code: first })).rejects.toBeTruthy();
     }
-    await expect(verifyOtp(anonCtx(), { phone: E164, purpose: "LOGIN", code: second })).resolves.toBeTruthy();
+    await expect(verifyOtp(anonCtx(), { email: EMAIL, purpose: "LOGIN", code: second })).resolves.toBeTruthy();
   });
 
   it("a login code cannot be used for signup", async () => {
-    await requestOtp(anonCtx(), { phone: E164, purpose: "LOGIN" });
-    await expect(verifyOtp(anonCtx(), { phone: E164, purpose: "SIGNUP", code: lastCode() })).rejects.toBeTruthy();
+    await requestOtp(anonCtx(), { email: EMAIL, purpose: "LOGIN" });
+    await expect(verifyOtp(anonCtx(), { email: EMAIL, purpose: "SIGNUP", code: lastCode() })).rejects.toBeTruthy();
   });
 
   it("limits code requests per IP", async () => {
     const ctx = anonCtx("198.51.100.7");
     for (let i = 0; i < 20; i++) {
-      await requestOtp(ctx, { phone: `+9190000${String(10000 + i)}`, purpose: "LOGIN" });
+      await requestOtp(ctx, { email: `person${i}@example.com`, purpose: "LOGIN" });
     }
-    await expect(requestOtp(ctx, { phone: "+919111111111", purpose: "LOGIN" })).rejects.toMatchObject({ code: "RATE_LIMITED" });
+    await expect(requestOtp(ctx, { email: "extra@example.com", purpose: "LOGIN" })).rejects.toMatchObject({ code: "RATE_LIMITED" });
   });
 });
 
-describe("signup with username + password (mobile verified by OTP)", () => {
-  const details = { name: "Asha Rao", username: "Asha_R", mobile: MOBILE, password: PASSWORD };
+describe("signup with username + password (email verified by OTP)", () => {
+  const details = { name: "Asha Rao", username: "Asha_R", email: EMAIL, password: PASSWORD };
 
   it("creates the account only after the code is verified, then signs in", async () => {
     const r = await signupStart(anonCtx(), details);
-    expect(r.mobile).toBe(E164);
+    expect(r.email).toBe(EMAIL);
     expect(await db.user.count({ where: { role: "USER" } })).toBe(0);
 
-    const login = await signupVerify(anonCtx(), { mobile: MOBILE, code: lastCode() });
+    const login = await signupVerify(anonCtx(), { email: EMAIL, code: lastCode() });
     expect(login.role).toBe("USER");
     const actor = await actorFromToken(login.token);
     expect(actor).toMatchObject({ role: "USER", username: "asha_r" });
     const u = await db.user.findUnique({ where: { username: "asha_r" } });
-    expect(u?.mobile).toBe(E164);
-    expect(u?.mobileVerifiedAt).toBeTruthy();
+    expect(u?.email).toBe(EMAIL);
+    expect(u?.emailVerifiedAt).toBeTruthy();
     expect(u?.passwordHash).not.toContain(PASSWORD);
   });
 
   it("then the new user can log in with username and password", async () => {
     await signupStart(anonCtx(), details);
-    await signupVerify(anonCtx(), { mobile: MOBILE, code: lastCode() });
+    await signupVerify(anonCtx(), { email: EMAIL, code: lastCode() });
     const r = await userLogin(anonCtx("198.51.100.1"), { username: "ASHA_R", password: PASSWORD });
     expect(r.role).toBe("USER");
   });
 
-  it("requires a mobile number", async () => {
-    await expect(signupStart(anonCtx(), { ...details, mobile: "" })).rejects.toBeTruthy();
-    expect(sms.sent).toHaveLength(0);
+  it("requires a valid email", async () => {
+    await expect(signupStart(anonCtx(), { ...details, email: "not-an-email" })).rejects.toBeTruthy();
+    expect(mail.sent).toHaveLength(0);
   });
 
   it("rejects a weak password and a bad username", async () => {
@@ -132,58 +131,57 @@ describe("signup with username + password (mobile verified by OTP)", () => {
     await expect(signupStart(anonCtx(), { ...details, username: "a b" })).rejects.toBeTruthy();
   });
 
-  it("rejects a taken username and a taken number", async () => {
-    await makeUser("taken", E164);
-    await expect(signupStart(anonCtx(), { ...details, username: "taken", mobile: "9123456780" })).rejects.toMatchObject({ code: "CONFLICT" });
+  it("rejects a taken username and a taken email", async () => {
+    await makeUser("taken", undefined, EMAIL);
+    await expect(signupStart(anonCtx(), { ...details, username: "taken", email: "other@example.com" })).rejects.toMatchObject({ code: "CONFLICT" });
     await expect(signupStart(anonCtx(), details)).rejects.toMatchObject({ code: "CONFLICT" });
   });
 
   it("does not create the account with a wrong code", async () => {
     await signupStart(anonCtx(), details);
     const wrong = lastCode() === "123456" ? "654321" : "123456";
-    await expect(signupVerify(anonCtx(), { mobile: MOBILE, code: wrong })).rejects.toMatchObject({ code: "VALIDATION" });
+    await expect(signupVerify(anonCtx(), { email: EMAIL, code: wrong })).rejects.toMatchObject({ code: "VALIDATION" });
     expect(await db.user.count({ where: { role: "USER" } })).toBe(0);
   });
 });
 
-describe("login with SMS code", () => {
+describe("login with email code", () => {
   it("signs in an existing user", async () => {
-    const u = await makeUser("rita", E164);
-    await otpLoginStart(anonCtx(), { mobile: MOBILE });
-    const r = await otpLoginVerify(anonCtx(), { mobile: MOBILE, code: lastCode() });
+    const u = await makeUser("rita", undefined, EMAIL);
+    await otpLoginStart(anonCtx(), { email: EMAIL });
+    const r = await otpLoginVerify(anonCtx(), { email: EMAIL, code: lastCode() });
     expect(r.created).toBe(false);
     expect((await actorFromToken(r.token))?.userId).toBe(u.id);
   });
 
-  it("creates the account for a new number", async () => {
-    await otpLoginStart(anonCtx(), { mobile: MOBILE });
-    const r = await otpLoginVerify(anonCtx(), { mobile: MOBILE, code: lastCode(), name: "New Person" });
+  it("creates the account for a new email", async () => {
+    await otpLoginStart(anonCtx(), { email: EMAIL });
+    const r = await otpLoginVerify(anonCtx(), { email: EMAIL, code: lastCode(), name: "New Person" });
     expect(r.created).toBe(true);
-    const u = await db.user.findUnique({ where: { mobile: E164 } });
+    const u = await db.user.findUnique({ where: { email: EMAIL } });
     expect(u).toMatchObject({ role: "USER", name: "New Person", status: "ACTIVE" });
     expect(u?.username).toMatch(/^user_[0-9a-f]{10}$/);
     expect((await actorFromToken(r.token))?.role).toBe("USER");
   });
 
-  it("gives the same answer for registered and unknown numbers", async () => {
-    await makeUser("known", E164);
-    const a = await otpLoginStart(anonCtx(), { mobile: MOBILE });
-    const b = await otpLoginStart(anonCtx("198.51.100.2"), { mobile: "9123456780" });
+  it("gives the same answer for registered and unknown emails", async () => {
+    await makeUser("known", undefined, EMAIL);
+    const a = await otpLoginStart(anonCtx(), { email: EMAIL });
+    const b = await otpLoginStart(anonCtx("198.51.100.2"), { email: "other@example.com" });
     expect(Object.keys(a).sort()).toEqual(Object.keys(b).sort());
   });
 
   it("refuses a disabled user", async () => {
-    const u = await makeUser("off", E164);
+    const u = await makeUser("off", undefined, EMAIL);
     await db.user.update({ where: { id: u.id }, data: { status: "DISABLED" } });
-    await otpLoginStart(anonCtx(), { mobile: MOBILE });
-    await expect(otpLoginVerify(anonCtx(), { mobile: MOBILE, code: lastCode() })).rejects.toMatchObject({ code: "ACCOUNT_DISABLED" });
+    await otpLoginStart(anonCtx(), { email: EMAIL });
+    await expect(otpLoginVerify(anonCtx(), { email: EMAIL, code: lastCode() })).rejects.toMatchObject({ code: "ACCOUNT_DISABLED" });
   });
 
-  it("does not let an admin's number sign in through the user flow", async () => {
-    const a = await makeAdmin();
-    await db.user.update({ where: { id: a.id }, data: { mobile: E164 } });
-    await otpLoginStart(anonCtx(), { mobile: MOBILE });
-    await expect(otpLoginVerify(anonCtx(), { mobile: MOBILE, code: lastCode() })).rejects.toMatchObject({ code: "FORBIDDEN" });
+  it("does not let an admin's email sign in through the user flow", async () => {
+    await makeAdmin(EMAIL);
+    await otpLoginStart(anonCtx(), { email: EMAIL });
+    await expect(otpLoginVerify(anonCtx(), { email: EMAIL, code: lastCode() })).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 });
 

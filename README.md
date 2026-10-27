@@ -10,7 +10,7 @@ A small web app with three separate panels: client, admin and Admin 2 (a read-on
 
 **Admin 2 panel** - a read-only auditor who can follow every payment activity between admin and client: searchable, filterable timelines, CSV export. It can not change anything.
 
-Built with Next.js 16, React 19, Prisma 7 + PostgreSQL, Tailwind 4 and zod. SMS goes through Brevo.
+Built with Next.js 16, React 19, Prisma 7 + PostgreSQL, Tailwind 4 and zod. Login codes are emailed through Brevo.
 
 ## Run it locally
 
@@ -69,7 +69,7 @@ State-changing requests (login, sign up, submit, confirm, ...) are checked to co
 | Address | Who | What |
 | --- | --- | --- |
 | `/` | everyone | Landing page |
-| `/login` | users | Sign up and log in (SMS code, or username + password) |
+| `/login` | users | Sign up and log in (email code, or username + password) |
 | `/dashboard` | users | Own QR codes, transaction ID entry, history, notifications |
 | `/admin/login` | admin | Admin sign in (email or username + password) |
 | `/admin` | admin | Dashboard: counts of users, QRs and pending / confirmed / rejected transactions |
@@ -88,8 +88,9 @@ The three sides use separate logins. A user session is refused by every admin AP
 
 ## How it works
 
-- **Sign up**: name, username, mobile number and password. A 6-digit code is sent by SMS to the mobile number; the account is created once it is verified.
-- **Log in**: either username + password, or the mobile number + SMS code. Logging in with the code for a number that has no account creates one automatically.
+- **Sign up**: name, username, email and password. A 6-digit code is emailed to the address; the account is created once it is verified.
+- **Log in**: either username + password, or the email + emailed code. Logging in with the code for an email that has no account creates one automatically.
+- **Mobile number**: asked for once when paying online (Easebuzz needs it) and saved on the account.
 - **Codes**: valid for 5 minutes, one use only, 5 wrong tries, a 45 second wait before asking again, and limits per number and per IP address.
 - **QR codes**: PNG, JPEG or WebP up to 2 MB. The file type is checked from the file contents, not the name. Images are stored in the database and served only to users who are allowed to see that QR.
 - **Transaction IDs**: 8 to 30 letters and digits, stored in capitals. Every ID can be used once across the whole system. Submissions are rate limited. An admin decision (confirm or reject) is final and is written to the audit log.
@@ -133,7 +134,8 @@ Set these in `.env` (copy from `.env.example`).
 | `APP_SECRET` | yes in production | Random string, at least 16 characters |
 | `TRUST_PROXY` | no | `true` only behind a trusted proxy (so client IPs are read correctly) |
 | `BREVO_API_KEY` | production | Brevo API key. Leave empty in development |
-| `BREVO_SMS_SENDER` | production | Sender name (up to 11 letters/digits) approved in Brevo |
+| `BREVO_SENDER_EMAIL` | production | Sender address, verified in Brevo (Senders, Domains & Dedicated IPs) |
+| `BREVO_SENDER_NAME` | no | Sender display name (default `YouPI PG`) |
 | `DEFAULT_COUNTRY_CODE` | no | Added to 10-digit numbers. Default `+91` |
 | `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD`, `SEED_ADMIN_NAME`, `SEED_ADMIN_USERNAME` | for `admin:create` | Details of the first admin |
 | `SEED_AUDITOR_EMAIL`, `SEED_AUDITOR_PASSWORD`, `SEED_AUDITOR_NAME`, `SEED_AUDITOR_USERNAME` | for `auditor:create` | Details of an Admin 2 account |
@@ -142,18 +144,19 @@ Set these in `.env` (copy from `.env.example`).
 | `EASEBUZZ_WEBHOOK_TOKEN` | for refund webhook | Shared token the webhook must present |
 | `EASEBUZZ_WEBHOOK_HASH` | no | `refund` (default, assumed formula) or `off` |
 
-### SMS and OTP codes in development
+### Email and OTP codes in development
 
-Without `BREVO_API_KEY` no SMS is sent. In development the code is printed in the terminal that runs `npm run dev`, in a block starting with `[sms:dev]` that contains the message and the 6-digit code. In production, with no key set, asking for a code fails with a clear error instead of silently doing nothing.
+Without `BREVO_API_KEY` no email is sent. In development the code is printed in the terminal that runs `npm run dev`, in a block starting with `[email:dev]` that contains the message and the 6-digit code. In production, with no key set, asking for a code fails with a clear error instead of silently doing nothing.
 
-To send real SMS, put the key and sender in `.env`:
+To send real email, put the key and a verified sender in `.env`:
 
 ```
 BREVO_API_KEY=your-brevo-api-key
-BREVO_SMS_SENDER=YOUPI
+BREVO_SENDER_EMAIL=no-reply@yourdomain.com
+BREVO_SENDER_NAME=YouPI PG
 ```
 
-Notes: Brevo has to approve or register the sender name for your account. SMS to Indian numbers also needs DLT registration (sender and template) with the operator; that is registered by you, outside this app.
+Notes: use a Brevo API key (v3) and a sender address that is verified in your Brevo account, otherwise Brevo rejects the message. Authenticate your domain (SPF/DKIM) so codes do not land in spam. No DLT registration is needed for email.
 
 ## Commands
 

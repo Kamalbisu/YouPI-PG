@@ -30,7 +30,7 @@ export async function makeAuditor(email = "auditor@example.com") {
 }
 
 let n = 0;
-export async function makeUser(username = `user${++n}`, mobile?: string) {
+export async function makeUser(username = `user${++n}`, mobile?: string, email?: string) {
   return db.user.create({
     data: {
       name: `Name ${username}`,
@@ -39,7 +39,8 @@ export async function makeUser(username = `user${++n}`, mobile?: string) {
       role: "USER",
       status: "ACTIVE",
       passwordHash: await hashPassword(PASSWORD),
-      mobileVerifiedAt: new Date(),
+      email: email ?? `${username.toLowerCase()}@example.com`,
+      emailVerifiedAt: new Date(),
     },
   });
 }
@@ -90,5 +91,5 @@ export function req(method: string, path: string, o: ReqOpts = {}): NextRequest 
 
 export const seg = (params: Record<string, string> = {}) => ({ params: Promise.resolve(params) });
 
-/** Pull the 6 digit code out of a captured SMS. */
+/** Pull the 6 digit code out of a captured email. */
 export const codeFrom = (content: string) => /\b(\d{6})\b/.exec(content)![1]!;

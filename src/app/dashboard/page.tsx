@@ -6,6 +6,7 @@ import { QrPayCard } from "@/components/user/qr-pay-card";
 import { NotificationList } from "@/components/user/notification-list";
 import { requireUserPage } from "@/server/auth/page-guards";
 import { listQrsForUser } from "@/server/services/qr";
+import { db } from "@/lib/db";
 import { gatewayStatus } from "@/server/services/payments";
 import { listNotificationsForUser } from "@/server/services/notifications";
 
@@ -13,13 +14,17 @@ export const metadata: Metadata = { title: "Dashboard" };
 
 export default async function UserDashboard() {
   const { actor } = await requireUserPage();
-  const [qrs, notifications] = await Promise.all([listQrsForUser(actor), listNotificationsForUser(actor)]);
+  const [qrs, notifications, me] = await Promise.all([
+    listQrsForUser(actor),
+    listNotificationsForUser(actor),
+    db.user.findUnique({ where: { id: actor.userId }, select: { mobile: true } }),
+  ]);
   return (
     <>
       <PageHeader title={`Hello, ${actor.name.split(" ")[0]}`} description="Pay online, or use a QR code and enter the transaction ID so we can confirm it." />
       <div className="grid gap-6 xl:grid-cols-[1fr_22rem]">
         <section aria-labelledby="qr-h" className="min-w-0 space-y-4">
-          <PayOnlineCard available={gatewayStatus().configured} />
+          <PayOnlineCard available={gatewayStatus().configured} hasMobile={!!me?.mobile} />
           <h2 id="qr-h" className="sr-only">QR codes</h2>
           {qrs.length === 0 ? (
             <Card><EmptyState icon={<QrCode className="size-6" />} title="No QR code yet" description="When the admin gives you a QR code it will appear here." /></Card>
