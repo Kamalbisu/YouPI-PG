@@ -55,4 +55,12 @@ export async function sendEmail(
     console.error(`Brevo email rejected (HTTP ${res.status}) ${detail}`);
     throw new AppError("EMAIL_UNAVAILABLE", "We could not send the email right now. Please try again later.");
   }
+  // Brevo accepted the message. This id is what to look for under Transactional > Logs in Brevo.
+  let messageId = "";
+  try {
+    messageId = ((await res.json()) as { messageId?: string }).messageId ?? "";
+  } catch {
+    /* ignore */
+  }
+  if (e.NODE_ENV !== "test") console.log(`[email] accepted by Brevo for ${to} from ${e.BREVO_SENDER_EMAIL} ${messageId}`.trim());
 }
