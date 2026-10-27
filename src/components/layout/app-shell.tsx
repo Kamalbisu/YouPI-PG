@@ -2,13 +2,14 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState, type ReactNode } from "react";
-import { Bell, LayoutDashboard, LogOut, Menu, QrCode, Receipt, Users, X, type LucideIcon } from "lucide-react";
+import { Activity, Bell, CreditCard, LayoutDashboard, LogOut, Menu, QrCode, Receipt, ShieldCheck, Users, X, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ThemeToggle } from "./theme-toggle";
 import { api } from "@/components/shared/use-api";
 
 const ICONS: Record<string, LucideIcon> = {
   dashboard: LayoutDashboard, users: Users, qr: QrCode, transactions: Receipt, notifications: Bell,
+  payments: CreditCard, activity: Activity, auditors: ShieldCheck,
 };
 
 export interface NavItem { href: string; label: string; icon: keyof typeof ICONS | string; exact?: boolean; count?: number }
@@ -16,7 +17,7 @@ export interface NavItem { href: string; label: string; icon: keyof typeof ICONS
 export function AppShell({
   nav, brand, user, portal, children, badge,
 }: {
-  nav: NavItem[]; brand: string; user: { name: string; username: string }; portal: "admin" | "user"; children: ReactNode; badge?: string;
+  nav: NavItem[]; brand: string; user: { name: string; username: string }; portal: "admin" | "user" | "auditor"; children: ReactNode; badge?: string;
 }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -25,7 +26,7 @@ export function AppShell({
 
   const logout = async () => {
     setOut(true);
-    try { await api("/api/auth/logout", { method: "POST" }); } finally { router.push(portal === "admin" ? "/admin/login" : "/login"); router.refresh(); }
+    try { await api("/api/auth/logout", { method: "POST" }); } finally { router.push(portal === "admin" ? "/admin/login" : portal === "auditor" ? "/auditor/login" : "/login"); router.refresh(); }
   };
 
   const sidebar = (

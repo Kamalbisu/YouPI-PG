@@ -17,3 +17,11 @@ export async function requireUserPage(): Promise<{ ctx: Ctx; actor: Actor }> {
   if (ctx.actor.role !== "USER") redirect("/login?error=forbidden");
   return { ctx, actor: ctx.actor };
 }
+
+/** For server components / layouts of the read-only Admin 2 pages. */
+export async function requireAuditorPage(): Promise<{ ctx: Ctx; actor: Actor }> {
+  const ctx = await getCtx();
+  if (!ctx.actor) redirect("/auditor/login");
+  if (ctx.actor.role !== "AUDITOR") redirect("/auditor/login?error=forbidden");
+  return { ctx, actor: ctx.actor };
+}

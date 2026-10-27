@@ -19,3 +19,10 @@ export function requireUser(ctx: Ctx): Actor {
   if (a.role !== "USER") throw forbidden("This area is for users only");
   return a;
 }
+
+/** Admin 2 (read-only auditor) APIs. Only GET routes should use this guard. */
+export function requireAuditor(ctx: Ctx): Actor {
+  const a = requireActor(ctx);
+  if (a.role !== "AUDITOR") throw forbidden("Auditor access required");
+  return a;
+}

@@ -22,11 +22,27 @@ const schema = z.object({
     .regex(/^\+[1-9][0-9]{0,3}$/, "Use a value like +91")
     .default("+91"),
 
+  /** Easebuzz payment gateway. Without key and salt, online payments are switched off. */
+  EASEBUZZ_KEY: z.string().optional(),
+  EASEBUZZ_SALT: z.string().optional(),
+  /** "test" uses the Easebuzz sandbox, "prod" the live gateway. */
+  EASEBUZZ_ENV: z.enum(["test", "prod"]).default("test"),
+  /** Shared secret the refund webhook must send (header x-webhook-token or ?token=). */
+  EASEBUZZ_WEBHOOK_TOKEN: z.string().optional(),
+  /** Hash layout used to check refund webhook payloads: "refund" (key|merchant_refund_id|easebuzz_id|refund_amount|salt) or "off". */
+  EASEBUZZ_WEBHOOK_HASH: z.enum(["refund", "off"]).default("refund"),
+
   // Admin bootstrap (npm run admin:create)
   SEED_ADMIN_EMAIL: z.string().email().optional(),
   SEED_ADMIN_PASSWORD: z.string().optional(),
   SEED_ADMIN_NAME: z.string().optional(),
   SEED_ADMIN_USERNAME: z.string().optional(),
+
+  // Admin 2 (auditor) bootstrap (npm run auditor:create)
+  SEED_AUDITOR_EMAIL: z.string().email().optional(),
+  SEED_AUDITOR_PASSWORD: z.string().optional(),
+  SEED_AUDITOR_NAME: z.string().optional(),
+  SEED_AUDITOR_USERNAME: z.string().optional(),
 });
 
 export type Env = z.infer<typeof schema>;
