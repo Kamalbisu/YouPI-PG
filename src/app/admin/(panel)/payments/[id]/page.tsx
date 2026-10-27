@@ -22,6 +22,7 @@ export default async function PaymentDetail({ params }: { params: Promise<{ id: 
   const rows: [string, React.ReactNode][] = [
     ["Reference", <span key="r" className="font-mono">{p.txnId}</span>],
     ["User", <Link key="u" href={`/admin/users/${p.user.id}`} className="hover:underline">{p.user.name} (@{p.user.username})</Link>],
+    ["Email", p.user.email ?? "-"],
     ["Mobile", p.user.mobile ?? "-"],
     ["For", p.purpose],
     ["Amount asked", formatRupees(p.amountPaise)],

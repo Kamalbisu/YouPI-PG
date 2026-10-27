@@ -68,6 +68,12 @@ export function maskPhone(p: string): string {
   return p.length <= 6 ? "******" : `${p.slice(0, 3)}${"*".repeat(p.length - 7)}${p.slice(-4)}`;
 }
 
+/** "asha@example.com" -> "a***@example.com". */
+export function maskEmail(e: string): string {
+  const [local = "", domain = ""] = e.split("@");
+  return `${local.slice(0, 1)}***@${domain}`;
+}
+
 function actorOf(ctx: Ctx, input: ActivityInput) {
   if (input.actor) return { actorType: input.actor.type, actorId: input.actor.id ?? null, actorName: input.actor.name ?? null };
   if (ctx.actor) return { actorType: ctx.actor.role as ActorType, actorId: ctx.actor.userId, actorName: ctx.actor.username };
@@ -215,7 +221,7 @@ export async function paymentTimeline(ctx: Ctx, paymentId: string) {
 export async function userTimeline(ctx: Ctx, userId: string, raw: unknown) {
   requireAuditor(ctx);
   const q = parse(pageQuery, raw);
-  const user = await db.user.findUnique({ where: { id: userId }, select: { id: true, name: true, username: true, mobile: true, role: true, status: true } });
+  const user = await db.user.findUnique({ where: { id: userId }, select: { id: true, name: true, username: true, email: true, mobile: true, role: true, status: true } });
   if (!user) return null;
   const where: Prisma.ActivityEventWhereInput = { OR: [{ targetUserId: userId }, { actorId: userId }] };
   const [items, total] = await Promise.all([

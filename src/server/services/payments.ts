@@ -6,7 +6,7 @@ import { AppError, badRequest, notFound } from "@/lib/errors";
 import { parseRupees } from "@/lib/money";
 import { pageQuery, skipTake, toPage } from "@/lib/pagination";
 import { enforceRateLimit } from "@/lib/rate-limit";
-import { emailSchema, idSchema, parse } from "@/lib/validation";
+import { emailSchema, idSchema, mobileSchema, parse } from "@/lib/validation";
 import { requireAdmin, requireUser } from "@/server/auth/guards";
 import type { Ctx } from "@/server/auth/types";
 import {
@@ -34,6 +34,8 @@ const payInput = z.object({
   amount: z.union([z.string(), z.number()]),
   purpose: z.string().trim().min(3, "Say what the payment is for (at least 3 characters)").max(100, "Purpose is too long"),
   email: z.union([emailSchema, z.literal("")]).optional(),
+  /** Needed by the gateway. Asked for once, then kept on the account. */
+  mobile: z.union([mobileSchema, z.literal("")]).optional(),
 });
 
 /** Easebuzz is strict about punctuation in free-text fields, and "|" would break the hash string. */
@@ -79,11 +81,18 @@ export async function startPayment(ctx: Ctx, input: unknown) {
   const user = await db.user.findUnique({ where: { id: actor.userId }, select: { id: true, name: true, email: true, mobile: true, status: true } });
   if (!user || user.status !== "ACTIVE") throw notFound("User");
   // No made-up phone number: the gateway needs a real one, so ask the user for it.
-  if (!user.mobile || nationalPhone(user.mobile).length !== 10) {
-    throw new AppError("VALIDATION", "Add a valid mobile number to your account before paying online.", { fields: { mobile: "Mobile number required" } });
+  const mobile = d.mobile || user.mobile;
+  if (!mobile || nationalPhone(mobile).length !== 10) {
+    throw new AppError("VALIDATION", "Enter your mobile number to pay online.", { fields: { mobile: "Mobile number required" } });
   }
   const cfg = gatewayConfig();
   if (!cfg) throw new AppError("GATEWAY_UNAVAILABLE", "Online payments are not available right now.");
+  if (d.mobile && !user.mobile) {
+    // Remember it for next time. If another account already uses this number we just use it for this payment.
+    await db.user.update({ where: { id: user.id }, data: { mobile: d.mobile } }).catch((e: { code?: string }) => {
+      if (e.code !== "P2002") throw e;
+    });
+  }
   await enforceRateLimit(`pay:user:${user.id}`, 10, 600, "Too many payment attempts. Please wait a few minutes.");
 
   const txnId = newTxnId();
@@ -110,7 +119,7 @@ export async function startPayment(ctx: Ctx, input: unknown) {
         productinfo: plain(d.purpose, 100) || "Payment",
         firstname: plain(user.name, 50) || "Customer",
         email,
-        phone: nationalPhone(user.mobile),
+        phone: nationalPhone(mobile),
         surl: url,
         furl: url,
         udf1: payment.id,

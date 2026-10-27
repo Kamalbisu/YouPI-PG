@@ -17,7 +17,7 @@ export default async function UserDetail({ params }: { params: Promise<{ id: str
   const { id } = await params;
   const [u, payments] = await Promise.all([getUserDetail(ctx, id), recentPaymentsForUserAdmin(ctx, id)]);
   const rows: [string, React.ReactNode][] = [
-    ["Name", u.name], ["Username", `@${u.username}`], ["Mobile", u.mobile ?? "-"],
+    ["Name", u.name], ["Username", `@${u.username}`], ["Email", u.email ?? "-"], ["Mobile", u.mobile ?? "-"],
     ["Status", <StatusBadge key="s" status={u.status} />], ["Signed up", dt(u.createdAt)], ["Last login", dt(u.lastLoginAt)],
   ];
   return (

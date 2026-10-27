@@ -12,10 +12,12 @@ const schema = z.object({
   APP_SECRET: z.string().min(16).optional(),
   TRUST_PROXY: z.enum(["true", "false"]).optional(),
 
-  /** Brevo (transactional SMS). Optional in development, required in production. */
+  /** Brevo (transactional email). Optional in development, required in production. */
   BREVO_API_KEY: z.string().optional(),
-  /** Sender name: up to 11 letters/digits, or a 12-15 digit number. Must be approved in Brevo. */
-  BREVO_SMS_SENDER: z.string().optional(),
+  /** Sender address for OTP emails. Must be a verified sender (or domain) in Brevo. */
+  BREVO_SENDER_EMAIL: z.string().email().optional(),
+  /** Sender display name. */
+  BREVO_SENDER_NAME: z.string().min(1).default("YouPI PG"),
   /** Country code added to 10-digit numbers. */
   DEFAULT_COUNTRY_CODE: z
     .string()
@@ -58,7 +60,7 @@ export function env(): Env {
   }
   const e = parsed.data;
   if (e.NODE_ENV === "production") {
-    const missing = (["BREVO_API_KEY", "BREVO_SMS_SENDER", "APP_SECRET"] as const).filter((k) => !e[k]);
+    const missing = (["BREVO_API_KEY", "BREVO_SENDER_EMAIL", "APP_SECRET"] as const).filter((k) => !e[k]);
     if (missing.length) throw new Error(`Missing required environment variables in production: ${missing.join(", ")}`);
   }
   cached = e;
