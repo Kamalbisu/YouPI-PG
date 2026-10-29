@@ -10,7 +10,7 @@ A small web app with three separate panels: client, admin and Admin 2 (a read-on
 
 **Admin 2 panel** - a read-only auditor who can follow every payment activity between admin and client: searchable, filterable timelines, CSV export. It can not change anything.
 
-Built with Next.js 16, React 19, Prisma 7 + PostgreSQL, Tailwind 4 and zod. Login codes are emailed through Brevo.
+Built with Next.js 16, React 19, Prisma 7 + PostgreSQL, Tailwind 4 and zod. Login codes are emailed through MSG91.
 
 ## Run it locally
 
@@ -133,9 +133,11 @@ Set these in `.env` (copy from `.env.example`).
 | `APP_URL` | yes | Address of the app in the browser, e.g. `http://localhost:3000` |
 | `APP_SECRET` | yes in production | Random string, at least 16 characters |
 | `TRUST_PROXY` | no | `true` only behind a trusted proxy (so client IPs are read correctly) |
-| `BREVO_API_KEY` | production | Brevo API key. Leave empty in development |
-| `BREVO_SENDER_EMAIL` | production | Sender address, verified in Brevo (Senders, Domains & Dedicated IPs) |
-| `BREVO_SENDER_NAME` | no | Sender display name (default `YouPI PG`) |
+| `MSG91_AUTH_KEY` | production | MSG91 auth key. Leave empty in development |
+| `MSG91_SENDER_EMAIL` | production | Sender address on a domain verified in MSG91 (Email > Domains) |
+| `MSG91_OTP_TEMPLATE_ID` | production | Id of the MSG91 email template for login codes (uses `{{otp}}`) |
+| `MSG91_SENDER_NAME` | no | Sender display name (default `YouPI PG`) |
+| `MSG91_EMAIL_DOMAIN` | no | Sending domain, if different from the sender address domain |
 | `DEFAULT_COUNTRY_CODE` | no | Added to 10-digit numbers. Default `+91` |
 | `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD`, `SEED_ADMIN_NAME`, `SEED_ADMIN_USERNAME` | for `admin:create` | Details of the first admin |
 | `SEED_AUDITOR_EMAIL`, `SEED_AUDITOR_PASSWORD`, `SEED_AUDITOR_NAME`, `SEED_AUDITOR_USERNAME` | for `auditor:create` | Details of an Admin 2 account |
@@ -146,17 +148,26 @@ Set these in `.env` (copy from `.env.example`).
 
 ### Email and OTP codes in development
 
-Without `BREVO_API_KEY` no email is sent. In development the code is printed in the terminal that runs `npm run dev`, in a block starting with `[email:dev]` that contains the message and the 6-digit code. In production, with no key set, asking for a code fails with a clear error instead of silently doing nothing.
+Without the MSG91 settings no email is sent. In development the code is printed in the terminal that runs `npm run dev`, in a block starting with `[email:dev]` that contains the message and the 6-digit code. In production, with no key set, asking for a code fails with a clear error instead of silently doing nothing.
 
-To send real email, put the key and a verified sender in `.env`:
+To send real email through MSG91:
+
+1. Sign up at msg91.com and open **Email**.
+2. **Domains**: add your domain (e.g. `yourdomain.com`), add the DNS records it shows (SPF, DKIM, MX/return path) at your DNS provider, and wait until it shows as verified.
+3. **Templates**: create a template for login codes. Use the variable `otp` where the code goes, for example subject `{{otp}} is your YouPI PG code` and body `Your YouPI PG verification code is {{otp}}. It is valid for 5 minutes.` The app also passes `company_name`. Copy the template id.
+4. Copy your **Authkey** (your name, top right, > Authkey).
+5. Put them in `.env`:
 
 ```
-BREVO_API_KEY=your-brevo-api-key
-BREVO_SENDER_EMAIL=no-reply@yourdomain.com
-BREVO_SENDER_NAME=YouPI PG
+MSG91_AUTH_KEY=your-msg91-authkey
+MSG91_SENDER_EMAIL=no-reply@yourdomain.com
+MSG91_SENDER_NAME=YouPI PG
+MSG91_OTP_TEMPLATE_ID=your-template-id
 ```
 
-Notes: use a Brevo API key (v3) and a sender address that is verified in your Brevo account, otherwise Brevo rejects the message. Authenticate your domain (SPF/DKIM) so codes do not land in spam. No DLT registration is needed for email.
+6. Check the setup with `npm run email:test -- you@example.com`. It sends one email with the test code 123456 and prints MSG91's answer. MSG91 > Email > Logs shows whether it was delivered.
+
+If MSG91 rejects requests with an IP error, turn off IP whitelisting for the auth key (or add your server's IP). No DLT registration is needed for email.
 
 ## Commands
 

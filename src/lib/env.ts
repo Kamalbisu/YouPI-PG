@@ -4,6 +4,9 @@ import { z } from "zod";
  * Central, validated environment access. Parsed lazily so that `next build`
  * and tests that do not need every variable do not fail at import time.
  */
+/** Treat an empty value (e.g. `MSG91_SENDER_EMAIL=` in .env) as not set. */
+const blank = <T extends z.ZodTypeAny>(s: T) => z.preprocess((v) => (typeof v === "string" && v.trim() === "" ? undefined : v), s.optional());
+
 const schema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
@@ -12,12 +15,16 @@ const schema = z.object({
   APP_SECRET: z.string().min(16).optional(),
   TRUST_PROXY: z.enum(["true", "false"]).optional(),
 
-  /** Brevo (transactional email). Optional in development, required in production. */
-  BREVO_API_KEY: z.string().trim().optional(),
-  /** Sender address for OTP emails. Must be a verified sender (or domain) in Brevo. */
-  BREVO_SENDER_EMAIL: z.string().trim().email().optional(),
-  /** Sender display name. */
-  BREVO_SENDER_NAME: z.string().min(1).default("YouPI PG"),
+  /** MSG91 (transactional email). Optional in development, required in production. */
+  MSG91_AUTH_KEY: blank(z.string().trim()),
+  /** Sender address for OTP emails. Its domain must be added and verified in MSG91 (Email > Domains). */
+  MSG91_SENDER_EMAIL: blank(z.string().trim().email()),
+  /** Sender display name, also passed to the template as company_name. */
+  MSG91_SENDER_NAME: z.string().trim().min(1).default("YouPI PG"),
+  /** Verified MSG91 sending domain. Defaults to the domain of MSG91_SENDER_EMAIL. */
+  MSG91_EMAIL_DOMAIN: blank(z.string().trim()),
+  /** Id of the MSG91 email template for login codes. It must use the variable otp. */
+  MSG91_OTP_TEMPLATE_ID: blank(z.string().trim()),
   /** Country code added to 10-digit numbers. */
   DEFAULT_COUNTRY_CODE: z
     .string()
@@ -60,7 +67,7 @@ export function env(): Env {
   }
   const e = parsed.data;
   if (e.NODE_ENV === "production") {
-    const missing = (["BREVO_API_KEY", "BREVO_SENDER_EMAIL", "APP_SECRET"] as const).filter((k) => !e[k]);
+    const missing = (["MSG91_AUTH_KEY", "MSG91_SENDER_EMAIL", "MSG91_OTP_TEMPLATE_ID", "APP_SECRET"] as const).filter((k) => !e[k]);
     if (missing.length) throw new Error(`Missing required environment variables in production: ${missing.join(", ")}`);
   }
   cached = e;
