@@ -59,6 +59,7 @@ export async function requestOtp(
       {
         subject: `${code} is your YouPI PG verification code`,
         text: `Your YouPI PG verification code is ${code}.\n\nIt is valid for 5 minutes. Do not share it with anyone. If you did not ask for this code, you can ignore this email.`,
+        variables: { otp: code },
       },
       { devLabel: `OTP ${purpose}` },
     );
